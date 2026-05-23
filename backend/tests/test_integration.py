@@ -68,8 +68,8 @@ class MockProvider:
 # ---------------------------------------------------------------------------
 
 def _run(coro):
-    """Run a coroutine synchronously via the current event loop."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run a coroutine synchronously."""
+    return asyncio.run(coro)
 
 
 def _run_job_directly(

@@ -6,6 +6,7 @@ from typing import Optional
 
 from lxml import etree
 
+from app.alto._ns import _detect_namespace, _tag
 from app.schemas import (
     BlockManifest,
     Coords,
@@ -14,33 +15,6 @@ from app.schemas import (
     LineManifest,
     PageManifest,
 )
-
-# ---------------------------------------------------------------------------
-# Namespace helpers
-# ---------------------------------------------------------------------------
-
-_KNOWN_NS = {
-    "v2": "http://schema.ccs-gmbh.com/ALTO",
-    "v3": "http://www.loc.gov/standards/alto/ns-v3#",
-    "v4": "http://www.loc.gov/standards/alto/ns-v4#",
-}
-
-
-def _detect_namespace(root: etree._Element) -> str:
-    """Return the namespace URI found in the root tag, or '' if none.
-
-    Defensive against malformed tags that begin with ``{`` but lack a
-    closing ``}`` (would otherwise raise ValueError up through the API
-    as an opaque 500-style failure).
-    """
-    tag = root.tag
-    if tag.startswith("{") and "}" in tag:
-        return tag[1: tag.index("}")]
-    return ""
-
-
-def _tag(local: str, ns: str) -> str:
-    return f"{{{ns}}}{local}" if ns else local
 
 
 # ---------------------------------------------------------------------------

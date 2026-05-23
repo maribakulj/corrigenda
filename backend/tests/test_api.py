@@ -251,8 +251,7 @@ def test_download_single_xml(client: TestClient):
 
     out_dir = output_dir(job_id)
 
-    # Run synchronously
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         run_job(
             job_id=job_id,
             document_manifest=doc,

@@ -4,6 +4,19 @@ import type { DiffData, LayoutData, ModelInfo, Provider, TraceData } from '../ty
 const BASE = ''
 
 // ---------------------------------------------------------------------------
+// Generic GET helper — fetchLayout / fetchDiff / fetchTrace share this pattern
+// ---------------------------------------------------------------------------
+
+async function apiGet<T>(url: string, errorMsg: string): Promise<T> {
+  const resp = await fetch(url)
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }))
+    throw new Error((err as { detail?: string }).detail ?? errorMsg)
+  }
+  return resp.json() as Promise<T>
+}
+
+// ---------------------------------------------------------------------------
 // listModels
 // ---------------------------------------------------------------------------
 
@@ -15,10 +28,10 @@ export async function listModels(provider: Provider, apiKey: string): Promise<Mo
   })
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-    throw new Error(err.detail ?? 'Failed to load models')
+    throw new Error((err as { detail?: string }).detail ?? 'Failed to load models')
   }
   const data = await resp.json()
-  return data.models as ModelInfo[]
+  return (data as { models: ModelInfo[] }).models
 }
 
 // ---------------------------------------------------------------------------
@@ -45,48 +58,25 @@ export async function createJob(
   })
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-    throw new Error(err.detail ?? 'Failed to create job')
+    throw new Error((err as { detail?: string }).detail ?? 'Failed to create job')
   }
-  return resp.json()
+  return resp.json() as Promise<{ job_id: string }>
 }
 
 // ---------------------------------------------------------------------------
-// fetchLayout
+// fetchLayout / fetchDiff / fetchTrace — all use apiGet<T>
 // ---------------------------------------------------------------------------
 
-export async function fetchLayout(jobId: string): Promise<LayoutData> {
-  const resp = await fetch(`${BASE}/api/jobs/${jobId}/layout`)
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-    throw new Error(err.detail ?? 'Failed to fetch layout')
-  }
-  return resp.json() as Promise<LayoutData>
+export function fetchLayout(jobId: string): Promise<LayoutData> {
+  return apiGet<LayoutData>(`${BASE}/api/jobs/${jobId}/layout`, 'Failed to fetch layout')
 }
 
-// ---------------------------------------------------------------------------
-// fetchDiff
-// ---------------------------------------------------------------------------
-
-export async function fetchDiff(jobId: string): Promise<DiffData> {
-  const resp = await fetch(`${BASE}/api/jobs/${jobId}/diff`)
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-    throw new Error(err.detail ?? 'Failed to fetch diff')
-  }
-  return resp.json() as Promise<DiffData>
+export function fetchDiff(jobId: string): Promise<DiffData> {
+  return apiGet<DiffData>(`${BASE}/api/jobs/${jobId}/diff`, 'Failed to fetch diff')
 }
 
-// ---------------------------------------------------------------------------
-// fetchTrace
-// ---------------------------------------------------------------------------
-
-export async function fetchTrace(jobId: string): Promise<TraceData> {
-  const resp = await fetch(`${BASE}/api/jobs/${jobId}/trace`)
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-    throw new Error(err.detail ?? 'Failed to fetch trace')
-  }
-  return resp.json() as Promise<TraceData>
+export function fetchTrace(jobId: string): Promise<TraceData> {
+  return apiGet<TraceData>(`${BASE}/api/jobs/${jobId}/trace`, 'Failed to fetch trace')
 }
 
 // ---------------------------------------------------------------------------

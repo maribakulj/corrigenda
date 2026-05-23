@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import re
@@ -34,8 +33,17 @@ from app.schemas import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CONFIG = ChunkPlannerConfig()
+
 # Global timeout for the entire job pipeline (seconds). 0 = no limit.
-_JOB_TIMEOUT_SECONDS = int(os.environ.get("JOB_TIMEOUT_SECONDS", "1800"))  # 30 min
+try:
+    _JOB_TIMEOUT_SECONDS: int = int(os.environ.get("JOB_TIMEOUT_SECONDS", "1800"))
+except ValueError:
+    import warnings as _warnings
+    _warnings.warn(
+        "JOB_TIMEOUT_SECONDS env var is not a valid integer; using default 1800s",
+        stacklevel=1,
+    )
+    _JOB_TIMEOUT_SECONDS = 1800
 
 # Pattern to redact Bearer tokens, API keys, and common key formats
 _SECRET_RE = re.compile(
@@ -119,6 +127,48 @@ def _resolve_partner(
     if cross_page_partners is None:
         return None
     return cross_page_partners.get((partner_page, partner_id))
+
+
+def _reconcile_one_pair(
+    lm: LineManifest,
+    part2: LineManifest,
+    text_by_id: dict[str, str],
+    *,
+    is_forward: bool,
+) -> None:
+    """Apply reconcile_hyphen_pair and write results back onto the manifests.
+
+    ``is_forward=True`` is for the BOTH→PART2 pass: uses the BOTH line's
+    forward subs/explicit fields and reads lm.corrected_text (already set by
+    pass 1) rather than text_by_id.
+    """
+    if is_forward:
+        corrected_p1 = lm.corrected_text or text_by_id.get(lm.line_id, lm.ocr_text)
+        extra: dict[str, Any] = {}
+        if lm.hyphen_forward_subs_content is not None:
+            extra["subs_content"] = lm.hyphen_forward_subs_content
+        if lm.hyphen_forward_explicit is not None:
+            extra["source_explicit"] = lm.hyphen_forward_explicit
+    else:
+        corrected_p1 = text_by_id.get(lm.line_id, lm.ocr_text)
+        extra = {}
+
+    corrected_p2 = text_by_id.get(part2.line_id, part2.ocr_text)
+
+    final_p1, final_p2, subs = reconcile_hyphen_pair(
+        lm, part2, corrected_p1, corrected_p2, **extra
+    )
+
+    lm.corrected_text = final_p1
+    lm.status = LineStatus.CORRECTED
+    part2.corrected_text = final_p2
+    part2.status = LineStatus.CORRECTED
+    part2.hyphen_subs_content = subs
+
+    if is_forward:
+        lm.hyphen_forward_subs_content = subs
+    else:
+        lm.hyphen_subs_content = subs
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +282,7 @@ async def _run_chunk(
             )
             hyphen_violation = False
 
-        except (ValueError, Exception) as exc:
+        except Exception as exc:
             msg = _sanitize_error(str(exc), api_key)
             is_http_error = not isinstance(exc, ValueError)
             is_hyphen_violation = (
@@ -240,25 +290,26 @@ async def _run_chunk(
                 and "hyphen_integrity_violation" in str(exc)
             )
 
-            if is_hyphen_violation and not hyphen_violation:
-                # First hyphen violation: retry immediately with temperature=0
-                hyphen_violation = True
-                job_store.emit(job_id, "retry", {
-                    "chunk_id": chunk.chunk_id,
-                    "attempt": attempt,
-                    "error": "hyphen_integrity_violation",
-                })
-                job_store.increment_counter(job_id, "retries")
-                continue
-
-            # General failure (validation error or transient HTTP/provider error)
             if attempt < max_attempts:
-                backoff = attempt * 2 if is_http_error else attempt
-                await asyncio.sleep(backoff)
+                # First hyphen violation → retry immediately at temperature=0.
+                # Subsequent violations or any other failure → exponential backoff.
+                if is_hyphen_violation and not hyphen_violation:
+                    hyphen_violation = True
+                    backoff = 0
+                    error_tag: str = "hyphen_integrity_violation"
+                elif is_http_error:
+                    backoff = attempt * 2
+                    error_tag = msg[:120]
+                else:
+                    backoff = attempt
+                    error_tag = msg[:120]
+
+                if backoff > 0:
+                    await asyncio.sleep(backoff)
                 job_store.emit(job_id, "retry", {
                     "chunk_id": chunk.chunk_id,
                     "attempt": attempt,
-                    "error": msg[:120],
+                    "error": error_tag,
                 })
                 job_store.increment_counter(job_id, "retries")
                 continue
@@ -313,22 +364,7 @@ async def _run_chunk(
             part2_key = (part2.page_id, part2.line_id)
             if part2_key in processed_part2:
                 continue
-
-            corrected_p1 = text_by_id.get(lm.line_id, lm.ocr_text)
-            corrected_p2 = text_by_id.get(part2.line_id, part2.ocr_text)
-
-            final_p1, final_p2, subs = reconcile_hyphen_pair(
-                lm, part2, corrected_p1, corrected_p2
-            )
-
-            lm.corrected_text = final_p1
-            lm.status = LineStatus.CORRECTED
-            lm.hyphen_subs_content = subs
-
-            part2.corrected_text = final_p2
-            part2.status = LineStatus.CORRECTED
-            part2.hyphen_subs_content = subs
-
+            _reconcile_one_pair(lm, part2, text_by_id, is_forward=False)
             processed_part2.add(part2_key)
             reconciled_count += 1
 
@@ -350,25 +386,7 @@ async def _run_chunk(
             part2_key = (part2.page_id, part2.line_id)
             if part2_key in processed_part2:
                 continue
-
-            # Use BOTH's already-reconciled text from pass 1 (if available)
-            corrected_p1 = lm.corrected_text or text_by_id.get(lm.line_id, lm.ocr_text)
-            corrected_p2 = text_by_id.get(part2.line_id, part2.ocr_text)
-
-            final_p1, final_p2, subs = reconcile_hyphen_pair(
-                lm, part2, corrected_p1, corrected_p2,
-                subs_content=lm.hyphen_forward_subs_content,
-                source_explicit=lm.hyphen_forward_explicit,
-            )
-
-            lm.corrected_text = final_p1
-            lm.status = LineStatus.CORRECTED
-            lm.hyphen_forward_subs_content = subs
-
-            part2.corrected_text = final_p2
-            part2.status = LineStatus.CORRECTED
-            part2.hyphen_subs_content = subs
-
+            _reconcile_one_pair(lm, part2, text_by_id, is_forward=True)
             processed_part2.add(part2_key)
             reconciled_count += 1
 

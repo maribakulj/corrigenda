@@ -8,7 +8,8 @@ from typing import Optional
 
 from lxml import etree
 
-from app.alto._norm import nfc
+from app.alto._norm import clean_content, nfc
+from app.alto._ns import _detect_namespace, _tag
 from app.schemas import HyphenRole, LineManifest, PageManifest
 
 
@@ -31,22 +32,6 @@ class RewriterMetrics:
     @property
     def total_lines(self) -> int:
         return self.untouched + self.subs_only + self.fast_path + self.slow_path
-
-# ---------------------------------------------------------------------------
-# Namespace helpers (mirrors parser)
-# ---------------------------------------------------------------------------
-
-def _detect_namespace(root: etree._Element) -> str:
-    """Same defensive contract as parser._detect_namespace."""
-    tag = root.tag
-    if tag.startswith("{") and "}" in tag:
-        return tag[1: tag.index("}")]
-    return ""
-
-
-def _tag(local: str, ns: str) -> str:
-    return f"{{{ns}}}{local}" if ns else local
-
 
 # ---------------------------------------------------------------------------
 # Tokenisation
@@ -300,7 +285,7 @@ def _update_content_in_place(
     if len(words) != len(orig_strings):
         return False
     for string_el, word in zip(orig_strings, words):
-        string_el.set("CONTENT", word.replace("\u00ad", ""))
+        string_el.set("CONTENT", clean_content(word))
     return True
 
 
@@ -363,12 +348,12 @@ def _rebuild_normal_line(
                 for k, v in orig_string_attribs[str_n].items():
                     if k not in ("SUBS_TYPE", "SUBS_CONTENT"):
                         s.set(k, v)
-                s.set("CONTENT", token.replace("\u00ad", ""))
+                s.set("CONTENT", clean_content(token))
                 s.set("HPOS", str(tok_hpos))
                 s.set("WIDTH", str(tok_width))
             else:
                 s.set("ID", f"{manifest.line_id}_STR_{str_n:04d}")
-                s.set("CONTENT", token.replace("\u00ad", ""))
+                s.set("CONTENT", clean_content(token))
                 s.set("HPOS", str(tok_hpos))
                 s.set("VPOS", str(vpos))
                 s.set("WIDTH", str(tok_width))
@@ -437,12 +422,12 @@ def _rebuild_hyp_part1(
                 for k, v in orig_string_attribs[str_n].items():
                     if k not in ("SUBS_TYPE", "SUBS_CONTENT"):
                         s.set(k, v)
-                s.set("CONTENT", token.replace("\u00ad", ""))
+                s.set("CONTENT", clean_content(token))
                 s.set("HPOS", str(tok_hpos))
                 s.set("WIDTH", str(tok_width))
             else:
                 s.set("ID", f"{manifest.line_id}_STR_{str_n:04d}")
-                s.set("CONTENT", token.replace("\u00ad", ""))
+                s.set("CONTENT", clean_content(token))
                 s.set("HPOS", str(tok_hpos))
                 s.set("VPOS", str(vpos))
                 s.set("WIDTH", str(tok_width))
@@ -506,12 +491,12 @@ def _rebuild_hyp_part2(
                 for k, v in orig_string_attribs[str_n].items():
                     if k not in ("SUBS_TYPE", "SUBS_CONTENT"):
                         s.set(k, v)
-                s.set("CONTENT", token.replace("\u00ad", ""))
+                s.set("CONTENT", clean_content(token))
                 s.set("HPOS", str(tok_hpos))
                 s.set("WIDTH", str(tok_width))
             else:
                 s.set("ID", f"{manifest.line_id}_STR_{str_n:04d}")
-                s.set("CONTENT", token.replace("\u00ad", ""))
+                s.set("CONTENT", clean_content(token))
                 s.set("HPOS", str(tok_hpos))
                 s.set("VPOS", str(vpos))
                 s.set("WIDTH", str(tok_width))

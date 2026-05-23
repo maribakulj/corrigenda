@@ -23,3 +23,13 @@ def ncfold(s: str) -> str:
     need to compare equal regardless of case and normalization form.
     """
     return unicodedata.normalize("NFC", s).casefold()
+
+
+def clean_content(s: str) -> str:
+    """Strip soft-hyphen (U+00AD) from token text before writing to ALTO CONTENT.
+
+    Some OCR engines emit U+00AD (SOFT HYPHEN) as a hyphen variant.  The
+    ALTO CONTENT attribute should never carry invisible control characters,
+    so we normalize it to the empty string here rather than in each call site.
+    """
+    return s.replace("­", "")
