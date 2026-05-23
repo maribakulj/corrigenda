@@ -7,7 +7,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from app.alto.hyphenation import enrich_chunk_lines, reconcile_hyphen_pair
 from app.alto.rewriter import extract_output_texts, rewrite_alto_file
@@ -139,25 +139,27 @@ def _reconcile_one_pair(
     """Apply reconcile_hyphen_pair and write results back onto the manifests.
 
     ``is_forward=True`` is for the BOTH→PART2 pass: uses the BOTH line's
-    forward subs/explicit fields and reads lm.corrected_text (already set by
-    pass 1) rather than text_by_id.
+    forward subs/explicit fields and reads ``lm.corrected_text`` (already
+    set by pass 1) rather than ``text_by_id``.
     """
-    if is_forward:
-        corrected_p1 = lm.corrected_text or text_by_id.get(lm.line_id, lm.ocr_text)
-        extra: dict[str, Any] = {}
-        if lm.hyphen_forward_subs_content is not None:
-            extra["subs_content"] = lm.hyphen_forward_subs_content
-        if lm.hyphen_forward_explicit is not None:
-            extra["source_explicit"] = lm.hyphen_forward_explicit
-    else:
-        corrected_p1 = text_by_id.get(lm.line_id, lm.ocr_text)
-        extra = {}
-
     corrected_p2 = text_by_id.get(part2.line_id, part2.ocr_text)
 
-    final_p1, final_p2, subs = reconcile_hyphen_pair(
-        lm, part2, corrected_p1, corrected_p2, **extra
-    )
+    if is_forward:
+        corrected_p1 = lm.corrected_text or text_by_id.get(lm.line_id, lm.ocr_text)
+        # Forward pair: override the manifest's backward fields with the
+        # forward ones. Pass them explicitly even if None — omission would
+        # let reconcile_hyphen_pair fall back to the manifest's backward
+        # subs_content (already set by pass 1), which is the wrong pair.
+        final_p1, final_p2, subs = reconcile_hyphen_pair(
+            lm, part2, corrected_p1, corrected_p2,
+            subs_content=lm.hyphen_forward_subs_content,
+            source_explicit=lm.hyphen_forward_explicit,
+        )
+    else:
+        corrected_p1 = text_by_id.get(lm.line_id, lm.ocr_text)
+        final_p1, final_p2, subs = reconcile_hyphen_pair(
+            lm, part2, corrected_p1, corrected_p2,
+        )
 
     lm.corrected_text = final_p1
     lm.status = LineStatus.CORRECTED
