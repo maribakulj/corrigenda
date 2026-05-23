@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from app.alto._norm import ncfold
 from app.schemas import HyphenRole, LLMLineInput, LineManifest
 
 _SENTINEL = object()  # distinguishes "not passed" from None
@@ -173,8 +174,8 @@ def _part2_boundary_word_diverged(ocr_text: str, corrected_text: str) -> bool:
     if not ocr_words or not cor_words:
         return False  # empty cases handled by migration/empty checks
 
-    ocr_first = ocr_words[0].lower()
-    cor_first = cor_words[0].lower()
+    ocr_first = ncfold(ocr_words[0])
+    cor_first = ncfold(cor_words[0])
 
     if ocr_first == cor_first:
         return False
@@ -256,7 +257,7 @@ def reconcile_hyphen_pair(
             right_fragment = tokens2[0]
             joined = left_bare + right_fragment
 
-            if joined.lower() == effective_subs.lower():
+            if ncfold(joined) == ncfold(effective_subs):
                 return corrected_part1, corrected_part2, effective_subs
             else:
                 return _fallback

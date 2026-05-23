@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from app.alto._norm import ncfold
 from app.schemas import LLMLineOutput, LLMResponse
 
 
@@ -162,7 +163,7 @@ def _validate_hyphen_integrity(
         if not part1_words:
             continue
         part1_last_word = part1_words[-1]
-        if part1_last_word.lower() == subs_content.lower():
+        if ncfold(part1_last_word) == ncfold(subs_content):
             raise ValueError(
                 f"hyphen_integrity_violation: PART1 line {part1_id!r} "
                 f"contains full logical word {subs_content!r} "

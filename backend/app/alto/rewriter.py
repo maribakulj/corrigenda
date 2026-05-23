@@ -8,6 +8,7 @@ from typing import Optional
 
 from lxml import etree
 
+from app.alto._norm import nfc
 from app.schemas import HyphenRole, LineManifest, PageManifest
 
 
@@ -145,11 +146,13 @@ def _extract_text_from_line(el: etree._Element, ns: str) -> str:
                 continue
             if hyp_char:
                 parts.append(hyp_char)
-    return "".join(parts)
+    # NFC-normalize so equality vs. parser-produced ocr_text is reliable
+    # on corpora that mix NFC/NFD (the parser normalizes; this used not to).
+    return nfc("".join(parts))
 
 
 def _line_text_unchanged(el: etree._Element, corrected: str, ns: str) -> bool:
-    return _extract_text_from_line(el, ns) == corrected
+    return _extract_text_from_line(el, ns) == nfc(corrected)
 
 
 # ---------------------------------------------------------------------------
@@ -591,7 +594,11 @@ def rewrite_alto_file(
         line_paths[line_id] = "slow_path"
 
     _add_processing_entry(root, ns, provider, model)
-    xml_bytes = etree.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=True)
+    # pretty_print=False: avoid gratuitously reformatting the entire XML
+    # (whitespace between elements) when the user only changed CONTENT on a
+    # handful of lines. Users comparing source vs. output should see only
+    # real diffs.
+    xml_bytes = etree.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=False)
     return xml_bytes, metrics, line_paths
 
 

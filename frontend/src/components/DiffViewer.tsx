@@ -84,7 +84,14 @@ function DiffRow({ line, selected, onSelect }: { line: DiffLine; selected: boole
     selected ? 'bg-amber-500/10 ring-1 ring-amber-500/30' : '',
   ].join(' ')
 
-  if (!isModified) {
+  // Hook MUST be called unconditionally (Rules of Hooks). When the line
+  // is unchanged we skip the LCS work but still pay the hook bookkeeping.
+  const tokens = useMemo(
+    () => (isModified ? tokenDiff(line.ocr_text, line.corrected_text) : null),
+    [isModified, line.ocr_text, line.corrected_text],
+  )
+
+  if (!isModified || tokens == null) {
     return (
       <div className={rowBase} onClick={onSelect}>
         {/* line_id */}
@@ -99,10 +106,7 @@ function DiffRow({ line, selected, onSelect }: { line: DiffLine; selected: boole
     )
   }
 
-  const { ocrTokens, corrTokens } = useMemo(
-    () => tokenDiff(line.ocr_text, line.corrected_text),
-    [line.ocr_text, line.corrected_text],
-  )
+  const { ocrTokens, corrTokens } = tokens
 
   return (
     <div className={rowBase} onClick={onSelect}>

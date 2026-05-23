@@ -808,3 +808,55 @@ def test_reconcile_without_explicit_params_uses_manifest():
         part1, part2, "Il por-", "te la valise"
     )
     assert subs == "porte"
+
+
+# ---------------------------------------------------------------------------
+# Unicode NFC/NFD comparison invariance (B-013)
+# ---------------------------------------------------------------------------
+
+import unicodedata
+
+
+def test_reconcile_explicit_accepts_nfd_join_against_nfc_subs():
+    """LLM emits 'né' in NFD; subs_content is 'nécessaires' in NFC.
+    The join must still match after ncfold normalization."""
+    nfd_nec = unicodedata.normalize("NFD", "néces")
+    nfd_saires = unicodedata.normalize("NFD", "saires")
+    assert nfd_nec != "néces"  # sanity
+
+    part1 = make_line(
+        "TL1", "néces-",
+        hyphen_role=HyphenRole.PART1,
+        hyphen_pair_line_id="TL2",
+        hyphen_subs_content="nécessaires",   # NFC
+        hyphen_source_explicit=True,
+    )
+    part2 = make_line(
+        "TL2", "saires pour vivre",
+        hyphen_role=HyphenRole.PART2,
+        hyphen_pair_line_id="TL1",
+        hyphen_subs_content="nécessaires",
+        hyphen_source_explicit=True,
+    )
+    # Corrected text in NFD on both sides
+    t1, t2, subs = reconcile_hyphen_pair(
+        part1, part2,
+        f"{nfd_nec}-",            # 'néces-' NFD
+        f"{nfd_saires} pour vivre",  # 'saires pour vivre' NFD
+    )
+    # Pre-fix: comparison failed, both fell back. Post-fix: coherent.
+    assert subs == "nécessaires"
+    assert t1.endswith("-")
+    assert t2.startswith(nfd_saires)
+
+
+def test_boundary_word_diverged_invariant_to_normalization_form():
+    """Comparing OCR 'café' (NFC) to corrected 'café' (NFD) must NOT flag divergence."""
+    from app.alto.hyphenation import _part2_boundary_word_diverged
+
+    nfc_text = "café au lait"
+    nfd_text = unicodedata.normalize("NFD", "café") + " au lait"
+    assert nfc_text != nfd_text  # sanity
+
+    assert _part2_boundary_word_diverged(nfc_text, nfd_text) is False
+    assert _part2_boundary_word_diverged(nfd_text, nfc_text) is False
