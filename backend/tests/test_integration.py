@@ -68,8 +68,8 @@ class MockProvider:
 # ---------------------------------------------------------------------------
 
 def _run(coro):
-    """Run a coroutine synchronously via the current event loop."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run a coroutine synchronously."""
+    return asyncio.run(coro)
 
 
 def _run_job_directly(
@@ -647,3 +647,72 @@ def test_macos_zip_parses_without_error():
     # Must not raise
     doc = build_document_manifest([(p, n) for n, p in saved.items()])
     assert doc.total_lines > 0
+
+
+# ---------------------------------------------------------------------------
+# ZIP safety-limit tests
+# ---------------------------------------------------------------------------
+
+def test_zip_rejected_when_too_many_members():
+    """ZIP with more members than _MAX_ZIP_MEMBERS is rejected before extraction."""
+    from app import storage as storage_mod
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        # A handful of tiny members — we patch the limit lower than this count
+        for i in range(20):
+            zf.writestr(f"f{i:03d}.xml", b"<x/>")
+
+    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    init_job_dirs(job_id)
+
+    with patch.object(storage_mod, "_MAX_ZIP_MEMBERS", 10):
+        with pytest.raises(ValueError, match="too many members"):
+            save_uploaded_files(job_id, [("archive.zip", buf.getvalue())])
+
+
+def test_zip_rejected_when_declared_size_exceeds_limit():
+    """ZIP whose declared aggregate uncompressed size > limit is rejected."""
+    from app import storage as storage_mod
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        # 10 KB of XML — patch the limit below this to trigger rejection
+        zf.writestr("big.xml", b"<x/>" * 2500)
+
+    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    init_job_dirs(job_id)
+
+    with patch.object(storage_mod, "_MAX_ZIP_EXTRACTED_BYTES", 1024):
+        with pytest.raises(ValueError, match="declared uncompressed size"):
+            save_uploaded_files(job_id, [("archive.zip", buf.getvalue())])
+
+
+def test_safe_zip_read_aborts_on_oversize_member():
+    """_safe_zip_read raises if a member's actual extracted size exceeds the
+    caller-supplied budget — catches lying central-directory entries."""
+    from app.storage import _safe_zip_read
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("payload.xml", b"x" * 200_000)
+
+    with zipfile.ZipFile(io.BytesIO(buf.getvalue())) as zf:
+        member = zf.infolist()[0]
+        with pytest.raises(ValueError, match="extraction safety limit"):
+            _safe_zip_read(zf, member, remaining_bytes=1024)
+
+
+def test_safe_zip_read_passes_under_budget():
+    """_safe_zip_read returns the full member when within budget."""
+    from app.storage import _safe_zip_read
+
+    buf = io.BytesIO()
+    payload = b"y" * 5_000
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("payload.xml", payload)
+
+    with zipfile.ZipFile(io.BytesIO(buf.getvalue())) as zf:
+        member = zf.infolist()[0]
+        data = _safe_zip_read(zf, member, remaining_bytes=10_000)
+        assert data == payload

@@ -2,18 +2,32 @@ name: Sync to HF Spaces
 on:
   push:
     branches: [main]
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Push to HF Spaces
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_USERNAME: ${{ secrets.HF_USERNAME }}
           HF_SPACE_NAME: ${{ secrets.HF_SPACE_NAME }}
+        # HF Space is a downstream mirror — --force is intentional to
+        # overwrite any auto-commits made by HF infrastructure.
+        # The token is provided via a git credential helper that reads
+        # from env vars, so it never appears in the remote URL (which
+        # would leak in `git` error output and process listings).
         run: |
-          git remote add hf https://$HF_USERNAME:$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$HF_SPACE_NAME
+          set -eu
+          : "${HF_USERNAME:?missing secret HF_USERNAME}"
+          : "${HF_TOKEN:?missing secret HF_TOKEN}"
+          : "${HF_SPACE_NAME:?missing secret HF_SPACE_NAME}"
+
+          git remote add hf "https://huggingface.co/spaces/$HF_USERNAME/$HF_SPACE_NAME"
+          git config --local credential.helper \
+            '!f() { echo "username=${HF_USERNAME}"; echo "password=${HF_TOKEN}"; }; f'
           git push hf main --force

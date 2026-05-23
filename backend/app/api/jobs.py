@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 from typing import AsyncGenerator, List
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -19,6 +19,7 @@ from app.jobs.store import job_store
 from app.schemas import (
     CreateJobResponse,
     HyphenRole,
+    JobManifest,
     JobStatus,
     JobStatusResponse,
     Provider,
@@ -35,6 +36,25 @@ from app.storage import (
 router = APIRouter()
 
 _ALLOWED_UPLOAD_EXTENSIONS = {".xml", ".alto", ".zip"}
+
+
+# ---------------------------------------------------------------------------
+# Shared dependency for endpoints that require a completed job with a manifest
+# ---------------------------------------------------------------------------
+
+def get_completed_job(job_id: str) -> JobManifest:
+    """FastAPI dependency: resolve job_id → JobManifest or raise 4xx."""
+    job = job_store.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+    if job.status != JobStatus.COMPLETED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is not completed yet (status: {job.status.value})",
+        )
+    if job.document_manifest is None:
+        raise HTTPException(status_code=404, detail="No document manifest available.")
+    return job
 
 
 # ---------------------------------------------------------------------------
@@ -223,21 +243,13 @@ async def download_job(job_id: str) -> Response:
 # ---------------------------------------------------------------------------
 
 @router.get("/{job_id}/trace")
-async def get_job_trace(job_id: str) -> dict:
+async def get_job_trace(job: JobManifest = Depends(get_completed_job)) -> dict:
     """Return per-line text traces for a completed job."""
-    job = job_store.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
-    if job.status != JobStatus.COMPLETED:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Job is not completed yet (status: {job.status.value})",
-        )
     if not job.line_traces:
         raise HTTPException(status_code=404, detail="No traces available for this job.")
 
     return {
-        "job_id": job_id,
+        "job_id": job.job_id,
         "total_lines": len(job.line_traces),
         "lines": [t.model_dump(exclude_none=True) for t in job.line_traces.values()],
     }
@@ -248,19 +260,8 @@ async def get_job_trace(job_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/{job_id}/diff")
-async def get_job_diff(job_id: str) -> dict:
+async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
     """Return per-line OCR vs corrected diff data for a completed job."""
-    job = job_store.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
-    if job.status != JobStatus.COMPLETED:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Job is not completed yet (status: {job.status.value})",
-        )
-    if job.document_manifest is None:
-        raise HTTPException(status_code=404, detail="No document manifest available.")
-
     pages_out = []
     total_lines = 0
     modified_lines = 0
@@ -292,7 +293,7 @@ async def get_job_diff(job_id: str) -> dict:
         })
 
     return {
-        "job_id": job_id,
+        "job_id": job.job_id,
         "pages": pages_out,
         "stats": {
             "total_lines": total_lines,
@@ -307,19 +308,8 @@ async def get_job_diff(job_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/{job_id}/layout")
-async def get_job_layout(job_id: str) -> dict:
+async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
     """Return structural layout data (blocks + lines with ALTO coordinates)."""
-    job = job_store.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
-    if job.status != JobStatus.COMPLETED:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Job is not completed yet (status: {job.status.value})",
-        )
-    if job.document_manifest is None:
-        raise HTTPException(status_code=404, detail="No document manifest available.")
-
     pages_out = []
     for page in job.document_manifest.pages:
         line_by_id = {lm.line_id: lm for lm in page.lines}
@@ -367,7 +357,7 @@ async def get_job_layout(job_id: str) -> dict:
         # images map is keyed by source_file (not page_id) to avoid collisions
         # when multiple ALTO files share the same Page/@ID value.
         image_filename = job.images.get(page.source_file)
-        image_url = f"/api/jobs/{job_id}/images/{image_filename}" if image_filename else None
+        image_url = f"/api/jobs/{job.job_id}/images/{image_filename}" if image_filename else None
         pages_out.append({
             "page_id": page.page_id,
             "page_index": page.page_index,
@@ -377,7 +367,7 @@ async def get_job_layout(job_id: str) -> dict:
             "blocks": blocks_out,
         })
 
-    return {"job_id": job_id, "pages": pages_out}
+    return {"job_id": job.job_id, "pages": pages_out}
 
 
 # ---------------------------------------------------------------------------

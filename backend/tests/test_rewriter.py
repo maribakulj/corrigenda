@@ -727,6 +727,77 @@ def test_round_trip_normal(tmp_path):
     assert pages2[0].lines[0].line_id == "TL1"
 
 
+# ---------------------------------------------------------------------------
+# pretty_print=False — output must not gratuitously add inter-element whitespace
+# ---------------------------------------------------------------------------
+
+def test_rewriter_does_not_pretty_print(tmp_path):
+    """B-004: pretty_print=True used to reformat the entire XML even when
+    nothing changed, breaking byte-level diff utility for users."""
+    # Compact source (no whitespace between TextLine children).
+    xml_content = (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<alto xmlns="{NS_V3}"><Layout>'
+        f'<Page ID="P1" WIDTH="100" HEIGHT="100">'
+        f'<PrintSpace HPOS="0" VPOS="0" WIDTH="100" HEIGHT="100">'
+        f'<TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20">'
+        f'<TextLine ID="TL1" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20">'
+        f'<String ID="S1" CONTENT="hello" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20"/>'
+        f'</TextLine>'
+        f'</TextBlock></PrintSpace></Page></Layout></alto>'
+    )
+    xml_path = tmp_path / "compact.xml"
+    xml_path.write_bytes(xml_content.encode())
+
+    pages, _ = parse_alto_file(xml_path, "compact.xml")
+    out_bytes, metrics, _ = rewrite_alto_file(xml_path, pages, "test", "model")
+
+    assert metrics.untouched == 1
+    out = out_bytes.decode()
+
+    # pretty_print=True would inject "\n        " between every child element.
+    # Without it, the only newline allowed is the one before the XML declaration end.
+    assert "\n  <" not in out, f"Output appears pretty-printed: {out!r}"
+    assert "\n    <" not in out, f"Output appears pretty-printed: {out!r}"
+
+
+# ---------------------------------------------------------------------------
+# Unicode NFC equality in _line_text_unchanged (B-014)
+# ---------------------------------------------------------------------------
+
+def test_nfd_source_round_trip_marked_untouched(tmp_path):
+    """A source containing NFD characters must round-trip as 'untouched'
+    when no correction is applied — _extract_text_from_line and the
+    manifest ocr_text must compare equal after NFC normalization."""
+    import unicodedata
+    nfd_word = unicodedata.normalize("NFD", "café")
+    assert nfd_word != "café"  # sanity
+
+    xml_content = (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<alto xmlns="{NS_V3}"><Layout>'
+        f'<Page ID="P1" WIDTH="100" HEIGHT="100">'
+        f'<PrintSpace HPOS="0" VPOS="0" WIDTH="100" HEIGHT="100">'
+        f'<TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20">'
+        f'<TextLine ID="TL1" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20">'
+        f'<String ID="S1" CONTENT="{nfd_word}" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20"/>'
+        f'</TextLine>'
+        f'</TextBlock></PrintSpace></Page></Layout></alto>'
+    )
+    xml_path = tmp_path / "nfd.xml"
+    xml_path.write_bytes(xml_content.encode())
+
+    pages, _ = parse_alto_file(xml_path, "nfd.xml")
+    # Parser stores in NFC
+    assert pages[0].lines[0].ocr_text == "café"
+
+    # No corrections — must be untouched
+    _, metrics, _ = rewrite_alto_file(xml_path, pages, "test", "model")
+    assert metrics.untouched == 1
+    assert metrics.fast_path == 0
+    assert metrics.slow_path == 0
+
+
 def test_round_trip_with_hyphen(tmp_path):
     """Parse with explicit hyphen → rewrite → HYP present, IDs intact."""
     xml_content = f"""\

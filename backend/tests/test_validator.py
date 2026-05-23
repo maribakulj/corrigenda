@@ -199,3 +199,49 @@ def test_hyphen_fusion_multiword_part1():
             hyphen_pairs={"L1": "L2", "L2": "L1"},
             hyphen_subs={"L1": "nécessaires"},
         )
+
+
+# ---------------------------------------------------------------------------
+# Unicode NFC vs NFD fusion detection (B-013)
+# ---------------------------------------------------------------------------
+
+import unicodedata
+
+
+def test_hyphen_fusion_detected_when_subs_is_nfd():
+    """LLM PART1 in NFC must match subs_content given in NFD — both forms
+    of 'nécessaires' compare equal after _norm.ncfold."""
+    nfd = unicodedata.normalize("NFD", "nécessaires")
+    assert nfd != "nécessaires"  # sanity: forms really differ
+
+    raw = {
+        "lines": [
+            {"line_id": "L1", "corrected_text": "nécessaires"},  # NFC
+            {"line_id": "L2", "corrected_text": "pour y faire"},
+        ]
+    }
+    with pytest.raises(ValueError, match="hyphen_integrity_violation"):
+        validate_llm_response(
+            raw,
+            ["L1", "L2"],
+            hyphen_pairs={"L1": "L2", "L2": "L1"},
+            hyphen_subs={"L1": nfd},  # subs in NFD
+        )
+
+
+def test_hyphen_fusion_detected_when_corrected_is_nfd():
+    """Mirror case: LLM emits NFD, subs_content is NFC."""
+    nfd_word = unicodedata.normalize("NFD", "nécessaires")
+    raw = {
+        "lines": [
+            {"line_id": "L1", "corrected_text": nfd_word},
+            {"line_id": "L2", "corrected_text": "pour y faire"},
+        ]
+    }
+    with pytest.raises(ValueError, match="hyphen_integrity_violation"):
+        validate_llm_response(
+            raw,
+            ["L1", "L2"],
+            hyphen_pairs={"L1": "L2", "L2": "L1"},
+            hyphen_subs={"L1": "nécessaires"},
+        )

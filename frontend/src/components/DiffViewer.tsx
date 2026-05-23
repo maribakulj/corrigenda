@@ -84,7 +84,14 @@ function DiffRow({ line, selected, onSelect }: { line: DiffLine; selected: boole
     selected ? 'bg-amber-500/10 ring-1 ring-amber-500/30' : '',
   ].join(' ')
 
-  if (!isModified) {
+  // Hook MUST be called unconditionally (Rules of Hooks). When the line
+  // is unchanged we skip the LCS work but still pay the hook bookkeeping.
+  const tokens = useMemo(
+    () => (isModified ? tokenDiff(line.ocr_text, line.corrected_text) : null),
+    [isModified, line.ocr_text, line.corrected_text],
+  )
+
+  if (!isModified || tokens == null) {
     return (
       <div className={rowBase} onClick={onSelect}>
         {/* line_id */}
@@ -99,10 +106,7 @@ function DiffRow({ line, selected, onSelect }: { line: DiffLine; selected: boole
     )
   }
 
-  const { ocrTokens, corrTokens } = useMemo(
-    () => tokenDiff(line.ocr_text, line.corrected_text),
-    [line.ocr_text, line.corrected_text],
-  )
+  const { ocrTokens, corrTokens } = tokens
 
   return (
     <div className={rowBase} onClick={onSelect}>
@@ -145,6 +149,14 @@ interface DiffViewerProps {
 
 export function DiffViewer({ data, selectedLineId, onSelectLine }: DiffViewerProps) {
   const [pageIdx, setPageIdx] = useState(0)
+  // Guard against empty result sets — without this, currentPage.lines below crashes.
+  if (data.pages.length === 0) {
+    return (
+      <div className="rounded-lg border border-slate-700/60 bg-slate-800/40 p-6 text-center">
+        <p className="font-mono text-xs text-slate-500">Aucune page à afficher.</p>
+      </div>
+    )
+  }
   const currentPage = data.pages[pageIdx] ?? data.pages[0]
   const { total_lines, modified_lines, hyphen_pairs } = data.stats
 

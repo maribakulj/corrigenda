@@ -81,12 +81,19 @@ class LineManifest(BaseModel):
     # For PART1: pair_line_id = forward partner (the PART2 line)
     # For PART2: pair_line_id = backward partner (the PART1 line)
     # For BOTH:  pair_line_id = backward partner, forward_* = forward partner
+    #
+    # pair_page_id / forward_pair_page_id qualify the partner reference so
+    # cross-page lookups stay correct when two ALTO files share TextLine IDs
+    # (e.g. both call their first line "TL1"). When None, the partner is
+    # presumed intra-page and the bare line_id lookup is authoritative.
     hyphen_role: HyphenRole = HyphenRole.NONE
     hyphen_pair_line_id: Optional[str] = None
+    hyphen_pair_page_id: Optional[str] = None
     hyphen_subs_content: Optional[str] = None
     hyphen_source_explicit: bool = False
     # Forward link fields — used only when role == BOTH (chained hyphenation)
     hyphen_forward_pair_id: Optional[str] = None
+    hyphen_forward_pair_page_id: Optional[str] = None
     hyphen_forward_subs_content: Optional[str] = None
     hyphen_forward_explicit: bool = False
 

@@ -163,3 +163,287 @@ def test_get_provider_registry():
     for p in Provider:
         provider = get_provider(p)
         assert isinstance(provider, BaseProvider)
+
+
+# ---------------------------------------------------------------------------
+# Anthropic complete_structured — uses tools API, not the inexistent
+# `output_config` parameter (B-001) and handles multi-block responses (R-013).
+# ---------------------------------------------------------------------------
+
+class _PostCapture:
+    """Captures the last httpx post() body for inspection in assertions.
+
+    Synchronous __call__ — wrapped by AsyncMock(side_effect=...) which
+    awaits the returned value automatically.
+    """
+
+    def __init__(self, response_body: dict) -> None:
+        self.response_body = response_body
+        self.last_body: dict | None = None
+
+    def __call__(self, url, **kwargs):
+        self.last_body = kwargs.get("json")
+        return _make_response(200, self.response_body)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_complete_structured_uses_tools_api():
+    """Request body must declare a tool with input_schema and force tool_choice."""
+    capture = _PostCapture({
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "tu_1",
+                "name": "ocr_correction",
+                "input": {"lines": [{"line_id": "L1", "corrected_text": "hi"}]},
+            }
+        ]
+    })
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+
+        provider = AnthropicProvider()
+        result = await provider.complete_structured(
+            api_key="fake",
+            model="claude-3-5-sonnet-20240620",
+            system_prompt="SYS",
+            user_payload={"lines": [{"line_id": "L1", "ocr_text": "hi"}]},
+            json_schema=OUTPUT_JSON_SCHEMA,
+        )
+
+    # Result comes straight from tool_use.input — no JSON parse
+    assert result == {"lines": [{"line_id": "L1", "corrected_text": "hi"}]}
+
+    body = capture.last_body
+    assert body is not None
+    # Forbidden legacy keys
+    assert "output_config" not in body
+    assert "response_format" not in body
+    # Required new keys
+    assert "tools" in body and len(body["tools"]) == 1
+    assert body["tools"][0]["name"] == "ocr_correction"
+    assert body["tools"][0]["input_schema"]["type"] == "object"
+    assert body["tool_choice"] == {"type": "tool", "name": "ocr_correction"}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_complete_structured_skips_thinking_block():
+    """A thinking block before the tool_use must not be mistaken for the payload."""
+    capture = _PostCapture({
+        "content": [
+            {"type": "thinking", "thinking": "Let me consider..."},
+            {
+                "type": "tool_use",
+                "id": "tu_2",
+                "name": "ocr_correction",
+                "input": {"lines": [{"line_id": "X", "corrected_text": "ok"}]},
+            },
+        ]
+    })
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = AnthropicProvider()
+        result = await provider.complete_structured(
+            api_key="fake", model="claude-x", system_prompt="SYS",
+            user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+        )
+
+    assert result["lines"][0]["line_id"] == "X"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_complete_structured_text_block_fallback():
+    """When only a text block is returned (no tool_use), parse it as JSON."""
+    capture = _PostCapture({
+        "content": [
+            {"type": "text", "text": '{"lines":[{"line_id":"T","corrected_text":"y"}]}'},
+        ]
+    })
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = AnthropicProvider()
+        result = await provider.complete_structured(
+            api_key="fake", model="claude-x", system_prompt="SYS",
+            user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+        )
+
+    assert result == {"lines": [{"line_id": "T", "corrected_text": "y"}]}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_complete_structured_no_usable_block_raises():
+    """If neither tool_use nor text block is present, raise a descriptive error."""
+    capture = _PostCapture({
+        "content": [
+            {"type": "thinking", "thinking": "..."},
+        ]
+    })
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = AnthropicProvider()
+        with pytest.raises(ValueError, match="no usable block"):
+            await provider.complete_structured(
+                api_key="fake", model="claude-x", system_prompt="SYS",
+                user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+            )
+
+
+# ---------------------------------------------------------------------------
+# OpenAI complete_structured — request shape + chat-completions response
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_openai_complete_structured_uses_json_schema_response_format():
+    capture = _PostCapture({
+        "choices": [
+            {"message": {"content": '{"lines":[{"line_id":"L1","corrected_text":"hi"}]}'}}
+        ]
+    })
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = OpenAIProvider()
+        result = await provider.complete_structured(
+            api_key="sk-fake",
+            model="gpt-4o",
+            system_prompt="SYS",
+            user_payload={"lines": [{"line_id": "L1", "ocr_text": "hi"}]},
+            json_schema=OUTPUT_JSON_SCHEMA,
+        )
+
+    assert result == {"lines": [{"line_id": "L1", "corrected_text": "hi"}]}
+    body = capture.last_body
+    assert body is not None
+    assert body["model"] == "gpt-4o"
+    assert body["response_format"] == {
+        "type": "json_schema",
+        "json_schema": OUTPUT_JSON_SCHEMA,
+    }
+    assert body["messages"][0]["role"] == "system"
+    assert body["messages"][1]["role"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_openai_complete_structured_raises_on_missing_choices():
+    capture = _PostCapture({"object": "chat.completion"})  # no 'choices' key
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = OpenAIProvider()
+        with pytest.raises(ValueError, match="missing 'choices'"):
+            await provider.complete_structured(
+                api_key="sk-fake", model="gpt-4o", system_prompt="SYS",
+                user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Mistral complete_structured — body shape + fallback structure
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mistral_complete_structured_sends_json_schema():
+    capture = _PostCapture({
+        "choices": [
+            {"message": {"content": '{"lines":[{"line_id":"M","corrected_text":"y"}]}'}}
+        ]
+    })
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = MistralProvider()
+        result = await provider.complete_structured(
+            api_key="key-fake",
+            model="mistral-large",
+            system_prompt="SYS",
+            user_payload={"lines": [{"line_id": "M", "ocr_text": "y"}]},
+            json_schema=OUTPUT_JSON_SCHEMA,
+            temperature=0.3,
+        )
+
+    assert result == {"lines": [{"line_id": "M", "corrected_text": "y"}]}
+    body = capture.last_body
+    assert body["temperature"] == 0.3
+    assert body["response_format"] == {
+        "type": "json_schema",
+        "json_schema": OUTPUT_JSON_SCHEMA,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Google Gemini complete_structured — generationConfig + response extraction
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_google_complete_structured_uses_response_schema():
+    capture = _PostCapture({
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": '{"lines":[{"line_id":"G","corrected_text":"k"}]}'}
+                    ]
+                }
+            }
+        ]
+    })
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = GoogleProvider()
+        result = await provider.complete_structured(
+            api_key="AIza-fake",
+            model="gemini-1.5-pro",
+            system_prompt="SYS",
+            user_payload={"lines": [{"line_id": "G", "ocr_text": "k"}]},
+            json_schema=OUTPUT_JSON_SCHEMA,
+        )
+
+    assert result == {"lines": [{"line_id": "G", "corrected_text": "k"}]}
+    body = capture.last_body
+    gc = body["generationConfig"]
+    assert gc["responseMimeType"] == "application/json"
+    assert gc["responseSchema"] == OUTPUT_JSON_SCHEMA["schema"]
+    assert "system_instruction" in body
+
+
+@pytest.mark.asyncio
+async def test_google_complete_structured_raises_on_missing_candidates():
+    capture = _PostCapture({"promptFeedback": {"blockReason": "SAFETY"}})
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = GoogleProvider()
+        with pytest.raises(ValueError, match="missing 'candidates'"):
+            await provider.complete_structured(
+                api_key="fake", model="gemini-x", system_prompt="SYS",
+                user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+            )
+
+
+@pytest.mark.asyncio
+async def test_google_complete_structured_raises_on_empty_parts():
+    capture = _PostCapture({"candidates": [{"content": {"parts": []}}]})
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = GoogleProvider()
+        with pytest.raises(ValueError, match="no parts"):
+            await provider.complete_structured(
+                api_key="fake", model="gemini-x", system_prompt="SYS",
+                user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+            )

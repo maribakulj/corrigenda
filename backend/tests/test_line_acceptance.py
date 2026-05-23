@@ -273,7 +273,7 @@ class TestTraceKeyCollision:
                 }
 
         out_dir = output_dir(job_id)
-        asyncio.get_event_loop().run_until_complete(run_job(
+        asyncio.run(run_job(
             job_id=job_id,
             document_manifest=doc,
             provider_name="openai",
@@ -343,7 +343,7 @@ class TestLineAcceptanceIntegration:
         job_store.update_job(job_id, document_manifest=doc)
 
         out_dir = output_dir(job_id)
-        asyncio.get_event_loop().run_until_complete(run_job(
+        asyncio.run(run_job(
             job_id=job_id,
             document_manifest=doc,
             provider_name="openai",
