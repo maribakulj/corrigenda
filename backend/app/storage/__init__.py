@@ -11,6 +11,37 @@ _BASE_DIR = Path(os.environ.get("JOB_STORAGE_DIR", "/tmp/app-jobs"))
 _ALLOWED_EXTENSIONS = {".xml", ".alto"}
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 _MAX_ZIP_EXTRACTED_BYTES = 500 * 1024 * 1024  # 500 MB safety limit
+_MAX_ZIP_MEMBERS = 1000                       # inode-exhaustion limit
+_ZIP_READ_CHUNK = 64 * 1024
+
+
+def _safe_zip_read(
+    zf: zipfile.ZipFile,
+    member: zipfile.ZipInfo,
+    remaining_bytes: int,
+) -> bytes:
+    """Read a ZIP member, aborting if extraction exceeds ``remaining_bytes``.
+
+    Guards against ZIPs that declare a small ``file_size`` in the central
+    directory header but contain much larger data in the actual stream
+    (a common bomb pattern). Reads in chunks and checks the running total
+    against the caller-supplied budget.
+    """
+    chunks: list[bytes] = []
+    consumed = 0
+    with zf.open(member) as src:
+        while True:
+            chunk = src.read(_ZIP_READ_CHUNK)
+            if not chunk:
+                break
+            consumed += len(chunk)
+            if consumed > remaining_bytes:
+                raise ValueError(
+                    f"ZIP member {member.filename!r} would exceed extraction "
+                    f"safety limit ({_MAX_ZIP_EXTRACTED_BYTES} bytes total)"
+                )
+            chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -68,14 +99,30 @@ def save_uploaded_files(
         if suffix == ".zip":
             import io
             with zipfile.ZipFile(io.BytesIO(content)) as zf:
-                # Guard against zip bombs: check declared uncompressed size
-                total_uncompressed = sum(m.file_size for m in zf.infolist())
-                if total_uncompressed > _MAX_ZIP_EXTRACTED_BYTES:
+                members = zf.infolist()
+
+                # Member-count guard: prevents inode exhaustion and pathological
+                # archives with millions of tiny files.
+                if len(members) > _MAX_ZIP_MEMBERS:
                     raise ValueError(
-                        f"ZIP archive uncompressed size ({total_uncompressed} bytes) "
-                        f"exceeds safety limit ({_MAX_ZIP_EXTRACTED_BYTES} bytes)"
+                        f"ZIP archive contains too many members "
+                        f"({len(members)}, max {_MAX_ZIP_MEMBERS})"
                     )
-                for member in zf.infolist():
+
+                # Declared-size precheck rejects "honest" bombs early without
+                # opening any member stream.
+                total_declared = sum(m.file_size for m in members)
+                if total_declared > _MAX_ZIP_EXTRACTED_BYTES:
+                    raise ValueError(
+                        f"ZIP archive declared uncompressed size "
+                        f"({total_declared} bytes) exceeds safety limit "
+                        f"({_MAX_ZIP_EXTRACTED_BYTES} bytes)"
+                    )
+
+                # Track actual extracted bytes during streaming reads so that
+                # lying central-directory entries can't slip a larger payload past.
+                extracted_total = 0
+                for member in members:
                     member_path = Path(member.filename)
                     # Skip macOS metadata: AppleDouble files (._*) and the
                     # __MACOSX directory that macOS injects into every ZIP.
@@ -84,17 +131,24 @@ def save_uploaded_files(
                     if "__MACOSX" in member_path.parts:
                         continue
                     msuffix = member_path.suffix.lower()
+                    if msuffix not in _ALLOWED_EXTENSIONS and msuffix not in _IMAGE_EXTENSIONS:
+                        continue
+
+                    data = _safe_zip_read(
+                        zf, member, _MAX_ZIP_EXTRACTED_BYTES - extracted_total,
+                    )
+                    extracted_total += len(data)
+
+                    flat_name = member_path.name
                     if msuffix in _ALLOWED_EXTENSIONS:
-                        flat_name = member_path.name
                         out_path = dest / flat_name
-                        out_path.write_bytes(zf.read(member.filename))
+                        out_path.write_bytes(data)
                         saved[flat_name] = out_path
-                    elif msuffix in _IMAGE_EXTENSIONS:
+                    else:  # image
                         imgs = images_dir(job_id)
                         imgs.mkdir(parents=True, exist_ok=True)
-                        flat_name = member_path.name
                         out_path = imgs / flat_name
-                        out_path.write_bytes(zf.read(member.filename))
+                        out_path.write_bytes(data)
                         images[member_path.stem.lower()] = out_path
         elif suffix in _ALLOWED_EXTENSIONS:
             flat_name = Path(filename).name
