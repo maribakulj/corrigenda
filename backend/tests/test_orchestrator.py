@@ -374,3 +374,57 @@ async def test_cross_page_hyphen_reconciled_through_colliding_ids(tmp_path: Path
     # And reconciliation set both sides' corrected_text via the right partner
     assert line_a_tl2.corrected_text is not None
     assert line_b_tl1.corrected_text is not None
+
+
+# ---------------------------------------------------------------------------
+# T-013 — JOB_TIMEOUT_SECONDS triggers FAILED with sanitized error
+# ---------------------------------------------------------------------------
+
+class _SlowProvider:
+    """Sleeps inside complete_structured to exceed the test's timeout."""
+
+    async def list_models(self, api_key):
+        return [ModelInfo(id="mock-model", label="Mock Model")]
+
+    async def complete_structured(self, **kwargs):
+        await asyncio.sleep(5.0)  # any value > the test's patched timeout
+        return {"lines": []}
+
+
+@pytest.mark.asyncio
+async def test_job_timeout_marks_failure(tmp_path: Path):
+    """When _JOB_TIMEOUT_SECONDS elapses, run_job catches TimeoutError,
+    marks the job FAILED, emits a `failed` event, and records a clean
+    error message (no traceback, no api_key leak)."""
+    import app.jobs.orchestrator as orch_module
+
+    store, job_id = _make_store_and_job()
+    orig_timeout = orch_module._JOB_TIMEOUT_SECONDS
+    orig_store = orch_module.job_store
+    orch_module._JOB_TIMEOUT_SECONDS = 1  # 1-second budget — provider sleeps 5s
+    orch_module.job_store = store
+    try:
+        pages, _ = parse_alto_file(SAMPLE_XML, SAMPLE_XML.name)
+        doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
+        await run_job(
+            job_id=job_id,
+            document_manifest=doc,
+            provider_name="openai",
+            api_key="sk-secret-token-12345",
+            model="mock",
+            output_dir=tmp_path,
+            source_files={SAMPLE_XML.name: SAMPLE_XML},
+            provider=_SlowProvider(),
+        )
+    finally:
+        orch_module._JOB_TIMEOUT_SECONDS = orig_timeout
+        orch_module.job_store = orig_store
+
+    job = store.get_job(job_id)
+    assert job is not None
+    assert job.status.value == "failed"
+    assert job.error is not None
+    assert "timed out" in job.error.lower()
+    assert "1s" in job.error  # the configured timeout
+    # No api_key leak in the recorded error
+    assert "sk-secret-token-12345" not in job.error

@@ -294,3 +294,156 @@ async def test_anthropic_complete_structured_no_usable_block_raises():
                 api_key="fake", model="claude-x", system_prompt="SYS",
                 user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
             )
+
+
+# ---------------------------------------------------------------------------
+# OpenAI complete_structured — request shape + chat-completions response
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_openai_complete_structured_uses_json_schema_response_format():
+    capture = _PostCapture({
+        "choices": [
+            {"message": {"content": '{"lines":[{"line_id":"L1","corrected_text":"hi"}]}'}}
+        ]
+    })
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = OpenAIProvider()
+        result = await provider.complete_structured(
+            api_key="sk-fake",
+            model="gpt-4o",
+            system_prompt="SYS",
+            user_payload={"lines": [{"line_id": "L1", "ocr_text": "hi"}]},
+            json_schema=OUTPUT_JSON_SCHEMA,
+        )
+
+    assert result == {"lines": [{"line_id": "L1", "corrected_text": "hi"}]}
+    body = capture.last_body
+    assert body is not None
+    assert body["model"] == "gpt-4o"
+    assert body["response_format"] == {
+        "type": "json_schema",
+        "json_schema": OUTPUT_JSON_SCHEMA,
+    }
+    assert body["messages"][0]["role"] == "system"
+    assert body["messages"][1]["role"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_openai_complete_structured_raises_on_missing_choices():
+    capture = _PostCapture({"object": "chat.completion"})  # no 'choices' key
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = OpenAIProvider()
+        with pytest.raises(ValueError, match="missing 'choices'"):
+            await provider.complete_structured(
+                api_key="sk-fake", model="gpt-4o", system_prompt="SYS",
+                user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Mistral complete_structured — body shape + fallback structure
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mistral_complete_structured_sends_json_schema():
+    capture = _PostCapture({
+        "choices": [
+            {"message": {"content": '{"lines":[{"line_id":"M","corrected_text":"y"}]}'}}
+        ]
+    })
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = MistralProvider()
+        result = await provider.complete_structured(
+            api_key="key-fake",
+            model="mistral-large",
+            system_prompt="SYS",
+            user_payload={"lines": [{"line_id": "M", "ocr_text": "y"}]},
+            json_schema=OUTPUT_JSON_SCHEMA,
+            temperature=0.3,
+        )
+
+    assert result == {"lines": [{"line_id": "M", "corrected_text": "y"}]}
+    body = capture.last_body
+    assert body["temperature"] == 0.3
+    assert body["response_format"] == {
+        "type": "json_schema",
+        "json_schema": OUTPUT_JSON_SCHEMA,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Google Gemini complete_structured — generationConfig + response extraction
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_google_complete_structured_uses_response_schema():
+    capture = _PostCapture({
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": '{"lines":[{"line_id":"G","corrected_text":"k"}]}'}
+                    ]
+                }
+            }
+        ]
+    })
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = GoogleProvider()
+        result = await provider.complete_structured(
+            api_key="AIza-fake",
+            model="gemini-1.5-pro",
+            system_prompt="SYS",
+            user_payload={"lines": [{"line_id": "G", "ocr_text": "k"}]},
+            json_schema=OUTPUT_JSON_SCHEMA,
+        )
+
+    assert result == {"lines": [{"line_id": "G", "corrected_text": "k"}]}
+    body = capture.last_body
+    gc = body["generationConfig"]
+    assert gc["responseMimeType"] == "application/json"
+    assert gc["responseSchema"] == OUTPUT_JSON_SCHEMA["schema"]
+    assert "system_instruction" in body
+
+
+@pytest.mark.asyncio
+async def test_google_complete_structured_raises_on_missing_candidates():
+    capture = _PostCapture({"promptFeedback": {"blockReason": "SAFETY"}})
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = GoogleProvider()
+        with pytest.raises(ValueError, match="missing 'candidates'"):
+            await provider.complete_structured(
+                api_key="fake", model="gemini-x", system_prompt="SYS",
+                user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+            )
+
+
+@pytest.mark.asyncio
+async def test_google_complete_structured_raises_on_empty_parts():
+    capture = _PostCapture({"candidates": [{"content": {"parts": []}}]})
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = GoogleProvider()
+        with pytest.raises(ValueError, match="no parts"):
+            await provider.complete_structured(
+                api_key="fake", model="gemini-x", system_prompt="SYS",
+                user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+            )

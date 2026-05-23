@@ -752,7 +752,10 @@ async def run_job(
 
     except Exception as exc:
         logger.exception("Job %s failed", job_id)
-        safe_error = _sanitize_error(str(exc)[:500], api_key)
+        # Sanitize BEFORE truncating: if the api_key straddles the 500-char
+        # boundary, slicing first would leave half the key visible and the
+        # regex would fail to mask it.
+        safe_error = _sanitize_error(str(exc), api_key)[:500]
         job_store.update_job(
             job_id,
             status=JobStatus.FAILED,
