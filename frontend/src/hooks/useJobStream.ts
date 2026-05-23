@@ -39,7 +39,22 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [progress, setProgress] = useState<JobProgress>(INITIAL_PROGRESS)
   const [status, setStatus] = useState<JobStatus | null>(null)
+
+  // Refs survive StrictMode's double-effect: the OLD code kept retryCount
+  // and the reconnect setTimeout in closures so a setStatus updater
+  // (which StrictMode runs twice in dev) doubled-incremented the counter
+  // and scheduled two reconnects per failure. Refs also let the cleanup
+  // close whichever EventSource is current — original OR reconnect.
   const esRef = useRef<EventSource | null>(null)
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const retryCountRef = useRef(0)
+  const statusRef = useRef<JobStatus | null>(null)
+
+  // Mirror status into a ref so the error handler can read the latest
+  // value without triggering an effect re-run on every status change.
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
 
   useEffect(() => {
     if (!jobId) {
@@ -54,9 +69,15 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
     setLogs([])
     setProgress(INITIAL_PROGRESS)
     setStatus('queued')
+    retryCountRef.current = 0
 
-    const es = new EventSource(`/api/jobs/${jobId}/events`)
-    esRef.current = es
+    let cancelled = false
+    const MAX_RETRIES = 3
+    const EVENTS = [
+      'queued', 'started', 'document_parsed', 'page_started',
+      'chunk_planned', 'chunk_started', 'chunk_completed',
+      'retry', 'warning', 'page_completed', 'completed', 'failed', 'keepalive',
+    ]
 
     function handleEvent(eventName: string, rawData: string) {
       let data: Record<string, unknown>
@@ -148,13 +169,13 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
               `Completed — ${ev.lines_modified} line(s) modified, ${ev.hyphen_pairs_total} hyphen pair(s), ${ev.duration_seconds.toFixed(1)}s`,
             ),
           ))
-          es.close()
+          esRef.current?.close()
           break
 
         case 'failed':
           setStatus('failed')
           setLogs((l) => appendLog(l, makeLog('error', `Failed: ${ev.error}`)))
-          es.close()
+          esRef.current?.close()
           break
 
         case 'keepalive':
@@ -162,51 +183,50 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
       }
     }
 
-    const EVENTS = [
-      'queued', 'started', 'document_parsed', 'page_started',
-      'chunk_planned', 'chunk_started', 'chunk_completed',
-      'retry', 'warning', 'page_completed', 'completed', 'failed', 'keepalive',
-    ]
+    function attach(es: EventSource) {
+      for (const name of EVENTS) {
+        es.addEventListener(name, (e: MessageEvent) => handleEvent(name, e.data))
+      }
+      es.onerror = () => {
+        es.close()
+        if (cancelled) return
+        const s = statusRef.current
+        if (s === 'completed' || s === 'failed') return
 
-    for (const name of EVENTS) {
-      es.addEventListener(name, (e: MessageEvent) => handleEvent(name, e.data))
-    }
-
-    let retryCount = 0
-    const MAX_RETRIES = 3
-
-    es.onerror = () => {
-      es.close()
-      esRef.current = null
-
-      // Don't reconnect if job already reached a terminal state
-      setStatus((s) => {
-        if (s === 'completed' || s === 'failed') return s
-        if (retryCount < MAX_RETRIES) {
-          retryCount++
-          const delay = retryCount * 2000
-          setLogs((l) => appendLog(l, makeLog('warning', `Connection lost — reconnecting in ${delay / 1000}s (attempt ${retryCount}/${MAX_RETRIES})`)))
-          setTimeout(() => {
-            // Re-trigger the effect by touching nothing; the effect
-            // won't re-run automatically, so we reconnect inline.
-            const newEs = new EventSource(`/api/jobs/${jobId}/events`)
-            esRef.current = newEs
-            for (const name of EVENTS) {
-              newEs.addEventListener(name, (e: MessageEvent) => handleEvent(name, e.data))
-            }
-            newEs.onerror = es.onerror
-          }, delay)
-        } else {
+        if (retryCountRef.current >= MAX_RETRIES) {
           setLogs((l) => appendLog(l, makeLog('error', 'Connection to server lost after multiple retries')))
-          return 'failed'
+          setStatus('failed')
+          return
         }
-        return s
-      })
+
+        retryCountRef.current += 1
+        const attempt = retryCountRef.current
+        const delay = attempt * 2000
+        setLogs((l) => appendLog(l, makeLog('warning',
+          `Connection lost — reconnecting in ${delay / 1000}s (attempt ${attempt}/${MAX_RETRIES})`,
+        )))
+
+        retryTimeoutRef.current = setTimeout(() => {
+          retryTimeoutRef.current = null
+          if (cancelled) return
+          const reconnect = new EventSource(`/api/jobs/${jobId}/events`)
+          esRef.current = reconnect
+          attach(reconnect)
+        }, delay)
+      }
     }
+
+    const es = new EventSource(`/api/jobs/${jobId}/events`)
+    esRef.current = es
+    attach(es)
 
     return () => {
-      retryCount = MAX_RETRIES // prevent reconnection after unmount
-      es.close()
+      cancelled = true
+      if (retryTimeoutRef.current !== null) {
+        clearTimeout(retryTimeoutRef.current)
+        retryTimeoutRef.current = null
+      }
+      esRef.current?.close()
       esRef.current = null
     }
   }, [jobId])

@@ -27,9 +27,14 @@ _KNOWN_NS = {
 
 
 def _detect_namespace(root: etree._Element) -> str:
-    """Return the namespace URI found in the root tag, or '' if none."""
+    """Return the namespace URI found in the root tag, or '' if none.
+
+    Defensive against malformed tags that begin with ``{`` but lack a
+    closing ``}`` (would otherwise raise ValueError up through the API
+    as an opaque 500-style failure).
+    """
     tag = root.tag
-    if tag.startswith("{"):
+    if tag.startswith("{") and "}" in tag:
         return tag[1: tag.index("}")]
     return ""
 
@@ -140,20 +145,24 @@ def _link_hyphen_pairs(lines: list[LineManifest]) -> None:
 
             # Set forward link on the BOTH line
             line.hyphen_forward_pair_id = candidate.line_id
+            line.hyphen_forward_pair_page_id = candidate.page_id
             if subs:
                 line.hyphen_forward_subs_content = subs
 
             # Set backward link on the candidate
             candidate.hyphen_pair_line_id = line.line_id
+            candidate.hyphen_pair_page_id = line.page_id
             if subs:
                 candidate.hyphen_subs_content = subs
         else:
             # Regular PART1 line
             subs = line.hyphen_subs_content or candidate.hyphen_subs_content
 
-            # Bidirectional link
+            # Bidirectional link (page_id qualifies for cross-page disambiguation)
             line.hyphen_pair_line_id = candidate.line_id
+            line.hyphen_pair_page_id = candidate.page_id
             candidate.hyphen_pair_line_id = line.line_id
+            candidate.hyphen_pair_page_id = line.page_id
 
             if subs:
                 line.hyphen_subs_content = subs
@@ -363,6 +372,50 @@ def parse_alto_file(
     return pages, root
 
 
+def _disambiguate_page_ids(
+    parsed: list[tuple[str, list[PageManifest]]],
+) -> None:
+    """Prefix colliding Page IDs with their source filename.
+
+    Multiple ALTO files commonly declare the same Page ID (``"Page1"``,
+    ``"P1"``…) — a per-scan workflow practically guarantees this.
+    Without disambiguation, the orchestrator's cross-page hyphen partner
+    lookup picks the wrong page, intra-page hyphen pair_page_id refs
+    become ambiguous, and the trace/diff/layout endpoints emit duplicate
+    page_id values to the frontend.
+
+    This is called BEFORE cross-page hyphen linking so that the
+    qualified IDs flow into ``hyphen_pair_page_id`` naturally.
+    """
+    counts: dict[str, int] = {}
+    for _, pages in parsed:
+        for p in pages:
+            counts[p.page_id] = counts.get(p.page_id, 0) + 1
+
+    colliding = {pid for pid, n in counts.items() if n > 1}
+    if not colliding:
+        return
+
+    for source_name, pages in parsed:
+        for p in pages:
+            old_pid = p.page_id
+            if old_pid not in colliding:
+                continue
+            new_pid = f"{source_name}::{old_pid}"
+            p.page_id = new_pid
+            for b in p.blocks:
+                b.page_id = new_pid
+            for lm in p.lines:
+                lm.page_id = new_pid
+                # Intra-page hyphen partner refs were set to the old page_id
+                # by _link_hyphen_pairs during parse_alto_file. Rewrite them
+                # to the qualified id so downstream lookups stay consistent.
+                if lm.hyphen_pair_page_id == old_pid:
+                    lm.hyphen_pair_page_id = new_pid
+                if lm.hyphen_forward_pair_page_id == old_pid:
+                    lm.hyphen_forward_pair_page_id = new_pid
+
+
 def build_document_manifest(
     files: list[tuple[Path, str]],
 ) -> DocumentManifest:
@@ -370,18 +423,24 @@ def build_document_manifest(
     Build a DocumentManifest from a list of (xml_path, source_name) tuples.
     Files are processed in order; page/line indices are continuous.
     """
-    all_pages: list[PageManifest] = []
     source_files: list[str] = []
     page_offset = 0
     line_offset = 0
+    parsed: list[tuple[str, list[PageManifest]]] = []
 
     for xml_path, source_name in files:
         source_files.append(source_name)
         pages, _ = parse_alto_file(xml_path, source_name, page_offset, line_offset)
-        all_pages.extend(pages)
+        parsed.append((source_name, pages))
         page_offset += len(pages)
         for p in pages:
             line_offset += len(p.lines)
+
+    # Resolve cross-file Page ID collisions BEFORE cross-page hyphen linking
+    # so the resulting hyphen_pair_page_id refs already use qualified ids.
+    _disambiguate_page_ids(parsed)
+
+    all_pages: list[PageManifest] = [p for _, pages in parsed for p in pages]
 
     # Cross-page hyphen linking: if the last line of page N is PART1
     # (or BOTH) and was not already linked, try to pair it with the

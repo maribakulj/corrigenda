@@ -500,3 +500,137 @@ def test_single_page_no_cross_page_link(tmp_path: Path):
     orphan = doc.pages[0].lines[-1]
     assert orphan.hyphen_role == HyphenRole.PART1
     assert orphan.hyphen_pair_line_id is None  # no partner available
+
+
+# ---------------------------------------------------------------------------
+# B-007 — _detect_namespace defensive against malformed tags
+# ---------------------------------------------------------------------------
+
+def test_detect_namespace_handles_missing_closing_brace():
+    """A tag that starts with '{' but lacks '}' must not crash with ValueError."""
+    from app.alto.parser import _detect_namespace
+
+    class FakeElement:
+        tag = "{noclosingbrace"
+
+    # Before the fix this raised ValueError. Should return '' now.
+    assert _detect_namespace(FakeElement()) == ""
+
+
+def test_detect_namespace_plain_tag():
+    from app.alto.parser import _detect_namespace
+
+    class FakeElement:
+        tag = "alto"
+
+    assert _detect_namespace(FakeElement()) == ""
+
+
+def test_detect_namespace_normal_namespaced_tag():
+    from app.alto.parser import _detect_namespace
+
+    class FakeElement:
+        tag = "{http://www.loc.gov/standards/alto/ns-v3#}alto"
+
+    assert _detect_namespace(FakeElement()) == "http://www.loc.gov/standards/alto/ns-v3#"
+
+
+# ---------------------------------------------------------------------------
+# B-006 — disambiguate_page_ids on cross-file Page ID collision
+# ---------------------------------------------------------------------------
+
+def test_colliding_page_ids_disambiguated_across_files(tmp_path: Path):
+    """Two files declaring Page ID='P1' must get distinct page_ids in the manifest."""
+    body = """\
+<TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="60">
+  <TextLine ID="TL1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="20">
+    <String ID="S1" CONTENT="hello" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20"/>
+  </TextLine>
+</TextBlock>"""
+    file1 = write_alto(tmp_path, alto_v3(body), "fileA.xml")
+    file2 = write_alto(tmp_path, alto_v3(body), "fileB.xml")
+
+    doc = build_document_manifest([(file1, "fileA.xml"), (file2, "fileB.xml")])
+
+    pids = [p.page_id for p in doc.pages]
+    assert len(set(pids)) == 2, f"Page IDs collide: {pids}"
+    # Format is "{source}::{original_pid}"
+    assert any("fileA.xml" in pid for pid in pids)
+    assert any("fileB.xml" in pid for pid in pids)
+
+
+def test_unique_page_ids_left_intact(tmp_path: Path):
+    """If page IDs don't collide, no renaming happens (backward compat)."""
+    body_a = """\
+<TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="60">
+  <TextLine ID="TL1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="20">
+    <String ID="S1" CONTENT="a" HPOS="0" VPOS="0" WIDTH="50" HEIGHT="20"/>
+  </TextLine>
+</TextBlock>"""
+    file1 = write_alto(tmp_path, alto_v3(body_a), "fileA.xml")
+    # second file with a different Page ID
+    body_b = body_a  # but we'll edit the wrapper
+    file2_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<alto xmlns="http://www.loc.gov/standards/alto/ns-v3#">'
+        '<Layout><Page ID="P2" WIDTH="2480" HEIGHT="3508">'
+        '<PrintSpace HPOS="0" VPOS="0" WIDTH="2480" HEIGHT="3508">'
+        + body_b +
+        '</PrintSpace></Page></Layout></alto>'
+    )
+    file2 = tmp_path / "fileB.xml"
+    file2.write_text(file2_xml, encoding="utf-8")
+
+    doc = build_document_manifest([(file1, "fileA.xml"), (file2, "fileB.xml")])
+    pids = [p.page_id for p in doc.pages]
+    assert pids == ["P1", "P2"], f"Expected clean page_ids, got {pids}"
+
+
+def test_colliding_pages_with_cross_page_hyphen(tmp_path: Path):
+    """B-005 / B-006 regression: cross-page hyphen with colliding Page+Line IDs.
+
+    Two files both declare Page ID='P1' and lines named 'TL1'/'TL2'.
+    File A's last line is PART1 (trailing dash) → linked to file B's first line.
+    After disambiguation, hyphen_pair_page_id on each side points to the
+    OTHER file's qualified page_id, so the orchestrator's qualified
+    lookup resolves the correct partner.
+    """
+    file_a = write_alto(
+        tmp_path,
+        alto_v3("""\
+<TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="60">
+  <TextLine ID="TL1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="20">
+    <String ID="S1" CONTENT="middle" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20"/>
+  </TextLine>
+  <TextLine ID="TL2" HPOS="0" VPOS="25" WIDTH="200" HEIGHT="20">
+    <String ID="S2" CONTENT="fonda-" HPOS="0" VPOS="25" WIDTH="100" HEIGHT="20"/>
+  </TextLine>
+</TextBlock>"""),
+        "fileA.xml",
+    )
+    file_b = write_alto(
+        tmp_path,
+        alto_v3("""\
+<TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="60">
+  <TextLine ID="TL1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="20">
+    <String ID="S1" CONTENT="mentaux" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20"/>
+  </TextLine>
+</TextBlock>"""),
+        "fileB.xml",
+    )
+
+    doc = build_document_manifest([(file_a, "fileA.xml"), (file_b, "fileB.xml")])
+
+    page_a, page_b = doc.pages[0], doc.pages[1]
+    # Page IDs were renamed because of collision
+    assert page_a.page_id != page_b.page_id
+
+    last_a = page_a.lines[-1]
+    first_b = page_b.lines[0]
+
+    assert last_a.hyphen_role == HyphenRole.PART1
+    assert last_a.hyphen_pair_line_id == first_b.line_id
+    # Critically: hyphen_pair_page_id points to file B's qualified page_id,
+    # not the ambiguous original 'P1'.
+    assert last_a.hyphen_pair_page_id == page_b.page_id
+    assert first_b.hyphen_pair_page_id == page_a.page_id

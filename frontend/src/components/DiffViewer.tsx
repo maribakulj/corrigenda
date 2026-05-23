@@ -149,6 +149,14 @@ interface DiffViewerProps {
 
 export function DiffViewer({ data, selectedLineId, onSelectLine }: DiffViewerProps) {
   const [pageIdx, setPageIdx] = useState(0)
+  // Guard against empty result sets — without this, currentPage.lines below crashes.
+  if (data.pages.length === 0) {
+    return (
+      <div className="rounded-lg border border-slate-700/60 bg-slate-800/40 p-6 text-center">
+        <p className="font-mono text-xs text-slate-500">Aucune page à afficher.</p>
+      </div>
+    )
+  }
   const currentPage = data.pages[pageIdx] ?? data.pages[0]
   const { total_lines, modified_lines, hyphen_pairs } = data.stats
 

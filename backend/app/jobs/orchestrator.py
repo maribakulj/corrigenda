@@ -86,6 +86,41 @@ def _count_hyphen_pairs_in_chunk(lines: list[LineManifest]) -> int:
     )
 
 
+def _resolve_partner(
+    lm: LineManifest,
+    *,
+    is_forward: bool,
+    line_by_id: dict[str, LineManifest],
+    cross_page_partners: Optional[dict[tuple[str, str], LineManifest]],
+) -> Optional[LineManifest]:
+    """Resolve a hyphen partner using a page-qualified lookup.
+
+    When two ALTO files declare the same TextLine ID (e.g. both call
+    their first line "TL1"), a bare-id lookup against the page-local
+    ``line_by_id`` returns the wrong manifest for cross-page pairs.
+    Prefer the qualified ``(page_id, line_id)`` lookup whenever the
+    parser populated ``hyphen_pair_page_id`` / ``hyphen_forward_pair_page_id``.
+    """
+    if is_forward:
+        partner_id = lm.hyphen_forward_pair_id
+        partner_page = lm.hyphen_forward_pair_page_id
+    else:
+        partner_id = lm.hyphen_pair_line_id
+        partner_page = lm.hyphen_pair_page_id
+
+    if not partner_id:
+        return None
+
+    # Intra-page (or unknown page) → local lookup
+    if partner_page is None or partner_page == lm.page_id:
+        return line_by_id.get(partner_id)
+
+    # Cross-page → qualified lookup
+    if cross_page_partners is None:
+        return None
+    return cross_page_partners.get((partner_page, partner_id))
+
+
 # ---------------------------------------------------------------------------
 # Chunk execution
 # ---------------------------------------------------------------------------
@@ -99,6 +134,7 @@ async def _run_chunk(
     model: str,
     provider_name: str,
     traces: Optional[dict[str, LineTrace]] = None,
+    cross_page_partners: Optional[dict[tuple[str, str], LineManifest]] = None,
 ) -> int:
     """
     Process one chunk through the LLM pipeline.
@@ -255,26 +291,31 @@ async def _run_chunk(
         # its forward side, so the forward reconciliation uses the
         # already-validated text.
         reconciled_count = 0
-        processed_part2: set[str] = set()
+        # Page-qualified key so two pages with the same partner line_id
+        # don't appear to "share" a processed partner.
+        processed_part2: set[tuple[str, str]] = set()
 
         # --- Pass 1: PART1 → partner (partner may be PART2 or BOTH) ---
         for lm in chunk_lines:
             if lm.hyphen_role != HyphenRole.PART1 or not lm.hyphen_pair_line_id:
                 continue
-            part2_id = lm.hyphen_pair_line_id
-            if part2_id in processed_part2:
-                continue
-            part2 = line_by_id.get(part2_id)
+            part2 = _resolve_partner(
+                lm, is_forward=False,
+                line_by_id=line_by_id, cross_page_partners=cross_page_partners,
+            )
             if part2 is None:
                 logger.warning(
                     "Hyphen pair partner %s not found for PART1 %s "
                     "(likely cross-page pair — skipping reconciliation)",
-                    part2_id, lm.line_id,
+                    lm.hyphen_pair_line_id, lm.line_id,
                 )
+                continue
+            part2_key = (part2.page_id, part2.line_id)
+            if part2_key in processed_part2:
                 continue
 
             corrected_p1 = text_by_id.get(lm.line_id, lm.ocr_text)
-            corrected_p2 = text_by_id.get(part2_id, part2.ocr_text)
+            corrected_p2 = text_by_id.get(part2.line_id, part2.ocr_text)
 
             final_p1, final_p2, subs = reconcile_hyphen_pair(
                 lm, part2, corrected_p1, corrected_p2
@@ -288,28 +329,31 @@ async def _run_chunk(
             part2.status = LineStatus.CORRECTED
             part2.hyphen_subs_content = subs
 
-            processed_part2.add(part2_id)
+            processed_part2.add(part2_key)
             reconciled_count += 1
 
         # --- Pass 2: BOTH → forward partner ---
         for lm in chunk_lines:
             if lm.hyphen_role != HyphenRole.BOTH or not lm.hyphen_forward_pair_id:
                 continue
-            part2_id = lm.hyphen_forward_pair_id
-            if part2_id in processed_part2:
-                continue
-            part2 = line_by_id.get(part2_id)
+            part2 = _resolve_partner(
+                lm, is_forward=True,
+                line_by_id=line_by_id, cross_page_partners=cross_page_partners,
+            )
             if part2 is None:
                 logger.warning(
                     "Hyphen forward partner %s not found for BOTH %s "
                     "(likely cross-page pair — skipping reconciliation)",
-                    part2_id, lm.line_id,
+                    lm.hyphen_forward_pair_id, lm.line_id,
                 )
+                continue
+            part2_key = (part2.page_id, part2.line_id)
+            if part2_key in processed_part2:
                 continue
 
             # Use BOTH's already-reconciled text from pass 1 (if available)
             corrected_p1 = lm.corrected_text or text_by_id.get(lm.line_id, lm.ocr_text)
-            corrected_p2 = text_by_id.get(part2_id, part2.ocr_text)
+            corrected_p2 = text_by_id.get(part2.line_id, part2.ocr_text)
 
             final_p1, final_p2, subs = reconcile_hyphen_pair(
                 lm, part2, corrected_p1, corrected_p2,
@@ -325,7 +369,7 @@ async def _run_chunk(
             part2.status = LineStatus.CORRECTED
             part2.hyphen_subs_content = subs
 
-            processed_part2.add(part2_id)
+            processed_part2.add(part2_key)
             reconciled_count += 1
 
         # Apply remaining lines via line_acceptance policy
@@ -409,20 +453,20 @@ async def _process_page(
     provider_name: str,
     config: ChunkPlannerConfig,
     traces: dict[str, LineTrace],
-    cross_page_partners: dict[str, LineManifest] | None = None,
+    cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
 ) -> tuple[int, int]:
     """Process a single page: plan chunks, run LLM, reconcile.
 
     Returns (chunks_processed, hyphen_pairs_reconciled).
+
+    ``cross_page_partners`` is keyed by ``(partner_page_id, partner_line_id)``
+    so two pages with colliding TextLine IDs (e.g. both "TL1") never
+    shadow each other. Cross-page partners are NOT injected into the
+    page-local ``line_by_id``; reconciliation resolves them via
+    ``_resolve_partner`` which prefers the qualified lookup.
     """
     line_by_id: dict[str, LineManifest] = {lm.line_id: lm for lm in page.lines}
 
-    # Inject cross-page hyphen partners so reconciliation can find them.
-    # Only add if the ID doesn't collide with a page-local line.
-    if cross_page_partners:
-        for partner_id, partner_lm in cross_page_partners.items():
-            if partner_id not in line_by_id:
-                line_by_id[partner_id] = partner_lm
     page_hyphen_pairs = sum(
         1 for lm in page.lines
         if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
@@ -452,6 +496,7 @@ async def _process_page(
                 job_id, chunk, line_by_id,
                 provider, api_key, model, provider_name,
                 traces=traces,
+                cross_page_partners=cross_page_partners,
             )
             page_reconciled += n
         except Exception as exc:
@@ -590,24 +635,31 @@ async def _run_pipeline(
                 hyphen_role=lm.hyphen_role.value,
             )
 
-    # Build a global line lookup for cross-page hyphen partner resolution.
-    # Keyed by line_id — but only lines that ARE cross-page partners
-    # (i.e. their partner is on a different page).
-    all_lines_global: dict[str, LineManifest] = {}
+    # Global lookup keyed by (page_id, line_id) so two ALTO files that
+    # declare the same TextLine ID don't shadow each other (a bare-id
+    # dict picks the last writer and silently mis-resolves cross-page
+    # partners). The parser populates hyphen_*_pair_page_id at link time.
+    all_lines_global: dict[tuple[str, str], LineManifest] = {}
     for page in document_manifest.pages:
         for lm in page.lines:
-            all_lines_global[lm.line_id] = lm
+            all_lines_global[(lm.page_id, lm.line_id)] = lm
 
     for page in document_manifest.pages:
-        # Find cross-page partners needed by this page's lines
-        cross_page: dict[str, LineManifest] = {}
+        # Find cross-page partners needed by this page's lines. Skip
+        # intra-page links (they're already in the page-local line_by_id).
+        cross_page: dict[tuple[str, str], LineManifest] = {}
         for lm in page.lines:
-            for partner_id in (lm.hyphen_pair_line_id, lm.hyphen_forward_pair_id):
-                if not partner_id:
+            for partner_id, partner_page in (
+                (lm.hyphen_pair_line_id, lm.hyphen_pair_page_id),
+                (lm.hyphen_forward_pair_id, lm.hyphen_forward_pair_page_id),
+            ):
+                if not partner_id or not partner_page:
                     continue
-                partner = all_lines_global.get(partner_id)
-                if partner and partner.page_id != page.page_id:
-                    cross_page[partner_id] = partner
+                if partner_page == page.page_id:
+                    continue
+                partner = all_lines_global.get((partner_page, partner_id))
+                if partner is not None:
+                    cross_page[(partner_page, partner_id)] = partner
 
         page_chunks, page_reconciled = await _process_page(
             job_id, page, document_manifest.document_id,

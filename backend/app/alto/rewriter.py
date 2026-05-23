@@ -37,8 +37,9 @@ class RewriterMetrics:
 # ---------------------------------------------------------------------------
 
 def _detect_namespace(root: etree._Element) -> str:
+    """Same defensive contract as parser._detect_namespace."""
     tag = root.tag
-    if tag.startswith("{"):
+    if tag.startswith("{") and "}" in tag:
         return tag[1: tag.index("}")]
     return ""
 

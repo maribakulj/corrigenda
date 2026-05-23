@@ -214,9 +214,8 @@ export function LayoutViewer({ data }: LayoutViewerProps) {
   const rightRef = useRef<HTMLDivElement>(null)
   const syncing  = useRef(false)
 
-  const currentPage = data.pages[pageIdx] ?? data.pages[0]
-  const hasImage    = !!currentPage.image_url
-
+  // All hooks (useCallback) must come BEFORE any conditional return,
+  // otherwise the hook count varies between renders. See PR 2 / B-002.
   const onScrollLeft = useCallback(() => {
     if (syncing.current || !leftRef.current || !rightRef.current) return
     syncing.current = true
@@ -230,6 +229,18 @@ export function LayoutViewer({ data }: LayoutViewerProps) {
     leftRef.current.scrollTop = rightRef.current.scrollTop
     syncing.current = false
   }, [])
+
+  // Guard against empty result sets — without this, currentPage.image_url crashes.
+  if (data.pages.length === 0) {
+    return (
+      <div className="rounded-lg border border-slate-700/60 bg-slate-800/40 p-6 text-center">
+        <p className="font-mono text-xs text-slate-500">Aucune mise en page à afficher.</p>
+      </div>
+    )
+  }
+
+  const currentPage = data.pages[pageIdx] ?? data.pages[0]
+  const hasImage    = !!currentPage.image_url
 
   return (
     <div className="rounded-lg border border-slate-700/60 bg-slate-800/40 overflow-hidden">
