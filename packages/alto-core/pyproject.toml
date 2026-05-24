@@ -3,7 +3,12 @@ name = "alto-core"
 version = "0.1.0a1"
 description = "Pure ALTO XML correction pipeline core — parser, rewriter, hyphenation reconciler, chunk planner."
 readme = "README.md"
-license = "Apache-2.0"
+# License declared via classifier only — both `license = "Apache-2.0"`
+# (PEP 639 string) and `license = {file = "..."}` (dict form) produce
+# Metadata 2.4 fields (`license-expression`, `license-file`) that
+# twine < 7 rejects. Once twine 7+ is widely deployed, switch back to
+# `license = "Apache-2.0"`. LICENSE file is still in the sdist via
+# the hatch.build.targets.sdist include below.
 requires-python = ">=3.11"
 authors = [
     { name = "alto-llm-corrector contributors" },

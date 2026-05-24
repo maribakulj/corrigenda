@@ -42,11 +42,55 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install alto-core (editable) + pytest
+        # Ship pytest-asyncio so future async tests in alto-core don't
+        # quietly error-out with "asyncio mode not installed".
         run: |
           pip install -e .
-          pip install pytest
+          pip install pytest pytest-asyncio
       - name: pytest
         run: pytest tests/
+
+  alto-core-build:
+    # Catch packaging regressions (broken classifiers, missing files in
+    # the wheel/sdist) here, before they bite us at PyPI release time.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/alto-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install build tooling
+        run: pip install build
+      - name: Build wheel + sdist
+        run: python -m build
+      - name: Verify wheel is installable + importable
+        # Smoke-install the wheel into a fresh venv and exercise the
+        # public API. Catches missing files in the wheel, broken
+        # dependencies, or import-time errors. (We skip `twine check`
+        # because it rejects PEP 639's `license-file` metadata field
+        # that hatchling emits — false positive on wheel quality.)
+        run: |
+          python -m venv /tmp/wheel-smoke
+          /tmp/wheel-smoke/bin/pip install dist/*.whl
+          /tmp/wheel-smoke/bin/python -c "
+          from alto_core import (
+              CorrectionPipeline, BaseProvider, PipelineObserver, OutputWriter,
+              parse_alto_file, build_document_manifest, rewrite_alto_file,
+              DocumentManifest, LineManifest, HyphenRole,
+          )
+          import alto_core
+          print(f'alto-core {alto_core.__version__} wheel installed + importable')
+          "
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: alto-core-dist
+          path: packages/alto-core/dist/
+          if-no-files-found: error
 
   backend-lint:
     runs-on: ubuntu-latest
