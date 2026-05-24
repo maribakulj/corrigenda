@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -203,14 +204,21 @@ class CorrectionPipeline:
     async def run(
         self,
         *,
-        job_id: str,
         document_manifest: DocumentManifest,
         api_key: str,
         model: str,
         provider_name: str,
         source_files: dict[str, Path],
+        run_id: str | None = None,
     ) -> CorrectionResult:
-        """Run the full pipeline. Mutates `document_manifest.pages` in place."""
+        """Run the full pipeline. Mutates `document_manifest.pages` in place.
+
+        ``run_id`` is an optional identifier embedded in the emitted
+        JobTrace so consumers can correlate the trace.json with their
+        own job/request id. Generated as a uuid4 when omitted; it never
+        leaks back into the public events.
+        """
+        run_id = run_id or str(uuid.uuid4())
         self._retry_count = 0
         self._fallback_count = 0
 
@@ -269,7 +277,6 @@ class CorrectionPipeline:
                         cross_page[(partner_page, partner_id)] = partner
 
             page_chunks, page_reconciled = await self._process_page(
-                job_id=job_id,
                 page=page,
                 document_id=document_manifest.document_id,
                 api_key=api_key,
@@ -287,7 +294,7 @@ class CorrectionPipeline:
             provider_name=provider_name,
             model=model,
             traces=traces,
-            job_id=job_id,
+            run_id=run_id,
         )
 
         return CorrectionResult(
@@ -305,7 +312,6 @@ class CorrectionPipeline:
     async def _process_page(
         self,
         *,
-        job_id: str,
         page: PageManifest,
         document_id: str,
         api_key: str,
@@ -349,7 +355,6 @@ class CorrectionPipeline:
             page_chunks += 1
             try:
                 n = await self._run_chunk(
-                    job_id=job_id,
                     chunk=chunk,
                     line_by_id=line_by_id,
                     api_key=api_key,
@@ -397,7 +402,6 @@ class CorrectionPipeline:
     async def _run_chunk(
         self,
         *,
-        job_id: str,
         chunk: ChunkRequest,
         line_by_id: dict[str, LineManifest],
         api_key: str,
@@ -706,7 +710,7 @@ class CorrectionPipeline:
         provider_name: str,
         model: str,
         traces: dict[str, LineTrace],
-        job_id: str,
+        run_id: str,
     ) -> None:
         """Rewrite corrected ALTO files, update traces, persist via writer."""
         for source_name, xml_path in source_files.items():
@@ -749,7 +753,7 @@ class CorrectionPipeline:
                         t.output_alto_text = otxt
 
         job_trace = JobTrace(
-            job_id=job_id,
+            job_id=run_id,
             total_lines=len(traces),
             lines=list(traces.values()),
         )

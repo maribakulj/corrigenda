@@ -181,13 +181,15 @@ class JobRunner:
             ),
             output_writer=output_writer,
         )
+        # `run_id` is alto-core's generic identifier; we feed it the
+        # server-side `job_id` so trace.json correlates with the API.
         result = await pipeline.run(
-            job_id=job_id,
             document_manifest=document_manifest,
             api_key=api_key,
             model=model,
             provider_name=provider_name,
             source_files=source_files,
+            run_id=job_id,
         )
 
         self.job_store.update_job(
