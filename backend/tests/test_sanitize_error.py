@@ -1,7 +1,7 @@
 """Tests for orchestrator._sanitize_error (T-005, B-010 regression)."""
 from __future__ import annotations
 
-from app.jobs.orchestrator import _sanitize_error
+from app.jobs.correction_pipeline import sanitize_error as _sanitize_error
 
 
 # ---------------------------------------------------------------------------
