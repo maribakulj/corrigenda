@@ -63,6 +63,24 @@ The root `Dockerfile` is detected automatically. It builds the React frontend an
 
 No separate nginx is needed — FastAPI serves `/` from `./static/` and the SPA catch-all returns `index.html`.
 
+### ⚠ Job storage is volatile
+
+The container writes uploads and corrected outputs to `/tmp/app-jobs/<job_id>/`. **Anything in `/tmp` is lost when the container restarts** (HF Spaces redeploys on every commit, on idle eviction, and on factory reboot). Practical implications:
+
+- A job in progress when the Space redeploys is killed and the result is lost.
+- The `trace.json` and corrected XML are gone after a restart even if the job completed — download them immediately.
+- A user revisiting the Space after a restart will get a `404` on `/api/jobs/{id}/download` for any previous job_id.
+
+The frontend shows a yellow warning banner above the upload zone. If you need persistence, mount a persistent volume (paid HF Spaces feature) and point `JOB_STORAGE_DIR` to it:
+
+```
+ENV JOB_STORAGE_DIR=/data/app-jobs
+```
+
+(or set the env var in the Space settings UI).
+
+Single-worker on purpose — see Dockerfile comments. A multi-worker setup would need a shared `JobStore` (Redis, Postgres) since the current one is in-process.
+
 ---
 
 ## Environment variables

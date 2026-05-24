@@ -206,6 +206,16 @@ export default function App() {
             <span className="font-mono text-amber-500 text-xs">01</span>
             Upload ALTO files
           </h2>
+          {/* Volatile-storage warning — jobs live in /tmp on this server. */}
+          <div
+            role="note"
+            className="mb-3 rounded border border-amber-700/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-200/80"
+          >
+            <span className="font-semibold text-amber-300">Note&nbsp;:</span>{' '}
+            les fichiers et les jobs ne sont pas persistants. Un redémarrage du
+            serveur (ou un redéploiement) efface tout. Téléchargez le résultat
+            dès qu&apos;il est prêt.
+          </div>
           <FileUpload key={resetKey} onFilesChange={setFiles} disabled={isRunning || isDone} />
         </section>
 
