@@ -93,7 +93,7 @@ module = [
     "app.jobs.runner",
     "app.storage.output_writer",
 ]
-disallow_untyped_defs = false  # promote to true once existing gaps are closed
+disallow_untyped_defs = true  # these two modules are fully annotated; keep them so
 warn_return_any = true
 
 # Tests don't need strict typing
@@ -108,9 +108,9 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-filterwarnings = [
-    "ignore::DeprecationWarning",
-]
+# Surface DeprecationWarnings so upstream API changes (alto-core, FastAPI,
+# Pydantic, ...) reach us early instead of breaking suddenly. Switch to
+# "error" once the baseline is clean.
 
 # ---------------------------------------------------------------------------
 # coverage
