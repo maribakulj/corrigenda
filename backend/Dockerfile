@@ -20,4 +20,12 @@ RUN useradd --create-home appuser && mkdir -p /tmp/app-jobs && chown appuser /tm
 USER appuser
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Single worker — JobStore is in-process state (see root Dockerfile).
+# Concurrency cap protects against slow LLM calls accumulating
+# connections; surplus requests return 503 quickly.
+CMD ["uvicorn", "app.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "1", \
+     "--limit-concurrency", "100", \
+     "--timeout-keep-alive", "60"]

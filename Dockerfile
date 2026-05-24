@@ -39,4 +39,19 @@ EXPOSE 7860
 # Docker's health state ("starting" → "healthy") instead of its own probe,
 # which blocks the "Building" → "Running" transition indefinitely.
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]
+# Single worker on purpose: JobStore is in-process state, multi-worker
+# would shard it across processes (job created on worker N invisible
+# from worker M, SSE clients connecting to the wrong worker would
+# never see updates). When a distributed JobStore lands (Redis,
+# Postgres), bump `--workers` and `--limit-concurrency` together.
+#
+# `--limit-concurrency` caps the queue of in-flight requests so a slow
+# LLM call doesn't accumulate connections indefinitely; surplus
+# requests return 503 quickly. `--timeout-keep-alive` matches the SSE
+# keepalive interval used by stream_events.
+CMD ["uvicorn", "app.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "7860", \
+     "--workers", "1", \
+     "--limit-concurrency", "100", \
+     "--timeout-keep-alive", "60"]
