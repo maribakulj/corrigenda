@@ -585,129 +585,23 @@ class CorrectionPipeline:
                 o.line_id: o.corrected_text for o in response.lines
             }
 
-            reconciled_count = 0
-            processed_part2: set[tuple[str, str]] = set()
-
-            # Pass 1: PART1 → partner (partner may be PART2 or BOTH)
-            for lm in chunk_lines:
-                if lm.hyphen_role != HyphenRole.PART1 or not lm.hyphen_pair_line_id:
-                    continue
-                part2 = _resolve_partner(
-                    lm,
-                    is_forward=False,
-                    line_by_id=line_by_id,
-                    cross_page_partners=cross_page_partners,
-                )
-                if part2 is None:
-                    self.observer.on_event(
-                        "hyphen_partner_missing",
-                        {
-                            "chunk_id": chunk.chunk_id,
-                            "line_id": lm.line_id,
-                            "missing_partner_id": lm.hyphen_pair_line_id,
-                            "direction": "backward",
-                        },
-                    )
-                    continue
-                part2_key = (part2.page_id, part2.line_id)
-                if part2_key in processed_part2:
-                    continue
-                _reconcile_one_pair(lm, part2, text_by_id, is_forward=False)
-                processed_part2.add(part2_key)
-                reconciled_count += 1
-
-            # Pass 2: BOTH → forward partner
-            for lm in chunk_lines:
-                if lm.hyphen_role != HyphenRole.BOTH or not lm.hyphen_forward_pair_id:
-                    continue
-                part2 = _resolve_partner(
-                    lm,
-                    is_forward=True,
-                    line_by_id=line_by_id,
-                    cross_page_partners=cross_page_partners,
-                )
-                if part2 is None:
-                    self.observer.on_event(
-                        "hyphen_partner_missing",
-                        {
-                            "chunk_id": chunk.chunk_id,
-                            "line_id": lm.line_id,
-                            "missing_partner_id": lm.hyphen_forward_pair_id,
-                            "direction": "forward",
-                        },
-                    )
-                    continue
-                part2_key = (part2.page_id, part2.line_id)
-                if part2_key in processed_part2:
-                    continue
-                _reconcile_one_pair(lm, part2, text_by_id, is_forward=True)
-                processed_part2.add(part2_key)
-                reconciled_count += 1
-
-            # Apply remaining lines via line_acceptance policy
-            for lm in chunk_lines:
-                if lm.corrected_text is None:
-                    corrected = text_by_id.get(lm.line_id)
-                    if corrected is not None:
-                        if (
-                            lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
-                            and lm.ocr_text.rstrip().endswith("-")
-                            and not corrected.rstrip().endswith("-")
-                        ):
-                            lm.corrected_text = lm.ocr_text
-                            lm.status = LineStatus.FALLBACK
-                            if traces is not None:
-                                t = traces.get(_trace_key(lm))
-                                if t is not None:
-                                    t.fallback_reason = "orphan_hyphen_completed"
-                            continue
-
-                        prev_ocr = (
-                            all_lines_by_id[lm.prev_line_id].ocr_text
-                            if lm.prev_line_id and lm.prev_line_id in all_lines_by_id
-                            else None
-                        )
-                        next_ocr = (
-                            all_lines_by_id[lm.next_line_id].ocr_text
-                            if lm.next_line_id and lm.next_line_id in all_lines_by_id
-                            else None
-                        )
-                        result = check_line(lm.ocr_text, corrected, prev_ocr, next_ocr)
-                        lm.corrected_text = result.text
-                        if result.accepted:
-                            lm.status = LineStatus.CORRECTED
-                        else:
-                            lm.status = LineStatus.FALLBACK
-                            if traces is not None:
-                                t = traces.get(_trace_key(lm))
-                                if t is not None:
-                                    t.fallback_reason = result.reason
-
-            # Adjacent duplicate detection (post-acceptance pass)
-            accepted_lines = [
-                (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text)
-                for lm in chunk_lines
-            ]
-            dup_reverts = check_adjacent_duplicates(accepted_lines)
-            for lm in chunk_lines:
-                if lm.line_id in dup_reverts:
-                    lm.corrected_text = lm.ocr_text
-                    lm.status = LineStatus.FALLBACK
-
-            # Trace: projected_text + validation_status
-            if traces is not None:
-                for lm in chunk_lines:
-                    t = traces.get(_trace_key(lm))
-                    if t is None:
-                        continue
-                    t.projected_text = (
-                        lm.corrected_text
-                        if lm.corrected_text is not None
-                        else lm.ocr_text
-                    )
-                    t.validation_status = lm.status.value
-                    if lm.line_id in dup_reverts and not t.fallback_reason:
-                        t.fallback_reason = dup_reverts[lm.line_id]
+            reconciled_count = self._reconcile_chunk_hyphens(
+                chunk_id=chunk.chunk_id,
+                chunk_lines=chunk_lines,
+                text_by_id=text_by_id,
+                line_by_id=line_by_id,
+                cross_page_partners=cross_page_partners,
+            )
+            self._apply_line_acceptance(
+                chunk_lines=chunk_lines,
+                text_by_id=text_by_id,
+                all_lines_by_id=all_lines_by_id,
+                traces=traces,
+            )
+            self._finalize_chunk_traces(
+                chunk_lines=chunk_lines,
+                traces=traces,
+            )
 
             self.observer.on_event(
                 "chunk_completed",
@@ -720,6 +614,182 @@ class CorrectionPipeline:
             return reconciled_count
 
         return 0
+
+    # ------------------------------------------------------------------
+    # Chunk helpers extracted from _run_chunk (audit A3)
+    # ------------------------------------------------------------------
+
+    def _reconcile_chunk_hyphens(
+        self,
+        *,
+        chunk_id: str,
+        chunk_lines: list[LineManifest],
+        text_by_id: dict[str, str],
+        line_by_id: dict[str, LineManifest],
+        cross_page_partners: dict[tuple[str, str], LineManifest] | None,
+    ) -> int:
+        """Two-pass hyphen reconciliation: PART1→partner, then BOTH→forward.
+
+        Returns the number of pairs successfully reconciled. Emits a
+        ``hyphen_partner_missing`` event for each unresolvable partner
+        (likely cross-page) so observers can surface the diagnostic.
+        """
+        reconciled_count = 0
+        processed_part2: set[tuple[str, str]] = set()
+
+        # Pass 1: PART1 → partner (partner may be PART2 or BOTH)
+        for lm in chunk_lines:
+            if lm.hyphen_role != HyphenRole.PART1 or not lm.hyphen_pair_line_id:
+                continue
+            part2 = _resolve_partner(
+                lm,
+                is_forward=False,
+                line_by_id=line_by_id,
+                cross_page_partners=cross_page_partners,
+            )
+            if part2 is None:
+                self.observer.on_event(
+                    "hyphen_partner_missing",
+                    {
+                        "chunk_id": chunk_id,
+                        "line_id": lm.line_id,
+                        "missing_partner_id": lm.hyphen_pair_line_id,
+                        "direction": "backward",
+                    },
+                )
+                continue
+            part2_key = (part2.page_id, part2.line_id)
+            if part2_key in processed_part2:
+                continue
+            _reconcile_one_pair(lm, part2, text_by_id, is_forward=False)
+            processed_part2.add(part2_key)
+            reconciled_count += 1
+
+        # Pass 2: BOTH → forward partner
+        for lm in chunk_lines:
+            if lm.hyphen_role != HyphenRole.BOTH or not lm.hyphen_forward_pair_id:
+                continue
+            part2 = _resolve_partner(
+                lm,
+                is_forward=True,
+                line_by_id=line_by_id,
+                cross_page_partners=cross_page_partners,
+            )
+            if part2 is None:
+                self.observer.on_event(
+                    "hyphen_partner_missing",
+                    {
+                        "chunk_id": chunk_id,
+                        "line_id": lm.line_id,
+                        "missing_partner_id": lm.hyphen_forward_pair_id,
+                        "direction": "forward",
+                    },
+                )
+                continue
+            part2_key = (part2.page_id, part2.line_id)
+            if part2_key in processed_part2:
+                continue
+            _reconcile_one_pair(lm, part2, text_by_id, is_forward=True)
+            processed_part2.add(part2_key)
+            reconciled_count += 1
+
+        return reconciled_count
+
+    def _apply_line_acceptance(
+        self,
+        *,
+        chunk_lines: list[LineManifest],
+        text_by_id: dict[str, str],
+        all_lines_by_id: dict[str, LineManifest],
+        traces: dict[str, LineTrace] | None,
+    ) -> None:
+        """Apply the per-line acceptance policy on lines not already
+        reconciled as hyphen pairs.
+
+        Two guards in order:
+          1. Orphan PART1/BOTH whose OCR ends in '-' but corrected does
+             not → the LLM completed a hyphen we couldn't reconcile;
+             fall back to OCR to keep the marker.
+          2. Centralised :func:`check_line` with prev/next context — the
+             single source of truth for "is this correction acceptable?".
+        """
+        for lm in chunk_lines:
+            if lm.corrected_text is not None:
+                continue
+            corrected = text_by_id.get(lm.line_id)
+            if corrected is None:
+                continue
+
+            if (
+                lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
+                and lm.ocr_text.rstrip().endswith("-")
+                and not corrected.rstrip().endswith("-")
+            ):
+                lm.corrected_text = lm.ocr_text
+                lm.status = LineStatus.FALLBACK
+                if traces is not None:
+                    t = traces.get(_trace_key(lm))
+                    if t is not None:
+                        t.fallback_reason = "orphan_hyphen_completed"
+                continue
+
+            prev_ocr = (
+                all_lines_by_id[lm.prev_line_id].ocr_text
+                if lm.prev_line_id and lm.prev_line_id in all_lines_by_id
+                else None
+            )
+            next_ocr = (
+                all_lines_by_id[lm.next_line_id].ocr_text
+                if lm.next_line_id and lm.next_line_id in all_lines_by_id
+                else None
+            )
+            result = check_line(lm.ocr_text, corrected, prev_ocr, next_ocr)
+            lm.corrected_text = result.text
+            if result.accepted:
+                lm.status = LineStatus.CORRECTED
+            else:
+                lm.status = LineStatus.FALLBACK
+                if traces is not None:
+                    t = traces.get(_trace_key(lm))
+                    if t is not None:
+                        t.fallback_reason = result.reason
+
+    def _finalize_chunk_traces(
+        self,
+        *,
+        chunk_lines: list[LineManifest],
+        traces: dict[str, LineTrace] | None,
+    ) -> None:
+        """Adjacent-duplicate revert + projected_text/validation_status
+        for every line trace.
+
+        Combines the two final sweeps that used to sit inline in
+        ``_run_chunk``: duplicate detection mutates ``corrected_text``,
+        then we project the post-mutation state onto the traces (when
+        the host opted into them by passing a non-None ``traces`` dict).
+        """
+        accepted_lines = [
+            (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text)
+            for lm in chunk_lines
+        ]
+        dup_reverts = check_adjacent_duplicates(accepted_lines)
+        for lm in chunk_lines:
+            if lm.line_id in dup_reverts:
+                lm.corrected_text = lm.ocr_text
+                lm.status = LineStatus.FALLBACK
+
+        if traces is None:
+            return
+        for lm in chunk_lines:
+            t = traces.get(_trace_key(lm))
+            if t is None:
+                continue
+            t.projected_text = (
+                lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
+            )
+            t.validation_status = lm.status.value
+            if lm.line_id in dup_reverts and not t.fallback_reason:
+                t.fallback_reason = dup_reverts[lm.line_id]
 
     # ------------------------------------------------------------------
     # Output writing (rewriter + trace assembly)
