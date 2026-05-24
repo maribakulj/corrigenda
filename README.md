@@ -13,7 +13,7 @@ Post-OCR text correction of ALTO XML files using LLM providers (OpenAI, Anthropi
 
 Upload one or more ALTO XML files, choose a provider and model, and get corrected ALTO XML back — with hyphenation pairs preserved intact across line boundaries.
 
-**What it does:** corrects OCR errors in ALTO `<String CONTENT="..."/>` elements.  
+**What it does:** corrects OCR errors in ALTO `<String CONTENT="..."/>` elements.
 **What it does not:** OCR, resegmentation, line merging/splitting, translation, or text modernisation.
 
 ---
@@ -38,7 +38,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-The app is then available at **http://localhost:5173**.  
+The app is then available at **http://localhost:5173**.
 The backend API is exposed at **http://localhost:8000**.
 
 To stop:

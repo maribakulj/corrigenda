@@ -2,7 +2,7 @@
 
 ---
 
-## PARTIE 1 — SPECS 
+## PARTIE 1 — SPECS
 
 > Ces specs sont rédigées pour être données directement en contexte à Claude Code.
 > Chaque section est autonome et actionnable. Sauvegarde ce fichier sous `SPECS.md` à la racine du repo.
@@ -338,7 +338,7 @@ def reconcile_hyphen_pair(
 ) -> tuple[str, str, Optional[str]]:
     """
     Retourne (final_text_part1, final_text_part2, resolved_subs_content).
-    
+
     Garantit :
     - Les deux lignes physiques restent distinctes
     - Aucun texte ne migre d'une ligne à l'autre

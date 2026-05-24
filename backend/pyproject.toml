@@ -132,3 +132,20 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "if __name__ == .__main__.:",
 ]
+
+# ---------------------------------------------------------------------------
+# bandit — security static analysis
+# ---------------------------------------------------------------------------
+
+[tool.bandit]
+exclude_dirs = ["tests", "build", "dist", ".venv", "venv"]
+# Skipped checks (with justification):
+#   B101  asserts used as guards for mypy after FastAPI Depends — invariant
+#         is enforced by the dependency, the assert is documentation that
+#         happens to type-narrow; we never rely on it for security.
+#   B108  /tmp/app-jobs is the documented default for HF Spaces; the path
+#         is configurable via $JOB_STORAGE_DIR and each job gets its own
+#         subdir, so directory-traversal risk is bounded.
+#   B110  try/except: pass in best-effort cleanup paths (subscriber queue
+#         eviction, dirent stat) — failures here are non-fatal by design.
+skips = ["B101", "B108", "B110"]
