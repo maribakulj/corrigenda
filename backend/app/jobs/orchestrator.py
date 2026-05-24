@@ -9,13 +9,13 @@ explicitly — there is no longer a module-level singleton to fall back on.
 `_JOB_TIMEOUT_SECONDS` is kept at module scope so that tests can
 monkey-patch it to shorten the budget.
 """
+
 from __future__ import annotations
 
 import logging
 import os
 import warnings
 from pathlib import Path
-from typing import Optional
 
 from app.jobs.runner import JobRunner
 from app.protocols import BaseProvider, JobStore
@@ -43,8 +43,8 @@ async def run_job(
     model: str,
     output_dir: Path,
     source_files: dict[str, Path],
-    provider: Optional[BaseProvider] = None,
-    job_store_override: Optional[JobStore] = None,
+    provider: BaseProvider | None = None,
+    job_store_override: JobStore | None = None,
 ) -> None:
     """Compat wrapper around `JobRunner.run`.
 

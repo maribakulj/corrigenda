@@ -4,6 +4,7 @@ Implements the `OutputWriter` Protocol from `app.protocols`. Used by the
 correction pipeline as the default sink; swap for another implementation
 (S3, in-memory for tests, etc.) to retarget the pipeline's outputs.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

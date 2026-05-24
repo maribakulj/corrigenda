@@ -1,4 +1,5 @@
 """Jobs API router."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,11 +7,11 @@ import io
 import json
 import logging
 import zipfile
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import AsyncGenerator, List
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 from sse_starlette.sse import EventSourceResponse
 
 from app.alto.parser import build_document_manifest
@@ -43,6 +44,7 @@ _ALLOWED_UPLOAD_EXTENSIONS = {".xml", ".alto", ".zip"}
 # Shared dependency for endpoints that require a completed job with a manifest
 # ---------------------------------------------------------------------------
 
+
 def get_completed_job(
     job_id: str,
     store: JobStore = Depends(get_job_store),
@@ -65,9 +67,10 @@ def get_completed_job(
 # POST /api/jobs
 # ---------------------------------------------------------------------------
 
+
 @router.post("", response_model=CreateJobResponse)
 async def create_job(
-    files: List[UploadFile] = File(...),
+    files: list[UploadFile] = File(...),
     provider: str = Form(...),
     api_key: str = Form(...),
     model: str = Form(...),
@@ -81,7 +84,7 @@ async def create_job(
             raise HTTPException(
                 status_code=400,
                 detail=f"Unsupported file type: {f.filename!r}. "
-                       f"Allowed: {sorted(_ALLOWED_UPLOAD_EXTENSIONS)}",
+                f"Allowed: {sorted(_ALLOWED_UPLOAD_EXTENSIONS)}",
             )
 
     # Validate provider
@@ -128,6 +131,7 @@ async def create_job(
 
     # Resolve provider instance
     from app.providers import get_provider as _get_provider
+
     provider_instance = _get_provider(provider_enum)
 
     out_dir = output_dir(job_id)
@@ -137,7 +141,9 @@ async def create_job(
         exc = task.exception()
         if exc is not None:
             logging.getLogger(__name__).error(
-                "Background job %s crashed: %s", job_id, exc,
+                "Background job %s crashed: %s",
+                job_id,
+                exc,
             )
 
     task = asyncio.create_task(
@@ -161,6 +167,7 @@ async def create_job(
 # ---------------------------------------------------------------------------
 # GET /api/jobs/{job_id}
 # ---------------------------------------------------------------------------
+
 
 @router.get("/{job_id}", response_model=JobStatusResponse)
 async def get_job(
@@ -189,6 +196,7 @@ async def get_job(
 # GET /api/jobs/{job_id}/events
 # ---------------------------------------------------------------------------
 
+
 @router.get("/{job_id}/events")
 async def job_events(
     job_id: str,
@@ -212,6 +220,7 @@ async def job_events(
 # GET /api/jobs/{job_id}/download
 # ---------------------------------------------------------------------------
 
+
 @router.get("/{job_id}/download")
 async def download_job(
     job_id: str,
@@ -233,9 +242,7 @@ async def download_job(
         return Response(
             content=xml_path.read_bytes(),
             media_type="application/xml",
-            headers={
-                "Content-Disposition": f'attachment; filename="{xml_path.name}"'
-            },
+            headers={"Content-Disposition": f'attachment; filename="{xml_path.name}"'},
         )
 
     # Multiple files → ZIP in memory
@@ -257,6 +264,7 @@ async def download_job(
 # GET /api/jobs/{job_id}/trace
 # ---------------------------------------------------------------------------
 
+
 @router.get("/{job_id}/trace")
 async def get_job_trace(job: JobManifest = Depends(get_completed_job)) -> dict:
     """Return per-line text traces for a completed job."""
@@ -274,6 +282,7 @@ async def get_job_trace(job: JobManifest = Depends(get_completed_job)) -> dict:
 # GET /api/jobs/{job_id}/diff
 # ---------------------------------------------------------------------------
 
+
 @router.get("/{job_id}/diff")
 async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
     """Return per-line OCR vs corrected diff data for a completed job."""
@@ -282,30 +291,35 @@ async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
     modified_lines = 0
     hyphen_pairs = 0
 
+    assert job.document_manifest is not None  # guaranteed by get_completed_job
     for page in job.document_manifest.pages:
         lines_out = []
         for lm in page.lines:
             corrected = lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
             modified = corrected != lm.ocr_text
-            lines_out.append({
-                "line_id": lm.line_id,
-                "ocr_text": lm.ocr_text,
-                "corrected_text": corrected,
-                "modified": modified,
-                "hyphen_role": lm.hyphen_role.value,
-                "hyphen_subs_content": lm.hyphen_subs_content,
-            })
+            lines_out.append(
+                {
+                    "line_id": lm.line_id,
+                    "ocr_text": lm.ocr_text,
+                    "corrected_text": corrected,
+                    "modified": modified,
+                    "hyphen_role": lm.hyphen_role.value,
+                    "hyphen_subs_content": lm.hyphen_subs_content,
+                }
+            )
             total_lines += 1
             if modified:
                 modified_lines += 1
             if lm.hyphen_role == HyphenRole.PART1:
                 hyphen_pairs += 1
 
-        pages_out.append({
-            "page_id": page.page_id,
-            "page_index": page.page_index,
-            "lines": lines_out,
-        })
+        pages_out.append(
+            {
+                "page_id": page.page_id,
+                "page_index": page.page_index,
+                "lines": lines_out,
+            }
+        )
 
     return {
         "job_id": job.job_id,
@@ -322,10 +336,12 @@ async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
 # GET /api/jobs/{job_id}/layout
 # ---------------------------------------------------------------------------
 
+
 @router.get("/{job_id}/layout")
 async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
     """Return structural layout data (blocks + lines with ALTO coordinates)."""
     pages_out = []
+    assert job.document_manifest is not None  # guaranteed by get_completed_job
     for page in job.document_manifest.pages:
         line_by_id = {lm.line_id: lm for lm in page.lines}
 
@@ -337,25 +353,29 @@ async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
                 if lm is None:
                     continue
                 corrected = lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
-                lines_out.append({
-                    "line_id": lm.line_id,
-                    "hpos": lm.coords.hpos,
-                    "vpos": lm.coords.vpos,
-                    "width": lm.coords.width,
-                    "height": lm.coords.height,
-                    "ocr_text": lm.ocr_text,
-                    "corrected_text": corrected,
-                    "modified": corrected != lm.ocr_text,
-                    "hyphen_role": lm.hyphen_role.value,
-                })
-            blocks_out.append({
-                "block_id": block.block_id,
-                "hpos": block.coords.hpos,
-                "vpos": block.coords.vpos,
-                "width": block.coords.width,
-                "height": block.coords.height,
-                "lines": lines_out,
-            })
+                lines_out.append(
+                    {
+                        "line_id": lm.line_id,
+                        "hpos": lm.coords.hpos,
+                        "vpos": lm.coords.vpos,
+                        "width": lm.coords.width,
+                        "height": lm.coords.height,
+                        "ocr_text": lm.ocr_text,
+                        "corrected_text": corrected,
+                        "modified": corrected != lm.ocr_text,
+                        "hyphen_role": lm.hyphen_role.value,
+                    }
+                )
+            blocks_out.append(
+                {
+                    "block_id": block.block_id,
+                    "hpos": block.coords.hpos,
+                    "vpos": block.coords.vpos,
+                    "width": block.coords.width,
+                    "height": block.coords.height,
+                    "lines": lines_out,
+                }
+            )
 
         # Derive page dimensions from line coordinates if the ALTO Page element
         # doesn't carry WIDTH/HEIGHT (some producers omit these attributes).
@@ -373,14 +393,16 @@ async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
         # when multiple ALTO files share the same Page/@ID value.
         image_filename = job.images.get(page.source_file)
         image_url = f"/api/jobs/{job.job_id}/images/{image_filename}" if image_filename else None
-        pages_out.append({
-            "page_id": page.page_id,
-            "page_index": page.page_index,
-            "page_width": pw,
-            "page_height": ph,
-            "image_url": image_url,
-            "blocks": blocks_out,
-        })
+        pages_out.append(
+            {
+                "page_id": page.page_id,
+                "page_index": page.page_index,
+                "page_width": pw,
+                "page_height": ph,
+                "image_url": image_url,
+                "blocks": blocks_out,
+            }
+        )
 
     return {"job_id": job.job_id, "pages": pages_out}
 

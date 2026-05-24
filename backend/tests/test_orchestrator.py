@@ -1,8 +1,8 @@
 """Tests for jobs/orchestrator.py"""
+
 from __future__ import annotations
 
 import asyncio
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,7 @@ SAMPLE_XML = Path(__file__).parent.parent.parent / "examples" / "sample.xml"
 # MockProvider
 # ---------------------------------------------------------------------------
 
+
 class MockProvider:
     """Returns OCR text unchanged (no modification)."""
 
@@ -30,7 +31,7 @@ class MockProvider:
         fail_times: int = 0,
         invalid_json_times: int = 0,
     ) -> None:
-        self._fail_times = fail_times          # raise ValueError N times then succeed
+        self._fail_times = fail_times  # raise ValueError N times then succeed
         self._invalid_json_times = invalid_json_times  # return bad JSON N times
         self._call_count = 0
 
@@ -59,16 +60,19 @@ class MockProvider:
         # Return corrected_text identical to ocr_text (identity correction)
         lines_out = []
         for line_in in user_payload.get("lines", []):
-            lines_out.append({
-                "line_id": line_in["line_id"],
-                "corrected_text": line_in["ocr_text"],
-            })
+            lines_out.append(
+                {
+                    "line_id": line_in["line_id"],
+                    "corrected_text": line_in["ocr_text"],
+                }
+            )
         return {"lines": lines_out}
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_store_and_job(provider: str = "openai", model: str = "mock") -> tuple[JobStore, str]:
     store = JobStore()
@@ -102,6 +106,7 @@ async def _run(
 # test_run_job_basic
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_run_job_basic(tmp_path: Path):
     store, job_id = _make_store_and_job()
@@ -121,6 +126,7 @@ async def test_run_job_basic(tmp_path: Path):
 # test_output_preserves_textline_ids
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_output_preserves_textline_ids(tmp_path: Path):
     store, job_id = _make_store_and_job()
@@ -128,7 +134,7 @@ async def test_output_preserves_textline_ids(tmp_path: Path):
 
     out_xml = next(tmp_path.glob("*_corrected.xml"))
     root = etree.parse(str(out_xml)).getroot()
-    ns = root.tag[1:root.tag.index("}")] if root.tag.startswith("{") else ""
+    ns = root.tag[1 : root.tag.index("}")] if root.tag.startswith("{") else ""
 
     def tag(local: str) -> str:
         return f"{{{ns}}}{local}" if ns else local
@@ -136,14 +142,17 @@ async def test_output_preserves_textline_ids(tmp_path: Path):
     tl_ids = {tl.get("ID") for tl in root.iter(tag("TextLine"))}
     # All original IDs must still be present
     orig_root = etree.parse(str(SAMPLE_XML)).getroot()
-    orig_ns = orig_root.tag[1:orig_root.tag.index("}")] if orig_root.tag.startswith("{") else ""
-    orig_ids = {tl.get("ID") for tl in orig_root.iter(f"{{{orig_ns}}}TextLine" if orig_ns else "TextLine")}
+    orig_ns = orig_root.tag[1 : orig_root.tag.index("}")] if orig_root.tag.startswith("{") else ""
+    orig_ids = {
+        tl.get("ID") for tl in orig_root.iter(f"{{{orig_ns}}}TextLine" if orig_ns else "TextLine")
+    }
     assert tl_ids == orig_ids
 
 
 # ---------------------------------------------------------------------------
 # test_output_preserves_textline_coords
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_output_preserves_textline_coords(tmp_path: Path):
@@ -154,8 +163,8 @@ async def test_output_preserves_textline_coords(tmp_path: Path):
     root_out = etree.parse(str(out_xml)).getroot()
     root_orig = etree.parse(str(SAMPLE_XML)).getroot()
 
-    ns_out = root_out.tag[1:root_out.tag.index("}")] if root_out.tag.startswith("{") else ""
-    ns_orig = root_orig.tag[1:root_orig.tag.index("}")] if root_orig.tag.startswith("{") else ""
+    ns_out = root_out.tag[1 : root_out.tag.index("}")] if root_out.tag.startswith("{") else ""
+    ns_orig = root_orig.tag[1 : root_orig.tag.index("}")] if root_orig.tag.startswith("{") else ""
 
     def coords(root: etree._Element, ns: str) -> dict[str, dict]:
         tag = f"{{{ns}}}TextLine" if ns else "TextLine"
@@ -174,14 +183,13 @@ async def test_output_preserves_textline_coords(tmp_path: Path):
 
     for line_id, attrs in orig.items():
         assert line_id in out, f"{line_id} missing in output"
-        assert out[line_id] == attrs, (
-            f"{line_id} coords changed: {attrs} → {out[line_id]}"
-        )
+        assert out[line_id] == attrs, f"{line_id} coords changed: {attrs} → {out[line_id]}"
 
 
 # ---------------------------------------------------------------------------
 # test_hyphen_pairs_reconciled
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_hyphen_pairs_reconciled(tmp_path: Path):
@@ -191,7 +199,7 @@ async def test_hyphen_pairs_reconciled(tmp_path: Path):
 
     out_xml = next(tmp_path.glob("*_corrected.xml"))
     root = etree.parse(str(out_xml)).getroot()
-    ns = root.tag[1:root.tag.index("}")] if root.tag.startswith("{") else ""
+    ns = root.tag[1 : root.tag.index("}")] if root.tag.startswith("{") else ""
 
     def tag(local: str) -> str:
         return f"{{{ns}}}{local}" if ns else local
@@ -217,6 +225,7 @@ async def test_hyphen_pairs_reconciled(tmp_path: Path):
 # test_retry_on_invalid_json
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_retry_on_invalid_json(tmp_path: Path):
     """MockProvider returns invalid JSON once, then succeeds → job completed."""
@@ -234,6 +243,7 @@ async def test_retry_on_invalid_json(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # test_fallback_on_persistent_failure
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_fallback_on_persistent_failure(tmp_path: Path):
@@ -256,6 +266,7 @@ async def test_fallback_on_persistent_failure(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # test_sse_events_emitted
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_sse_events_emitted(tmp_path: Path):
@@ -282,6 +293,7 @@ async def test_sse_events_emitted(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # T-004 / B-005 — cross-page hyphen on files with colliding IDs
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_cross_page_hyphen_reconciled_through_colliding_ids(tmp_path: Path):
@@ -316,8 +328,8 @@ async def test_cross_page_hyphen_reconciled_through_colliding_ids(tmp_path: Path
             f'<alto xmlns="http://www.loc.gov/standards/alto/ns-v3#">'
             f'<Layout><Page ID="P1" WIDTH="2480" HEIGHT="3508">'
             f'<PrintSpace HPOS="0" VPOS="0" WIDTH="2480" HEIGHT="3508">'
-            f'{body}'
-            f'</PrintSpace></Page></Layout></alto>',
+            f"{body}"
+            f"</PrintSpace></Page></Layout></alto>",
             encoding="utf-8",
         )
 
@@ -348,12 +360,10 @@ async def test_cross_page_hyphen_reconciled_through_colliding_ids(tmp_path: Path
     # The cross-page partner (file B's TL1) must have been reconciled,
     # not silently skipped or paired with file A's own TL1.
     line_a_tl2 = next(
-        lm for p in doc.pages if "fileA" in p.page_id
-        for lm in p.lines if lm.line_id == "TL2"
+        lm for p in doc.pages if "fileA" in p.page_id for lm in p.lines if lm.line_id == "TL2"
     )
     line_b_tl1 = next(
-        lm for p in doc.pages if "fileB" in p.page_id
-        for lm in p.lines if lm.line_id == "TL1"
+        lm for p in doc.pages if "fileB" in p.page_id for lm in p.lines if lm.line_id == "TL1"
     )
 
     # PART1 on file A links to file B's TL1 (NOT file A's own TL1)
@@ -368,6 +378,7 @@ async def test_cross_page_hyphen_reconciled_through_colliding_ids(tmp_path: Path
 # ---------------------------------------------------------------------------
 # T-013 — JOB_TIMEOUT_SECONDS triggers FAILED with sanitized error
 # ---------------------------------------------------------------------------
+
 
 class _SlowProvider:
     """Sleeps inside complete_structured to exceed the test's timeout."""
@@ -421,6 +432,7 @@ async def test_job_timeout_marks_failure(tmp_path: Path):
 # T-014 — generic exception inside _run_pipeline is caught and sanitized
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_run_job_general_exception_marks_failed(
     tmp_path: Path,
@@ -428,7 +440,6 @@ async def test_run_job_general_exception_marks_failed(
 ):
     """A non-timeout exception escaping the pipeline must mark the job
     as FAILED with a sanitized error (no api_key leak)."""
-    import app.jobs.orchestrator as orch_module
     from app.jobs.correction_pipeline import CorrectionPipeline
 
     store, job_id = _make_store_and_job()
@@ -462,6 +473,7 @@ async def test_run_job_general_exception_marks_failed(
 # T-015 — provider=None resolves from app.providers registry
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_run_job_resolves_provider_from_registry_when_none(
     tmp_path: Path,
@@ -469,7 +481,6 @@ async def test_run_job_resolves_provider_from_registry_when_none(
 ):
     """When `provider` is not passed, run_job looks up the registry."""
     import app.providers as prov_module
-    import app.jobs.orchestrator as orch_module
 
     mock = MockProvider()
     monkeypatch.setattr(prov_module, "get_provider", lambda p: mock)

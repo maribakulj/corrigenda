@@ -15,6 +15,7 @@ Statistics (retry count, fallback count, total chunks, hyphen pairs
 reconciled) are returned in `CorrectionResult` so the caller can update
 its job state.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,7 +23,6 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from app.alto.hyphenation import enrich_chunk_lines, reconcile_hyphen_pair
 from app.alto.rewriter import extract_output_texts, rewrite_alto_file
@@ -49,9 +49,9 @@ logger = logging.getLogger(__name__)
 
 # Pattern to redact Bearer tokens, API keys, and common key formats
 _SECRET_RE = re.compile(
-    r"(Bearer\s+)\S+|"            # Authorization: Bearer <key>
-    r"(sk-[A-Za-z0-9]{4})\S+|"    # OpenAI-style sk-...
-    r"(key-[A-Za-z0-9]{4})\S+",   # Mistral-style key-...
+    r"(Bearer\s+)\S+|"  # Authorization: Bearer <key>
+    r"(sk-[A-Za-z0-9]{4})\S+|"  # OpenAI-style sk-...
+    r"(key-[A-Za-z0-9]{4})\S+",  # Mistral-style key-...
     re.IGNORECASE,
 )
 
@@ -60,9 +60,7 @@ def sanitize_error(msg: str, api_key: str | None = None) -> str:
     """Strip API keys and secrets from error messages."""
     if api_key and len(api_key) > 8 and api_key in msg:
         msg = msg.replace(api_key, api_key[:4] + "****")
-    return _SECRET_RE.sub(
-        lambda m: (m.group(1) or m.group(2) or m.group(3) or "") + "****", msg
-    )
+    return _SECRET_RE.sub(lambda m: (m.group(1) or m.group(2) or m.group(3) or "") + "****", msg)
 
 
 def _trace_key(lm: LineManifest) -> str:
@@ -88,8 +86,8 @@ def _resolve_partner(
     *,
     is_forward: bool,
     line_by_id: dict[str, LineManifest],
-    cross_page_partners: Optional[dict[tuple[str, str], LineManifest]],
-) -> Optional[LineManifest]:
+    cross_page_partners: dict[tuple[str, str], LineManifest] | None,
+) -> LineManifest | None:
     """Resolve a hyphen partner using a page-qualified lookup.
 
     When two ALTO files declare the same TextLine ID, a bare-id lookup
@@ -129,14 +127,20 @@ def _reconcile_one_pair(
     if is_forward:
         corrected_p1 = lm.corrected_text or text_by_id.get(lm.line_id, lm.ocr_text)
         final_p1, final_p2, subs = reconcile_hyphen_pair(
-            lm, part2, corrected_p1, corrected_p2,
+            lm,
+            part2,
+            corrected_p1,
+            corrected_p2,
             subs_content=lm.hyphen_forward_subs_content,
             source_explicit=lm.hyphen_forward_explicit,
         )
     else:
         corrected_p1 = text_by_id.get(lm.line_id, lm.ocr_text)
         final_p1, final_p2, subs = reconcile_hyphen_pair(
-            lm, part2, corrected_p1, corrected_p2,
+            lm,
+            part2,
+            corrected_p1,
+            corrected_p2,
         )
 
     lm.corrected_text = final_p1
@@ -182,7 +186,7 @@ class CorrectionPipeline:
         provider: BaseProvider,
         observer: PipelineObserver,
         output_writer: OutputWriter,
-        config: Optional[ChunkPlannerConfig] = None,
+        config: ChunkPlannerConfig | None = None,
     ) -> None:
         self.provider = provider
         self.observer = observer
@@ -211,18 +215,18 @@ class CorrectionPipeline:
         self._fallback_count = 0
 
         total_hyphen_pairs = sum(
-            sum(
-                1 for lm in page.lines
-                if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
-            )
+            sum(1 for lm in page.lines if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH))
             for page in document_manifest.pages
         )
 
-        self.observer.on_event("document_parsed", {
-            "total_pages": document_manifest.total_pages,
-            "total_lines": document_manifest.total_lines,
-            "hyphen_pairs": total_hyphen_pairs,
-        })
+        self.observer.on_event(
+            "document_parsed",
+            {
+                "total_pages": document_manifest.total_pages,
+                "total_lines": document_manifest.total_lines,
+                "hyphen_pairs": total_hyphen_pairs,
+            },
+        )
 
         # Initialize line traces
         traces: dict[str, LineTrace] = {}
@@ -304,28 +308,33 @@ class CorrectionPipeline:
         model: str,
         provider_name: str,
         traces: dict[str, LineTrace],
-        cross_page_partners: Optional[dict[tuple[str, str], LineManifest]],
+        cross_page_partners: dict[tuple[str, str], LineManifest] | None,
     ) -> tuple[int, int]:
         line_by_id: dict[str, LineManifest] = {lm.line_id: lm for lm in page.lines}
 
         page_hyphen_pairs = sum(
-            1 for lm in page.lines
-            if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
+            1 for lm in page.lines if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
         )
-        self.observer.on_event("page_started", {
-            "page_id": page.page_id,
-            "page_index": page.page_index,
-            "line_count": len(page.lines),
-            "hyphen_pair_count": page_hyphen_pairs,
-        })
+        self.observer.on_event(
+            "page_started",
+            {
+                "page_id": page.page_id,
+                "page_index": page.page_index,
+                "line_count": len(page.lines),
+                "hyphen_pair_count": page_hyphen_pairs,
+            },
+        )
 
         plan = plan_page(page, document_id, self.config)
 
-        self.observer.on_event("chunk_planned", {
-            "page_id": page.page_id,
-            "chunk_count": len(plan.chunks),
-            "granularity": plan.granularity.value,
-        })
+        self.observer.on_event(
+            "chunk_planned",
+            {
+                "page_id": page.page_id,
+                "chunk_count": len(plan.chunks),
+                "granularity": plan.granularity.value,
+            },
+        )
 
         page_reconciled = 0
         page_chunks = 0
@@ -346,23 +355,30 @@ class CorrectionPipeline:
                 page_reconciled += n
             except Exception as exc:
                 logger.exception("Chunk %s raised unexpectedly", chunk.chunk_id)
-                self.observer.on_event("warning", {
-                    "chunk_id": chunk.chunk_id,
-                    "message": str(exc)[:200],
-                })
+                self.observer.on_event(
+                    "warning",
+                    {
+                        "chunk_id": chunk.chunk_id,
+                        "message": str(exc)[:200],
+                    },
+                )
 
         page.status = JobStatus.COMPLETED
 
         page_corrections = sum(
-            1 for lm in page.lines
+            1
+            for lm in page.lines
             if lm.corrected_text is not None and lm.corrected_text != lm.ocr_text
         )
-        self.observer.on_event("page_completed", {
-            "page_id": page.page_id,
-            "page_index": page.page_index,
-            "corrections": page_corrections,
-            "hyphen_pairs_reconciled": page_reconciled,
-        })
+        self.observer.on_event(
+            "page_completed",
+            {
+                "page_id": page.page_id,
+                "page_index": page.page_index,
+                "corrections": page_corrections,
+                "hyphen_pairs_reconciled": page_reconciled,
+            },
+        )
 
         return page_chunks, page_reconciled
 
@@ -379,8 +395,8 @@ class CorrectionPipeline:
         api_key: str,
         model: str,
         provider_name: str,
-        traces: Optional[dict[str, LineTrace]] = None,
-        cross_page_partners: Optional[dict[tuple[str, str], LineManifest]] = None,
+        traces: dict[str, LineTrace] | None = None,
+        cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
     ) -> int:
         """Process one chunk through the LLM. Returns hyphen pairs reconciled."""
         chunk_lines = [line_by_id[lid] for lid in chunk.line_ids if lid in line_by_id]
@@ -390,11 +406,14 @@ class CorrectionPipeline:
         hyphen_pairs = _build_hyphen_pairs(chunk_lines)
         all_lines_by_id = line_by_id
 
-        self.observer.on_event("chunk_started", {
-            "chunk_id": chunk.chunk_id,
-            "granularity": chunk.granularity.value,
-            "line_count": len(chunk_lines),
-        })
+        self.observer.on_event(
+            "chunk_started",
+            {
+                "chunk_id": chunk.chunk_id,
+                "granularity": chunk.granularity.value,
+                "line_count": len(chunk_lines),
+            },
+        )
 
         max_attempts = self.DEFAULT_MAX_ATTEMPTS
         hyphen_violation = False
@@ -403,9 +422,7 @@ class CorrectionPipeline:
             # Retry temperature strategy: deterministic first, then more
             # diverse to escape bad patterns. Hyphen violations always
             # at 0.0 for maximum precision.
-            if hyphen_violation:
-                temperature = 0.0
-            elif attempt == 1:
+            if hyphen_violation or attempt == 1:
                 temperature = 0.0
             elif attempt == 2:
                 temperature = 0.3
@@ -473,10 +490,9 @@ class CorrectionPipeline:
             except Exception as exc:
                 msg = sanitize_error(str(exc), api_key)
                 is_http_error = not isinstance(exc, ValueError)
-                is_hyphen_violation = (
-                    isinstance(exc, ValueError)
-                    and "hyphen_integrity_violation" in str(exc)
-                )
+                is_hyphen_violation = isinstance(
+                    exc, ValueError
+                ) and "hyphen_integrity_violation" in str(exc)
 
                 if attempt < max_attempts:
                     if is_hyphen_violation and not hyphen_violation:
@@ -492,11 +508,14 @@ class CorrectionPipeline:
 
                     if backoff > 0:
                         await asyncio.sleep(backoff)
-                    self.observer.on_event("retry", {
-                        "chunk_id": chunk.chunk_id,
-                        "attempt": attempt,
-                        "error": error_tag,
-                    })
+                    self.observer.on_event(
+                        "retry",
+                        {
+                            "chunk_id": chunk.chunk_id,
+                            "attempt": attempt,
+                            "error": error_tag,
+                        },
+                    )
                     self._retry_count += 1
                     continue
 
@@ -505,10 +524,13 @@ class CorrectionPipeline:
                     "Chunk %s: all attempts failed, falling back to OCR source",
                     chunk.chunk_id,
                 )
-                self.observer.on_event("warning", {
-                    "chunk_id": chunk.chunk_id,
-                    "message": f"Fallback to OCR source: {msg[:120]}",
-                })
+                self.observer.on_event(
+                    "warning",
+                    {
+                        "chunk_id": chunk.chunk_id,
+                        "message": f"Fallback to OCR source: {msg[:120]}",
+                    },
+                )
                 for lm in chunk_lines:
                     lm.corrected_text = lm.ocr_text
                     lm.status = LineStatus.FALLBACK
@@ -532,14 +554,17 @@ class CorrectionPipeline:
                 if lm.hyphen_role != HyphenRole.PART1 or not lm.hyphen_pair_line_id:
                     continue
                 part2 = _resolve_partner(
-                    lm, is_forward=False,
-                    line_by_id=line_by_id, cross_page_partners=cross_page_partners,
+                    lm,
+                    is_forward=False,
+                    line_by_id=line_by_id,
+                    cross_page_partners=cross_page_partners,
                 )
                 if part2 is None:
                     logger.warning(
                         "Hyphen pair partner %s not found for PART1 %s "
                         "(likely cross-page pair — skipping reconciliation)",
-                        lm.hyphen_pair_line_id, lm.line_id,
+                        lm.hyphen_pair_line_id,
+                        lm.line_id,
                     )
                     continue
                 part2_key = (part2.page_id, part2.line_id)
@@ -554,14 +579,17 @@ class CorrectionPipeline:
                 if lm.hyphen_role != HyphenRole.BOTH or not lm.hyphen_forward_pair_id:
                     continue
                 part2 = _resolve_partner(
-                    lm, is_forward=True,
-                    line_by_id=line_by_id, cross_page_partners=cross_page_partners,
+                    lm,
+                    is_forward=True,
+                    line_by_id=line_by_id,
+                    cross_page_partners=cross_page_partners,
                 )
                 if part2 is None:
                     logger.warning(
                         "Hyphen forward partner %s not found for BOTH %s "
                         "(likely cross-page pair — skipping reconciliation)",
-                        lm.hyphen_forward_pair_id, lm.line_id,
+                        lm.hyphen_forward_pair_id,
+                        lm.line_id,
                     )
                     continue
                 part2_key = (part2.page_id, part2.line_id)
@@ -612,8 +640,7 @@ class CorrectionPipeline:
 
             # Adjacent duplicate detection (post-acceptance pass)
             accepted_lines = [
-                (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text)
-                for lm in chunk_lines
+                (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text) for lm in chunk_lines
             ]
             dup_reverts = check_adjacent_duplicates(accepted_lines)
             for lm in chunk_lines:
@@ -634,11 +661,14 @@ class CorrectionPipeline:
                     if lm.line_id in dup_reverts and not t.fallback_reason:
                         t.fallback_reason = dup_reverts[lm.line_id]
 
-            self.observer.on_event("chunk_completed", {
-                "chunk_id": chunk.chunk_id,
-                "line_count": len(chunk_lines),
-                "hyphen_pairs_reconciled": reconciled_count,
-            })
+            self.observer.on_event(
+                "chunk_completed",
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "line_count": len(chunk_lines),
+                    "hyphen_pairs_reconciled": reconciled_count,
+                },
+            )
             return reconciled_count
 
         return 0
@@ -659,18 +689,19 @@ class CorrectionPipeline:
     ) -> None:
         """Rewrite corrected ALTO files, update traces, persist via writer."""
         for source_name, xml_path in source_files.items():
-            pages_for_file = [
-                p for p in document_manifest.pages
-                if p.source_file == source_name
-            ]
+            pages_for_file = [p for p in document_manifest.pages if p.source_file == source_name]
             if not pages_for_file:
                 continue
 
             xml_bytes, _metrics, rewriter_paths = rewrite_alto_file(
-                xml_path, pages_for_file, provider_name, model,
+                xml_path,
+                pages_for_file,
+                provider_name,
+                model,
             )
             self.output_writer.write_corrected(
-                source_stem=xml_path.stem, xml_bytes=xml_bytes,
+                source_stem=xml_path.stem,
+                xml_bytes=xml_bytes,
             )
 
             lid_to_tkey: dict[str, str] = {}

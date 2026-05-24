@@ -1,11 +1,13 @@
 """In-memory job store with SSE fan-out and TTL eviction."""
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
 import uuid
-from typing import Any, AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from app.schemas import JobManifest, JobStatus, Provider, SSEEvent
 
@@ -38,7 +40,7 @@ class JobStore:
         self._subscribers[job_id] = []
         return job_id
 
-    def get_job(self, job_id: str) -> Optional[JobManifest]:
+    def get_job(self, job_id: str) -> JobManifest | None:
         return self._jobs.get(job_id)
 
     def update_job(self, job_id: str, **kwargs: Any) -> None:
@@ -107,7 +109,7 @@ class JobStore:
                     yield event
                     if event.event in ("completed", "failed"):
                         break
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield SSEEvent(event="keepalive", data={})
         finally:
             self.unsubscribe(job_id, queue)
@@ -119,10 +121,7 @@ class JobStore:
     def _evict_stale(self) -> None:
         """Remove completed/failed jobs older than TTL or exceeding cap."""
         now = time.monotonic()
-        expired = [
-            jid for jid, ts in self._completed_at.items()
-            if now - ts > self._ttl_seconds
-        ]
+        expired = [jid for jid, ts in self._completed_at.items() if now - ts > self._ttl_seconds]
         for jid in expired:
             self._remove_job(jid)
 
@@ -140,6 +139,7 @@ class JobStore:
         # Clean up disk storage for evicted jobs
         try:
             from app.storage import cleanup_job
+
             cleanup_job(job_id)
         except Exception:
             logger.debug("Failed to clean up disk for job %s", job_id, exc_info=True)

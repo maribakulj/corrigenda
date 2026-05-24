@@ -1,9 +1,9 @@
 """Tests for alto/rewriter.py"""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from lxml import etree
 
 from app.alto.parser import parse_alto_file
@@ -12,8 +12,7 @@ from app.alto.rewriter import (
     _tokenize,
     rewrite_alto_file,
 )
-from app.schemas import Coords, HyphenRole, LineManifest, PageManifest, BlockManifest
-
+from app.schemas import BlockManifest, Coords, HyphenRole, LineManifest, PageManifest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -92,13 +91,15 @@ def write_and_rewrite(
         page_index=0,
         page_width=2480,
         page_height=3508,
-        blocks=[BlockManifest(
-            block_id="TB1",
-            page_id="P1",
-            block_order=0,
-            coords=Coords(hpos=10, vpos=20, width=400, height=60),
-            line_ids=[m.line_id for m in manifests],
-        )],
+        blocks=[
+            BlockManifest(
+                block_id="TB1",
+                page_id="P1",
+                block_order=0,
+                coords=Coords(hpos=10, vpos=20, width=400, height=60),
+                line_ids=[m.line_id for m in manifests],
+            )
+        ],
         lines=manifests,
     )
 
@@ -109,6 +110,7 @@ def write_and_rewrite(
 # ---------------------------------------------------------------------------
 # Unit tests: _tokenize and _compute_geometry
 # ---------------------------------------------------------------------------
+
 
 def test_normal_line_tokenize():
     tokens = _tokenize("hello world")
@@ -140,6 +142,7 @@ def test_geometry_sum_many_tokens():
 # ---------------------------------------------------------------------------
 # Path 1 — UNTOUCHED: unchanged line is XML-identical
 # ---------------------------------------------------------------------------
+
 
 def test_unchanged_line_preserves_all_string_attributes(tmp_path):
     """When text is unchanged, ALL attributes on String elements are preserved."""
@@ -204,7 +207,8 @@ def test_unchanged_line_preserves_hyp_element(tmp_path):
   <HYP CONTENT="-" HPOS="110" VPOS="20" WIDTH="16" HEIGHT="30"/>
 </TextLine>"""
     lm = make_line(
-        "TL1", "por-",
+        "TL1",
+        "por-",
         hyphen_role=HyphenRole.PART1,
         hyphen_subs_content="porte",
         hyphen_source_explicit=True,
@@ -245,6 +249,7 @@ def test_unchanged_line_string_count_unchanged(tmp_path):
 # Path 2 — SUBS-ONLY: text unchanged, only SUBS attributes updated
 # ---------------------------------------------------------------------------
 
+
 def test_subs_only_update_sets_subs(tmp_path):
     """Text unchanged but subs_content is newly set → only SUBS attributes change."""
     lines_xml = """\
@@ -254,7 +259,8 @@ def test_subs_only_update_sets_subs(tmp_path):
 </TextLine>"""
     # Text is "por-" (matches XML), but subs_content now set
     lm = make_line(
-        "TL1", "por-",
+        "TL1",
+        "por-",
         hyphen_role=HyphenRole.PART1,
         hyphen_subs_content="porte",
         hyphen_source_explicit=True,
@@ -284,7 +290,8 @@ def test_subs_only_update_removes_stale_subs(tmp_path):
 </TextLine>"""
     # Text unchanged, but subs_content is now None (pair incoherent)
     lm = make_line(
-        "TL1", "por-",
+        "TL1",
+        "por-",
         hyphen_role=HyphenRole.PART1,
         hyphen_subs_content=None,
         hyphen_source_explicit=True,
@@ -302,6 +309,7 @@ def test_subs_only_update_removes_stale_subs(tmp_path):
 # ---------------------------------------------------------------------------
 # Path 3 — FAST PATH: text changed, same word count, in-place update
 # ---------------------------------------------------------------------------
+
 
 def test_fast_path_only_content_changes(tmp_path):
     """Fast path: only CONTENT changes; ID, geometry, WC, CC preserved."""
@@ -389,6 +397,7 @@ def test_fast_path_preserves_string_ids(tmp_path):
 # Path 3 + SUBS: fast path with hyphenation
 # ---------------------------------------------------------------------------
 
+
 def test_fast_path_part1_subs_applied(tmp_path):
     """Fast path PART1: SUBS_TYPE/SUBS_CONTENT applied to last String."""
     lines_xml = """\
@@ -398,7 +407,9 @@ def test_fast_path_part1_subs_applied(tmp_path):
   <HYP CONTENT="-"/>
 </TextLine>"""
     lm = make_line(
-        "TL1", "tra-", corrected_text="tra-",
+        "TL1",
+        "tra-",
+        corrected_text="tra-",
         hyphen_role=HyphenRole.PART1,
         hyphen_subs_content="travail",
         hyphen_source_explicit=True,
@@ -417,7 +428,9 @@ def test_fast_path_part2_subs_applied(tmp_path):
           SUBS_TYPE="HypPart2" SUBS_CONTENT="travail"/>
 </TextLine>"""
     lm = make_line(
-        "TL2", "vail", corrected_text="vail",
+        "TL2",
+        "vail",
+        corrected_text="vail",
         hyphen_role=HyphenRole.PART2,
         hyphen_subs_content="travail",
         hyphen_source_explicit=True,
@@ -435,7 +448,9 @@ def test_fast_path_no_subs_when_neutralised(tmp_path):
   <String ID="S1" CONTENT="boule-" HPOS="10" VPOS="20" WIDTH="120" HEIGHT="30"/>
 </TextLine>"""
     lm = make_line(
-        "TL1", "boule-", corrected_text="boule-",
+        "TL1",
+        "boule-",
+        corrected_text="boule-",
         hyphen_role=HyphenRole.PART1,
         hyphen_subs_content=None,
         hyphen_source_explicit=False,
@@ -456,7 +471,9 @@ def test_fast_path_subs_not_on_wrong_token(tmp_path):
   <String ID="S2b" CONTENT="ouverte" HPOS="80" VPOS="55" WIDTH="200" HEIGHT="30"/>
 </TextLine>"""
     lm = make_line(
-        "TL2", "te ouverte", corrected_text="te ouverte",
+        "TL2",
+        "te ouverte",
+        corrected_text="te ouverte",
         hyphen_role=HyphenRole.PART2,
         hyphen_subs_content="porte",
         hyphen_source_explicit=True,
@@ -474,6 +491,7 @@ def test_fast_path_subs_not_on_wrong_token(tmp_path):
 # ---------------------------------------------------------------------------
 # Path 4 — SLOW PATH: word count changed, rebuild
 # ---------------------------------------------------------------------------
+
 
 def test_slow_path_preserves_original_attributes(tmp_path):
     """Slow path: attributes from original Strings are preserved where possible."""
@@ -516,7 +534,9 @@ def test_slow_path_does_not_copy_stale_subs(tmp_path):
     # Word count changes: 1 → 2 (slow path)
     # subs_content is None (neutralised) — no SUBS should appear
     lm = make_line(
-        "TL1", "por-", corrected_text="por- extra",
+        "TL1",
+        "por-",
+        corrected_text="por- extra",
         hyphen_role=HyphenRole.PART1,
         hyphen_subs_content=None,
         hyphen_source_explicit=True,
@@ -524,10 +544,12 @@ def test_slow_path_does_not_copy_stale_subs(tmp_path):
     root = write_and_rewrite(tmp_path, lines_xml, [lm])
 
     for s in root.findall(f".//{_ns('String')}"):
-        assert s.get("SUBS_TYPE") is None, \
+        assert s.get("SUBS_TYPE") is None, (
             f"Stale SUBS_TYPE must not be copied (found on {s.get('ID')})"
-        assert s.get("SUBS_CONTENT") is None, \
+        )
+        assert s.get("SUBS_CONTENT") is None, (
             f"Stale SUBS_CONTENT must not be copied (found on {s.get('ID')})"
+        )
 
 
 def test_slow_path_part1_preserves_hyp(tmp_path):
@@ -539,7 +561,9 @@ def test_slow_path_part1_preserves_hyp(tmp_path):
 </TextLine>"""
     # 1 word → 2 words (slow path)
     lm = make_line(
-        "TL1", "por-", corrected_text="Il por-",
+        "TL1",
+        "por-",
+        corrected_text="Il por-",
         hyphen_role=HyphenRole.PART1,
         hyphen_subs_content="porte",
         hyphen_source_explicit=True,
@@ -577,6 +601,7 @@ def test_slow_path_preserves_sp_attributes(tmp_path):
 # ---------------------------------------------------------------------------
 # TextLine invariant preservation
 # ---------------------------------------------------------------------------
+
 
 def test_line_id_preserved(tmp_path):
     lines_xml = """\
@@ -632,6 +657,7 @@ def test_string_ids_slow_path(tmp_path):
 # Hyphenation: HYP preservation
 # ---------------------------------------------------------------------------
 
+
 def test_part1_has_hyp_element(tmp_path):
     lines_xml = """\
 <TextLine ID="TL1" HPOS="10" VPOS="20" WIDTH="400" HEIGHT="30">
@@ -640,7 +666,9 @@ def test_part1_has_hyp_element(tmp_path):
   <HYP CONTENT="-"/>
 </TextLine>"""
     lm = make_line(
-        "TL1", "por-", corrected_text="por-",
+        "TL1",
+        "por-",
+        corrected_text="por-",
         hyphen_role=HyphenRole.PART1,
         hyphen_subs_content="porte",
         hyphen_source_explicit=True,
@@ -659,7 +687,9 @@ def test_heuristic_hyp_preserved(tmp_path):
   <HYP CONTENT="-" HPOS="130" VPOS="20" WIDTH="16" HEIGHT="30"/>
 </TextLine>"""
     lm = make_line(
-        "TL1", "boule-", corrected_text="boule-",
+        "TL1",
+        "boule-",
+        corrected_text="boule-",
         hyphen_role=HyphenRole.PART1,
         hyphen_source_explicit=False,
     )
@@ -679,7 +709,9 @@ def test_subs_content_written_when_explicit(tmp_path):
   <HYP CONTENT="-"/>
 </TextLine>"""
     lm = make_line(
-        "TL1", "con-", corrected_text="con-",
+        "TL1",
+        "con-",
+        corrected_text="con-",
         hyphen_role=HyphenRole.PART1,
         hyphen_subs_content="construction",
         hyphen_source_explicit=True,
@@ -692,6 +724,7 @@ def test_subs_content_written_when_explicit(tmp_path):
 # ---------------------------------------------------------------------------
 # Round-trip tests
 # ---------------------------------------------------------------------------
+
 
 def test_round_trip_normal(tmp_path):
     """Parse → rewrite without correction → re-parse → same IDs."""
@@ -731,6 +764,7 @@ def test_round_trip_normal(tmp_path):
 # pretty_print=False — output must not gratuitously add inter-element whitespace
 # ---------------------------------------------------------------------------
 
+
 def test_rewriter_does_not_pretty_print(tmp_path):
     """B-004: pretty_print=True used to reformat the entire XML even when
     nothing changed, breaking byte-level diff utility for users."""
@@ -743,8 +777,8 @@ def test_rewriter_does_not_pretty_print(tmp_path):
         f'<TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20">'
         f'<TextLine ID="TL1" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20">'
         f'<String ID="S1" CONTENT="hello" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20"/>'
-        f'</TextLine>'
-        f'</TextBlock></PrintSpace></Page></Layout></alto>'
+        f"</TextLine>"
+        f"</TextBlock></PrintSpace></Page></Layout></alto>"
     )
     xml_path = tmp_path / "compact.xml"
     xml_path.write_bytes(xml_content.encode())
@@ -765,11 +799,13 @@ def test_rewriter_does_not_pretty_print(tmp_path):
 # Unicode NFC equality in _line_text_unchanged (B-014)
 # ---------------------------------------------------------------------------
 
+
 def test_nfd_source_round_trip_marked_untouched(tmp_path):
     """A source containing NFD characters must round-trip as 'untouched'
     when no correction is applied — _extract_text_from_line and the
     manifest ocr_text must compare equal after NFC normalization."""
     import unicodedata
+
     nfd_word = unicodedata.normalize("NFD", "café")
     assert nfd_word != "café"  # sanity
 
@@ -781,8 +817,8 @@ def test_nfd_source_round_trip_marked_untouched(tmp_path):
         f'<TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20">'
         f'<TextLine ID="TL1" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20">'
         f'<String ID="S1" CONTENT="{nfd_word}" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="20"/>'
-        f'</TextLine>'
-        f'</TextBlock></PrintSpace></Page></Layout></alto>'
+        f"</TextLine>"
+        f"</TextBlock></PrintSpace></Page></Layout></alto>"
     )
     xml_path = tmp_path / "nfd.xml"
     xml_path.write_bytes(xml_content.encode())

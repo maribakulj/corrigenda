@@ -1,24 +1,26 @@
 """Tests for LLM providers."""
+
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
 from app.providers import get_provider
-from app.providers.base import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 from app.providers.anthropic_provider import AnthropicProvider
+from app.providers.base import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 from app.providers.google_provider import GoogleProvider, _keep_model
 from app.providers.mistral_provider import MistralProvider
-from app.providers.openai_provider import OpenAIProvider, _keep_model as openai_keep
+from app.providers.openai_provider import OpenAIProvider
+from app.providers.openai_provider import _keep_model as openai_keep
 from app.schemas import Provider
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_response(status_code: int, body: dict) -> httpx.Response:
     return httpx.Response(
@@ -32,6 +34,7 @@ def _make_response(status_code: int, body: dict) -> httpx.Response:
 # ---------------------------------------------------------------------------
 # test_openai_allowlist_prefixes
 # ---------------------------------------------------------------------------
+
 
 def test_openai_allowlist_prefixes():
     assert openai_keep("gpt-4o")
@@ -48,6 +51,7 @@ def test_openai_allowlist_prefixes():
 # ---------------------------------------------------------------------------
 # test_openai_denylist_patterns
 # ---------------------------------------------------------------------------
+
 
 def test_openai_denylist_patterns():
     assert not openai_keep("gpt-4-instruct")
@@ -66,17 +70,26 @@ def test_openai_denylist_patterns():
 # test_mistral_capability_filter
 # ---------------------------------------------------------------------------
 
+
 def test_mistral_capability_filter():
     models_data = {
         "data": [
-            {"id": "mistral-large", "name": "Mistral Large",
-             "capabilities": {"completion_chat": True}},
-            {"id": "mistral-embed", "name": "Mistral Embed",
-             "capabilities": {"completion_chat": False}},
-            {"id": "mistral-small", "name": "Mistral Small",
-             "capabilities": {"completion_chat": True}},
-            {"id": "no-caps", "name": "No caps",
-             "capabilities": {}},
+            {
+                "id": "mistral-large",
+                "name": "Mistral Large",
+                "capabilities": {"completion_chat": True},
+            },
+            {
+                "id": "mistral-embed",
+                "name": "Mistral Embed",
+                "capabilities": {"completion_chat": False},
+            },
+            {
+                "id": "mistral-small",
+                "name": "Mistral Small",
+                "capabilities": {"completion_chat": True},
+            },
+            {"id": "no-caps", "name": "No caps", "capabilities": {}},
         ]
     }
 
@@ -95,6 +108,7 @@ def test_mistral_capability_filter():
 # ---------------------------------------------------------------------------
 # test_google_generate_content_filter
 # ---------------------------------------------------------------------------
+
 
 def test_google_generate_content_filter():
     models = [
@@ -115,6 +129,7 @@ def test_google_generate_content_filter():
 # ---------------------------------------------------------------------------
 # test_anthropic_model_parse
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_anthropic_model_parse():
@@ -145,6 +160,7 @@ async def test_anthropic_model_parse():
 # test_system_prompt_contains_hyphen_rule
 # ---------------------------------------------------------------------------
 
+
 def test_system_prompt_contains_hyphen_rule():
     assert "HypPart1" in SYSTEM_PROMPT
     assert "HypPart2" in SYSTEM_PROMPT
@@ -156,6 +172,7 @@ def test_system_prompt_contains_hyphen_rule():
 # ---------------------------------------------------------------------------
 # test_get_provider_registry
 # ---------------------------------------------------------------------------
+
 
 def test_get_provider_registry():
     from app.providers.base import BaseProvider
@@ -169,6 +186,7 @@ def test_get_provider_registry():
 # Anthropic complete_structured — uses tools API, not the inexistent
 # `output_config` parameter (B-001) and handles multi-block responses (R-013).
 # ---------------------------------------------------------------------------
+
 
 class _PostCapture:
     """Captures the last httpx post() body for inspection in assertions.
@@ -189,16 +207,18 @@ class _PostCapture:
 @pytest.mark.asyncio
 async def test_anthropic_complete_structured_uses_tools_api():
     """Request body must declare a tool with input_schema and force tool_choice."""
-    capture = _PostCapture({
-        "content": [
-            {
-                "type": "tool_use",
-                "id": "tu_1",
-                "name": "ocr_correction",
-                "input": {"lines": [{"line_id": "L1", "corrected_text": "hi"}]},
-            }
-        ]
-    })
+    capture = _PostCapture(
+        {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tu_1",
+                    "name": "ocr_correction",
+                    "input": {"lines": [{"line_id": "L1", "corrected_text": "hi"}]},
+                }
+            ]
+        }
+    )
 
     with patch("httpx.AsyncClient") as MockClient:
         instance = MockClient.return_value.__aenter__.return_value
@@ -231,25 +251,30 @@ async def test_anthropic_complete_structured_uses_tools_api():
 @pytest.mark.asyncio
 async def test_anthropic_complete_structured_skips_thinking_block():
     """A thinking block before the tool_use must not be mistaken for the payload."""
-    capture = _PostCapture({
-        "content": [
-            {"type": "thinking", "thinking": "Let me consider..."},
-            {
-                "type": "tool_use",
-                "id": "tu_2",
-                "name": "ocr_correction",
-                "input": {"lines": [{"line_id": "X", "corrected_text": "ok"}]},
-            },
-        ]
-    })
+    capture = _PostCapture(
+        {
+            "content": [
+                {"type": "thinking", "thinking": "Let me consider..."},
+                {
+                    "type": "tool_use",
+                    "id": "tu_2",
+                    "name": "ocr_correction",
+                    "input": {"lines": [{"line_id": "X", "corrected_text": "ok"}]},
+                },
+            ]
+        }
+    )
 
     with patch("httpx.AsyncClient") as MockClient:
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
         result = await provider.complete_structured(
-            api_key="fake", model="claude-x", system_prompt="SYS",
-            user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+            api_key="fake",
+            model="claude-x",
+            system_prompt="SYS",
+            user_payload={},
+            json_schema=OUTPUT_JSON_SCHEMA,
         )
 
     assert result["lines"][0]["line_id"] == "X"
@@ -258,19 +283,24 @@ async def test_anthropic_complete_structured_skips_thinking_block():
 @pytest.mark.asyncio
 async def test_anthropic_complete_structured_text_block_fallback():
     """When only a text block is returned (no tool_use), parse it as JSON."""
-    capture = _PostCapture({
-        "content": [
-            {"type": "text", "text": '{"lines":[{"line_id":"T","corrected_text":"y"}]}'},
-        ]
-    })
+    capture = _PostCapture(
+        {
+            "content": [
+                {"type": "text", "text": '{"lines":[{"line_id":"T","corrected_text":"y"}]}'},
+            ]
+        }
+    )
 
     with patch("httpx.AsyncClient") as MockClient:
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
         result = await provider.complete_structured(
-            api_key="fake", model="claude-x", system_prompt="SYS",
-            user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+            api_key="fake",
+            model="claude-x",
+            system_prompt="SYS",
+            user_payload={},
+            json_schema=OUTPUT_JSON_SCHEMA,
         )
 
     assert result == {"lines": [{"line_id": "T", "corrected_text": "y"}]}
@@ -279,11 +309,13 @@ async def test_anthropic_complete_structured_text_block_fallback():
 @pytest.mark.asyncio
 async def test_anthropic_complete_structured_no_usable_block_raises():
     """If neither tool_use nor text block is present, raise a descriptive error."""
-    capture = _PostCapture({
-        "content": [
-            {"type": "thinking", "thinking": "..."},
-        ]
-    })
+    capture = _PostCapture(
+        {
+            "content": [
+                {"type": "thinking", "thinking": "..."},
+            ]
+        }
+    )
 
     with patch("httpx.AsyncClient") as MockClient:
         instance = MockClient.return_value.__aenter__.return_value
@@ -291,8 +323,11 @@ async def test_anthropic_complete_structured_no_usable_block_raises():
         provider = AnthropicProvider()
         with pytest.raises(ValueError, match="no usable block"):
             await provider.complete_structured(
-                api_key="fake", model="claude-x", system_prompt="SYS",
-                user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+                api_key="fake",
+                model="claude-x",
+                system_prompt="SYS",
+                user_payload={},
+                json_schema=OUTPUT_JSON_SCHEMA,
             )
 
 
@@ -300,13 +335,16 @@ async def test_anthropic_complete_structured_no_usable_block_raises():
 # OpenAI complete_structured — request shape + chat-completions response
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_openai_complete_structured_uses_json_schema_response_format():
-    capture = _PostCapture({
-        "choices": [
-            {"message": {"content": '{"lines":[{"line_id":"L1","corrected_text":"hi"}]}'}}
-        ]
-    })
+    capture = _PostCapture(
+        {
+            "choices": [
+                {"message": {"content": '{"lines":[{"line_id":"L1","corrected_text":"hi"}]}'}}
+            ]
+        }
+    )
 
     with patch("httpx.AsyncClient") as MockClient:
         instance = MockClient.return_value.__aenter__.return_value
@@ -342,8 +380,11 @@ async def test_openai_complete_structured_raises_on_missing_choices():
         provider = OpenAIProvider()
         with pytest.raises(ValueError, match="missing 'choices'"):
             await provider.complete_structured(
-                api_key="sk-fake", model="gpt-4o", system_prompt="SYS",
-                user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+                api_key="sk-fake",
+                model="gpt-4o",
+                system_prompt="SYS",
+                user_payload={},
+                json_schema=OUTPUT_JSON_SCHEMA,
             )
 
 
@@ -351,13 +392,12 @@ async def test_openai_complete_structured_raises_on_missing_choices():
 # Mistral complete_structured — body shape + fallback structure
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_mistral_complete_structured_sends_json_schema():
-    capture = _PostCapture({
-        "choices": [
-            {"message": {"content": '{"lines":[{"line_id":"M","corrected_text":"y"}]}'}}
-        ]
-    })
+    capture = _PostCapture(
+        {"choices": [{"message": {"content": '{"lines":[{"line_id":"M","corrected_text":"y"}]}'}}]}
+    )
 
     with patch("httpx.AsyncClient") as MockClient:
         instance = MockClient.return_value.__aenter__.return_value
@@ -385,19 +425,20 @@ async def test_mistral_complete_structured_sends_json_schema():
 # Google Gemini complete_structured — generationConfig + response extraction
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_google_complete_structured_uses_response_schema():
-    capture = _PostCapture({
-        "candidates": [
-            {
-                "content": {
-                    "parts": [
-                        {"text": '{"lines":[{"line_id":"G","corrected_text":"k"}]}'}
-                    ]
+    capture = _PostCapture(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"text": '{"lines":[{"line_id":"G","corrected_text":"k"}]}'}]
+                    }
                 }
-            }
-        ]
-    })
+            ]
+        }
+    )
 
     with patch("httpx.AsyncClient") as MockClient:
         instance = MockClient.return_value.__aenter__.return_value
@@ -429,8 +470,11 @@ async def test_google_complete_structured_raises_on_missing_candidates():
         provider = GoogleProvider()
         with pytest.raises(ValueError, match="missing 'candidates'"):
             await provider.complete_structured(
-                api_key="fake", model="gemini-x", system_prompt="SYS",
-                user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+                api_key="fake",
+                model="gemini-x",
+                system_prompt="SYS",
+                user_payload={},
+                json_schema=OUTPUT_JSON_SCHEMA,
             )
 
 
@@ -444,6 +488,9 @@ async def test_google_complete_structured_raises_on_empty_parts():
         provider = GoogleProvider()
         with pytest.raises(ValueError, match="no parts"):
             await provider.complete_structured(
-                api_key="fake", model="gemini-x", system_prompt="SYS",
-                user_payload={}, json_schema=OUTPUT_JSON_SCHEMA,
+                api_key="fake",
+                model="gemini-x",
+                system_prompt="SYS",
+                user_payload={},
+                json_schema=OUTPUT_JSON_SCHEMA,
             )

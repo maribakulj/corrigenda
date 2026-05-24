@@ -1,4 +1,5 @@
 """FastAPI application entry point."""
+
 from __future__ import annotations
 
 import os
@@ -23,6 +24,7 @@ _INDEX_HTML = _STATIC_DIR / "index.html"
 # Lifespan
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
@@ -31,6 +33,7 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
+
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -51,11 +54,7 @@ def create_app() -> FastAPI:
     # Default: wildcard. No credentials — NEVER combine allow_credentials
     # with allow_origins=["*"] (Starlette raises ValueError).
     # ------------------------------------------------------------------
-    cors_origins = [
-        o.strip()
-        for o in os.environ.get("CORS_ORIGINS", "*").split(",")
-        if o.strip()
-    ]
+    cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,

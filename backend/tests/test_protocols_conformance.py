@@ -5,6 +5,7 @@ shape (e.g. renames a method on `JobStore`, drops a kwarg from a provider)
 will trip a fast, clear failure here instead of a confusing TypeError
 deep inside the pipeline.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

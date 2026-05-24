@@ -1,4 +1,5 @@
 """Tests for app.jobs.store (T-002 eviction, T-003 SSE queue overflow)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -10,10 +11,10 @@ from app.jobs import store as store_module
 from app.jobs.store import JobStore
 from app.schemas import JobStatus, Provider
 
-
 # ---------------------------------------------------------------------------
 # Eviction by TTL
 # ---------------------------------------------------------------------------
+
 
 def test_completed_job_evicted_after_ttl():
     """Once a job is COMPLETED and TTL elapses, the next create_job evicts it."""
@@ -26,6 +27,7 @@ def test_completed_job_evicted_after_ttl():
     # create_job() runs _evict_stale at the top. With TTL=0 and at least
     # one tick of monotonic clock advance, the completed job is purged.
     import time
+
     time.sleep(0.01)  # ensure now > completed_at
     new_id = store.create_job(Provider.OPENAI, "next")
 
@@ -41,6 +43,7 @@ def test_running_job_not_evicted_by_ttl():
     # Don't mark terminal — leave as default (QUEUED)
 
     import time
+
     time.sleep(0.01)
     _ = store.create_job(Provider.OPENAI, "another")
 
@@ -55,6 +58,7 @@ def test_failed_job_also_evicted():
     store.update_job(failed_id, status=JobStatus.FAILED, error="boom")
 
     import time
+
     time.sleep(0.01)
     _ = store.create_job(Provider.OPENAI, "trigger")
 
@@ -64,6 +68,7 @@ def test_failed_job_also_evicted():
 # ---------------------------------------------------------------------------
 # Hard cap eviction
 # ---------------------------------------------------------------------------
+
 
 def test_completed_jobs_capped_oldest_first():
     """When more than _MAX_COMPLETED_JOBS terminal jobs exist, the
@@ -93,6 +98,7 @@ def test_eviction_cleans_disk(tmp_path, monkeypatch):
     """When a job is evicted, its on-disk directory is removed."""
     # Point storage at a tmp dir so we can assert filesystem cleanup.
     from app import storage as storage_mod
+
     monkeypatch.setattr(storage_mod, "_BASE_DIR", tmp_path)
 
     store = JobStore(ttl_seconds=0)
@@ -103,6 +109,7 @@ def test_eviction_cleans_disk(tmp_path, monkeypatch):
 
     store.update_job(jid, status=JobStatus.COMPLETED)
     import time
+
     time.sleep(0.01)
     _ = store.create_job(Provider.OPENAI, "trigger")
 
@@ -113,6 +120,7 @@ def test_eviction_cleans_disk(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # SSE pub/sub mechanics
 # ---------------------------------------------------------------------------
+
 
 def test_emit_after_unsubscribe_does_not_reach_queue():
     store = JobStore()
@@ -158,6 +166,7 @@ def test_sse_queue_drops_when_full_without_raising():
 # ---------------------------------------------------------------------------
 # stream_events
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_stream_events_fast_path_for_already_completed_job():

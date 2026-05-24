@@ -12,6 +12,7 @@ surfaces a single, actionable failure instead of dozens of skips. If a
 deployment intentionally ships without the corpus, mark these tests
 `xfail`/`skip` in pytest configuration rather than removing them.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

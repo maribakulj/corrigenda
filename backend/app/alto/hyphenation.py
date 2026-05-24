@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 from app.alto._norm import ncfold
-from app.schemas import HyphenRole, LLMLineInput, LineManifest
+from app.schemas import HyphenRole, LineManifest, LLMLineInput
 
 _SENTINEL = object()  # distinguishes "not passed" from None
 
@@ -13,12 +12,14 @@ _SENTINEL = object()  # distinguishes "not passed" from None
 # Metrics
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ReconcileMetrics:
     """Counts of hyphen pair reconciliation outcomes."""
-    coherent: int = 0      # pair accepted as corrected
-    fallback: int = 0      # both sides reverted to OCR
-    neutralised: int = 0   # accepted but subs_content set to None
+
+    coherent: int = 0  # pair accepted as corrected
+    fallback: int = 0  # both sides reverted to OCR
+    neutralised: int = 0  # accepted but subs_content set to None
 
     @property
     def total(self) -> int:
@@ -39,8 +40,8 @@ def enrich_chunk_lines(
     result: list[LLMLineInput] = []
 
     for lm in line_manifests:
-        prev_text: Optional[str] = None
-        next_text: Optional[str] = None
+        prev_text: str | None = None
+        next_text: str | None = None
 
         if lm.prev_line_id and lm.prev_line_id in all_lines_by_id:
             prev_text = all_lines_by_id[lm.prev_line_id].ocr_text
@@ -107,6 +108,7 @@ def enrich_chunk_lines(
 # ---------------------------------------------------------------------------
 # Pair-coherence helpers
 # ---------------------------------------------------------------------------
+
 
 def _part1_text_migrated(ocr_text: str, corrected_text: str) -> bool:
     """
@@ -196,15 +198,16 @@ def _part2_boundary_word_diverged(ocr_text: str, corrected_text: str) -> bool:
 # Main reconciliation
 # ---------------------------------------------------------------------------
 
+
 def reconcile_hyphen_pair(
     part1: LineManifest,
     part2: LineManifest,
     corrected_part1: str,
     corrected_part2: str,
     *,
-    subs_content: Optional[str] = _SENTINEL,
-    source_explicit: Optional[bool] = None,
-) -> tuple[str, str, Optional[str]]:
+    subs_content: str | None = _SENTINEL,  # type: ignore[assignment]
+    source_explicit: bool | None = None,
+) -> tuple[str, str, str | None]:
     """
     Validate and reconcile LLM corrections for a hyphenated pair.
 
@@ -228,7 +231,9 @@ def reconcile_hyphen_pair(
     """
     # Resolve parameters: explicit overrides take precedence over manifest fields
     effective_subs = part1.hyphen_subs_content if subs_content is _SENTINEL else subs_content
-    effective_explicit = part1.hyphen_source_explicit if source_explicit is None else source_explicit
+    effective_explicit = (
+        part1.hyphen_source_explicit if source_explicit is None else source_explicit
+    )
 
     _fallback = (part1.ocr_text, part2.ocr_text, None)
 
@@ -286,7 +291,7 @@ def classify_reconcile_outcome(
     corrected_part2: str,
     final_part1: str,
     final_part2: str,
-    subs_content: Optional[str],
+    subs_content: str | None,
 ) -> str:
     """
     Classify the outcome of reconcile_hyphen_pair.
@@ -301,8 +306,8 @@ def classify_reconcile_outcome(
     """
     # If reconciler reverted to OCR and LLM had proposed something different
     # on either side, it's a fallback
-    proposed_change = (corrected_part1 != part1_ocr or corrected_part2 != part2_ocr)
-    reverted = (final_part1 == part1_ocr and final_part2 == part2_ocr)
+    proposed_change = corrected_part1 != part1_ocr or corrected_part2 != part2_ocr
+    reverted = final_part1 == part1_ocr and final_part2 == part2_ocr
     if reverted and proposed_change:
         return "fallback"
     if subs_content is not None:
@@ -319,25 +324,13 @@ def should_stay_in_same_chunk(
     because they form a hyphenated pair.
     """
     # PART1 → its forward partner
-    if (
-        line_a.hyphen_role == HyphenRole.PART1
-        and line_a.hyphen_pair_line_id == line_b.line_id
-    ):
+    if line_a.hyphen_role == HyphenRole.PART1 and line_a.hyphen_pair_line_id == line_b.line_id:
         return True
-    if (
-        line_b.hyphen_role == HyphenRole.PART1
-        and line_b.hyphen_pair_line_id == line_a.line_id
-    ):
+    if line_b.hyphen_role == HyphenRole.PART1 and line_b.hyphen_pair_line_id == line_a.line_id:
         return True
     # BOTH → its forward partner (via forward_pair_id)
-    if (
-        line_a.hyphen_role == HyphenRole.BOTH
-        and line_a.hyphen_forward_pair_id == line_b.line_id
-    ):
+    if line_a.hyphen_role == HyphenRole.BOTH and line_a.hyphen_forward_pair_id == line_b.line_id:
         return True
-    if (
-        line_b.hyphen_role == HyphenRole.BOTH
-        and line_b.hyphen_forward_pair_id == line_a.line_id
-    ):
+    if line_b.hyphen_role == HyphenRole.BOTH and line_b.hyphen_forward_pair_id == line_a.line_id:
         return True
     return False

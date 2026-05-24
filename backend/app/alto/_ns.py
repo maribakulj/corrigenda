@@ -3,6 +3,7 @@
 Both parser.py and rewriter.py need identical _detect_namespace / _tag
 logic. Centralising here prevents the two copies drifting apart.
 """
+
 from __future__ import annotations
 
 from lxml import etree
@@ -14,9 +15,9 @@ def _detect_namespace(root: etree._Element) -> str:
     Defensive against malformed tags that start with '{' but lack '}'
     (would otherwise raise ValueError in the callers).
     """
-    tag = root.tag
+    tag: str = root.tag
     if tag.startswith("{") and "}" in tag:
-        return tag[1: tag.index("}")]
+        return tag[1 : tag.index("}")]
     return ""
 
 

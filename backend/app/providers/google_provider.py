@@ -1,4 +1,5 @@
 """Google Gemini provider implementation."""
+
 from __future__ import annotations
 
 import json
@@ -65,9 +66,7 @@ class GoogleProvider:
             "contents": [
                 {
                     "role": "user",
-                    "parts": [
-                        {"text": json.dumps(user_payload, ensure_ascii=False)}
-                    ],
+                    "parts": [{"text": json.dumps(user_payload, ensure_ascii=False)}],
                 }
             ],
             "generationConfig": gen_config,

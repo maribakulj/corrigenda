@@ -5,6 +5,7 @@ module-level singletons. Currently the app stores its `JobStore` on
 `app.state` at startup; if that ever moves (per-request store, Redis-
 backed store, ...), only the resolvers here change.
 """
+
 from __future__ import annotations
 
 from fastapi import Request

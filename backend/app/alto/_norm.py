@@ -6,6 +6,7 @@ like 'café' may arrive in precomposed (NFC) or decomposed (NFD) form,
 and a naive ``==`` or ``.lower()`` comparison silently fails to
 match the two.
 """
+
 from __future__ import annotations
 
 import unicodedata

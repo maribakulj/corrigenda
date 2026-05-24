@@ -9,18 +9,20 @@ For now they live inside `app/` and are implemented by the existing
 classes via duck typing — no concrete code needs to change to satisfy
 these Protocols. Conformance is checked by `test_protocols_conformance.py`.
 """
+
 from __future__ import annotations
 
-from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
+from collections.abc import AsyncIterator
+from typing import Any, Optional, Protocol, runtime_checkable
 
 from app.providers.base import BaseProvider  # re-export for a single import surface
 from app.schemas import JobManifest, JobStatus, Provider, SSEEvent
 
 __all__ = [
     "BaseProvider",
-    "PipelineObserver",
-    "OutputWriter",
     "JobStore",
+    "OutputWriter",
+    "PipelineObserver",
 ]
 
 
@@ -65,7 +67,7 @@ class JobStore(Protocol):
 
     def create_job(self, provider: Provider, model: str) -> str: ...
 
-    def get_job(self, job_id: str) -> Optional[JobManifest]: ...
+    def get_job(self, job_id: str) -> JobManifest | None: ...
 
     def update_job(self, job_id: str, **kwargs: Any) -> None: ...
 

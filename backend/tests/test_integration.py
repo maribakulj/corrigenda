@@ -1,4 +1,5 @@
 """Integration tests: full correction pipeline end-to-end."""
+
 from __future__ import annotations
 
 import asyncio
@@ -7,18 +8,17 @@ import time
 import zipfile
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from lxml import etree
-from unittest.mock import AsyncMock, patch
 
 from app.alto.parser import build_document_manifest, parse_alto_file
 from app.jobs.orchestrator import run_job
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider
 from app.storage import (
-    get_image_files,
     get_output_files,
     init_job_dirs,
     link_alto_to_images,
@@ -33,6 +33,7 @@ NS = "http://www.loc.gov/standards/alto/ns-v3#"
 # ---------------------------------------------------------------------------
 # MockProvider
 # ---------------------------------------------------------------------------
+
 
 class MockProvider:
     """Identity correction: returns each line's OCR text unchanged."""
@@ -67,6 +68,7 @@ class MockProvider:
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+
 def _run(coro):
     """Run a coroutine synchronously."""
     return asyncio.run(coro)
@@ -95,17 +97,19 @@ def _run_job_directly(
     store.update_job(job_id, document_manifest=doc)
 
     out_dir = output_dir(job_id)
-    _run(run_job(
-        job_id=job_id,
-        document_manifest=doc,
-        provider_name="openai",
-        api_key="fake-key",
-        model="mock",
-        output_dir=out_dir,
-        source_files={n: p for n, p in saved.items()},
-        provider=mock,
-        job_store_override=store,
-    ))
+    _run(
+        run_job(
+            job_id=job_id,
+            document_manifest=doc,
+            provider_name="openai",
+            api_key="fake-key",
+            model="mock",
+            output_dir=out_dir,
+            source_files={n: p for n, p in saved.items()},
+            provider=mock,
+            job_store_override=store,
+        )
+    )
 
     return job_id, get_output_files(job_id), store
 
@@ -120,8 +124,8 @@ def _make_client(
     callers can share state between direct `run_job` calls and HTTP
     requests against the client.
     """
-    from app.main import create_app
     from app import providers as prov_module
+    from app.main import create_app
 
     if mock is None:
         mock = MockProvider()
@@ -135,8 +139,8 @@ def _make_client(
         app.state.job_store = store
     client = TestClient(app, raise_server_exceptions=False)
     # stash for cleanup
-    client._orig = orig          # type: ignore[attr-defined]
-    client._prov = prov_module   # type: ignore[attr-defined]
+    client._orig = orig  # type: ignore[attr-defined]
+    client._prov = prov_module  # type: ignore[attr-defined]
     return client
 
 
@@ -178,6 +182,7 @@ def _poll_completed(client: TestClient, job_id: str, tries: int = 80) -> str:
 # test_upload_single_xml
 # ---------------------------------------------------------------------------
 
+
 def test_upload_single_xml():
     """POST /api/jobs with sample.xml → 200 + job_id, job ends completed."""
     client = _make_client()
@@ -196,6 +201,7 @@ def test_upload_single_xml():
 # ---------------------------------------------------------------------------
 # test_upload_zip
 # ---------------------------------------------------------------------------
+
 
 def test_upload_zip():
     """ZIP archive containing 2 XML files → job completed, 2 output files."""
@@ -227,6 +233,7 @@ def test_upload_zip():
 # test_upload_invalid_extension
 # ---------------------------------------------------------------------------
 
+
 def test_upload_invalid_extension():
     """Uploading a .pdf file returns HTTP 400."""
     client = _make_client()
@@ -244,6 +251,7 @@ def test_upload_invalid_extension():
 # ---------------------------------------------------------------------------
 # test_sse_events_order
 # ---------------------------------------------------------------------------
+
 
 def test_sse_events_order():
     """
@@ -263,17 +271,19 @@ def test_sse_events_order():
     queue = store.subscribe(job_id)
 
     try:
-        _run(run_job(
-            job_id=job_id,
-            document_manifest=doc,
-            provider_name="openai",
-            api_key="fake-key",
-            model="mock",
-            output_dir=output_dir(job_id),
-            source_files={n: p for n, p in saved.items()},
-            provider=MockProvider(),
-            job_store_override=store,
-        ))
+        _run(
+            run_job(
+                job_id=job_id,
+                document_manifest=doc,
+                provider_name="openai",
+                api_key="fake-key",
+                model="mock",
+                output_dir=output_dir(job_id),
+                source_files={n: p for n, p in saved.items()},
+                provider=MockProvider(),
+                job_store_override=store,
+            )
+        )
     finally:
         # Drain queue, then unsubscribe
         events = []
@@ -284,7 +294,7 @@ def test_sse_events_order():
     names = [e.event for e in events]
 
     assert names[-1] == "completed", f"Last event should be 'completed', got {names[-1]!r}"
-    assert names[0] == "started",    f"First event should be 'started', got {names[0]!r}"
+    assert names[0] == "started", f"First event should be 'started', got {names[0]!r}"
 
     required_order = [
         "started",
@@ -313,6 +323,7 @@ def test_sse_events_order():
 # test_download_single_xml
 # ---------------------------------------------------------------------------
 
+
 def test_download_single_xml():
     """Completed single-file job → GET download returns application/xml parseable by lxml."""
     job_id, out_files, store = _run_job_directly({SAMPLE_XML.name: SAMPLE_XML.read_bytes()})
@@ -332,6 +343,7 @@ def test_download_single_xml():
 # ---------------------------------------------------------------------------
 # test_download_multi_zip
 # ---------------------------------------------------------------------------
+
 
 def test_download_multi_zip():
     """Completed 2-file job → GET download returns application/zip with 2 entries."""
@@ -354,6 +366,7 @@ def test_download_multi_zip():
 # ---------------------------------------------------------------------------
 # test_fallback_on_invalid_json
 # ---------------------------------------------------------------------------
+
 
 def test_fallback_on_invalid_json():
     """
@@ -384,6 +397,7 @@ def test_fallback_on_invalid_json():
 # test_output_preserves_textline_ids
 # ---------------------------------------------------------------------------
 
+
 def test_output_preserves_textline_ids():
     """Output XML has the same TextLine IDs in the same order as the source."""
     src_pages, _ = parse_alto_file(SAMPLE_XML, SAMPLE_XML.name)
@@ -395,14 +409,13 @@ def test_output_preserves_textline_ids():
     out_pages, _ = parse_alto_file(out_files[0], out_files[0].name)
     out_ids = [lm.line_id for p in out_pages for lm in p.lines]
 
-    assert src_ids == out_ids, (
-        f"TextLine IDs differ.\nSource: {src_ids}\nOutput: {out_ids}"
-    )
+    assert src_ids == out_ids, f"TextLine IDs differ.\nSource: {src_ids}\nOutput: {out_ids}"
 
 
 # ---------------------------------------------------------------------------
 # test_output_preserves_textline_coords
 # ---------------------------------------------------------------------------
+
 
 def test_output_preserves_textline_coords():
     """Each output TextLine has identical HPOS/VPOS/WIDTH/HEIGHT to the source."""
@@ -430,6 +443,7 @@ def test_output_preserves_textline_coords():
 # ---------------------------------------------------------------------------
 # test_hyphen_pairs_in_output
 # ---------------------------------------------------------------------------
+
 
 def test_hyphen_pairs_in_output():
     """
@@ -475,6 +489,7 @@ def test_hyphen_pairs_in_output():
 # test_heuristic_hyphen_no_subs_content
 # ---------------------------------------------------------------------------
 
+
 def test_heuristic_hyphen_no_subs_content():
     """
     Heuristic hyphen pair TL6/TL7 (no SUBS_TYPE in source, detected by trailing dash)
@@ -503,10 +518,11 @@ def test_heuristic_hyphen_no_subs_content():
 # test_zip_with_images
 # ---------------------------------------------------------------------------
 
+
 def test_zip_with_images():
     """ZIP with XML + PNG → image saved, job completes, image served via API."""
     # Minimal valid PNG magic (backend stores and serves without parsing content)
-    fake_png = b'\x89PNG\r\n\x1a\n' + b'\x00' * 64
+    fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
     xml_data = SAMPLE_XML.read_bytes()
     # The image stem must match the XML stem for auto-linking
@@ -540,7 +556,7 @@ def test_zip_with_images():
         img_resp = client.get(image_url)
         assert img_resp.status_code == 200
         assert img_resp.headers["content-type"] == "image/png"
-        assert img_resp.content[:8] == b'\x89PNG\r\n\x1a\n'
+        assert img_resp.content[:8] == b"\x89PNG\r\n\x1a\n"
     finally:
         _restore(client)
 
@@ -548,6 +564,7 @@ def test_zip_with_images():
 # ---------------------------------------------------------------------------
 # test_link_alto_to_images_by_filename
 # ---------------------------------------------------------------------------
+
 
 def test_link_alto_to_images_by_filename():
     """link_alto_to_images matches by lowercase stem of the ALTO source file."""
@@ -561,10 +578,11 @@ def test_link_alto_to_images_by_filename():
 
     # Simulate an image whose stem matches the XML stem
     from app.storage import images_dir
+
     imgs = images_dir(job_id)
     imgs.mkdir(parents=True, exist_ok=True)
     img_path = imgs / "mypage.jpg"
-    img_path.write_bytes(b'\xff\xd8\xff' + b'\x00' * 16)  # fake JPEG
+    img_path.write_bytes(b"\xff\xd8\xff" + b"\x00" * 16)  # fake JPEG
 
     saved_images = {"mypage": img_path}
 
@@ -586,6 +604,7 @@ def test_link_alto_to_images_by_filename():
 # ---------------------------------------------------------------------------
 # test_link_alto_to_images_no_match
 # ---------------------------------------------------------------------------
+
 
 def test_link_alto_to_images_no_match():
     """link_alto_to_images returns empty dict when no stem matches."""
@@ -610,6 +629,7 @@ def test_link_alto_to_images_no_match():
 # macOS ZIP artefact tests
 # ---------------------------------------------------------------------------
 
+
 def _make_macos_zip(xml_bytes: bytes, xml_name: str) -> bytes:
     """
     Build a ZIP that mimics what macOS Finder produces:
@@ -620,12 +640,12 @@ def _make_macos_zip(xml_bytes: bytes, xml_name: str) -> bytes:
     """
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr(xml_name, xml_bytes)                           # real file
-        zf.writestr(f"._{xml_name}", b"\x00\x05\x16\x07fakeAD")   # AppleDouble at root
+        zf.writestr(xml_name, xml_bytes)  # real file
+        zf.writestr(f"._{xml_name}", b"\x00\x05\x16\x07fakeAD")  # AppleDouble at root
         zf.writestr(f"__MACOSX/._{xml_name}", b"\x00\x05\x16\x07fakeAD")  # inside __MACOSX
-        zf.writestr("scan.jpg", b"\xff\xd8\xff" + b"\x00" * 16)   # real image
-        zf.writestr("._scan.jpg", b"\x00\x05\x16\x07fakeAD")      # AppleDouble image
-        zf.writestr("__MACOSX/._scan.jpg", b"\x00\x05\x16\x07")   # inside __MACOSX
+        zf.writestr("scan.jpg", b"\xff\xd8\xff" + b"\x00" * 16)  # real image
+        zf.writestr("._scan.jpg", b"\x00\x05\x16\x07fakeAD")  # AppleDouble image
+        zf.writestr("__MACOSX/._scan.jpg", b"\x00\x05\x16\x07")  # inside __MACOSX
     buf.seek(0)
     return buf.read()
 
@@ -641,13 +661,9 @@ def test_macos_zip_skips_appledouble_xml():
     saved, images = save_uploaded_files(job_id, [("archive.zip", zip_bytes)])
 
     # Only the real XML must be saved — not ._0000.xml
-    assert list(saved.keys()) == ["0000.xml"], (
-        f"Expected only '0000.xml', got {list(saved.keys())}"
-    )
+    assert list(saved.keys()) == ["0000.xml"], f"Expected only '0000.xml', got {list(saved.keys())}"
     # Only the real image must be saved — not ._scan.jpg
-    assert list(images.keys()) == ["scan"], (
-        f"Expected only 'scan', got {list(images.keys())}"
-    )
+    assert list(images.keys()) == ["scan"], f"Expected only 'scan', got {list(images.keys())}"
 
 
 def test_macos_zip_parses_without_error():
@@ -668,6 +684,7 @@ def test_macos_zip_parses_without_error():
 # ---------------------------------------------------------------------------
 # ZIP safety-limit tests
 # ---------------------------------------------------------------------------
+
 
 def test_zip_rejected_when_too_many_members():
     """ZIP with more members than _MAX_ZIP_MEMBERS is rejected before extraction."""

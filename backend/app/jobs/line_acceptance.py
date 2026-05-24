@@ -22,12 +22,11 @@ A separate post-pass ``check_adjacent_duplicates`` applies:
 All guards are intentionally conservative: on any doubt, fall back to
 the original OCR text rather than risk a glissement or duplication.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Optional
-
 
 # ---------------------------------------------------------------------------
 # Thresholds (intentionally conservative)
@@ -56,17 +55,20 @@ ABSORPTION_CONCAT_SIMILARITY = 0.8
 # Result type
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class AcceptanceResult:
     """Result of the acceptance check for a single line."""
+
     accepted: bool
-    text: str                        # retained text (correction or OCR fallback)
-    reason: Optional[str] = None     # None when accepted; short tag when rejected
+    text: str  # retained text (correction or OCR fallback)
+    reason: str | None = None  # None when accepted; short tag when rejected
 
 
 # ---------------------------------------------------------------------------
 # Similarity helper
 # ---------------------------------------------------------------------------
+
 
 def _similarity(a: str, b: str) -> float:
     """Return SequenceMatcher ratio between two strings (0.0–1.0)."""
@@ -81,11 +83,12 @@ def _similarity(a: str, b: str) -> float:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def check_line(
     source_ocr: str,
     corrected: str,
-    prev_ocr: Optional[str] = None,
-    next_ocr: Optional[str] = None,
+    prev_ocr: str | None = None,
+    next_ocr: str | None = None,
 ) -> AcceptanceResult:
     """Decide whether *corrected* is safe to accept for *source_ocr*.
 

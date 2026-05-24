@@ -1,4 +1,5 @@
 """Storage helpers: job directories and file I/O."""
+
 from __future__ import annotations
 
 import os
@@ -11,7 +12,7 @@ _BASE_DIR = Path(os.environ.get("JOB_STORAGE_DIR", "/tmp/app-jobs"))
 _ALLOWED_EXTENSIONS = {".xml", ".alto"}
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 _MAX_ZIP_EXTRACTED_BYTES = 500 * 1024 * 1024  # 500 MB safety limit
-_MAX_ZIP_MEMBERS = 1000                       # inode-exhaustion limit
+_MAX_ZIP_MEMBERS = 1000  # inode-exhaustion limit
 _ZIP_READ_CHUNK = 64 * 1024
 
 
@@ -48,6 +49,7 @@ def _safe_zip_read(
 # Directory helpers
 # ---------------------------------------------------------------------------
 
+
 def job_dir(job_id: str) -> Path:
     return _BASE_DIR / job_id
 
@@ -72,6 +74,7 @@ def init_job_dirs(job_id: str) -> None:
 # ---------------------------------------------------------------------------
 # File I/O
 # ---------------------------------------------------------------------------
+
 
 def save_uploaded_files(
     job_id: str,
@@ -98,6 +101,7 @@ def save_uploaded_files(
 
         if suffix == ".zip":
             import io
+
             with zipfile.ZipFile(io.BytesIO(content)) as zf:
                 members = zf.infolist()
 
@@ -135,7 +139,9 @@ def save_uploaded_files(
                         continue
 
                     data = _safe_zip_read(
-                        zf, member, _MAX_ZIP_EXTRACTED_BYTES - extracted_total,
+                        zf,
+                        member,
+                        _MAX_ZIP_EXTRACTED_BYTES - extracted_total,
                     )
                     extracted_total += len(data)
 
@@ -165,11 +171,7 @@ def get_image_files(job_id: str) -> dict[str, Path]:
     d = images_dir(job_id)
     if not d.exists():
         return {}
-    return {
-        p.stem.lower(): p
-        for p in d.iterdir()
-        if p.suffix.lower() in _IMAGE_EXTENSIONS
-    }
+    return {p.stem.lower(): p for p in d.iterdir() if p.suffix.lower() in _IMAGE_EXTENSIONS}
 
 
 def link_alto_to_images(
@@ -237,10 +239,7 @@ def get_output_files(job_id: str) -> list[Path]:
     d = output_dir(job_id)
     if not d.exists():
         return []
-    return sorted(
-        p for p in d.iterdir()
-        if p.suffix.lower() in (".xml", ".alto")
-    )
+    return sorted(p for p in d.iterdir() if p.suffix.lower() in (".xml", ".alto"))
 
 
 def cleanup_job(job_id: str) -> None:

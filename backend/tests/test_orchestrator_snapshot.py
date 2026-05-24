@@ -13,6 +13,7 @@ If a snapshot must change (e.g. an intentional rewriter improvement),
 update the constants below in the same commit and justify it in the
 commit message.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -36,6 +37,7 @@ X0000002_XML = EXAMPLES_DIR / "X0000002.xml"
 # ---------------------------------------------------------------------------
 # Identity MockProvider — deterministic, returns OCR text unchanged
 # ---------------------------------------------------------------------------
+
 
 class _IdentityProvider:
     async def list_models(self, api_key: str) -> list[ModelInfo]:
@@ -65,17 +67,19 @@ def _run_and_capture(xml_path: Path) -> dict[str, Any]:
     with tempfile.TemporaryDirectory() as td:
         out_dir = Path(td)
         doc = build_document_manifest([(xml_path, xml_path.name)])
-        asyncio.run(run_job(
-            job_id=job_id,
-            document_manifest=doc,
-            provider_name="openai",
-            api_key="fake-key",
-            model="mock",
-            output_dir=out_dir,
-            source_files={xml_path.name: xml_path},
-            provider=_IdentityProvider(),
-            job_store_override=store,
-        ))
+        asyncio.run(
+            run_job(
+                job_id=job_id,
+                document_manifest=doc,
+                provider_name="openai",
+                api_key="fake-key",
+                model="mock",
+                output_dir=out_dir,
+                source_files={xml_path.name: xml_path},
+                provider=_IdentityProvider(),
+                job_store_override=store,
+            )
+        )
         job = store.get_job(job_id)
         assert job is not None
 

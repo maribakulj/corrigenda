@@ -1,4 +1,5 @@
 """Tests for jobs/chunk_planner.py"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -22,6 +23,7 @@ X0000002_PATH = Path(__file__).parent.parent.parent / "examples" / "X0000002.xml
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _coords() -> Coords:
     return Coords(hpos=0, vpos=0, width=100, height=20)
@@ -87,6 +89,7 @@ def _small_config() -> ChunkPlannerConfig:
 # test_small_page_single_chunk
 # ---------------------------------------------------------------------------
 
+
 def test_small_page_single_chunk():
     lines = [_line(f"L{i}", "TB1", ocr_text="ab") for i in range(5)]
     page = _page(lines)
@@ -100,6 +103,7 @@ def test_small_page_single_chunk():
 # ---------------------------------------------------------------------------
 # test_large_page_block_granularity
 # ---------------------------------------------------------------------------
+
 
 def test_large_page_block_granularity():
     # 3 blocks of 2 short lines each; each block fits in tight budget (≤20 chars, ≤3 lines)
@@ -132,6 +136,7 @@ def test_large_page_block_granularity():
 # test_block_too_large_window_fallback
 # ---------------------------------------------------------------------------
 
+
 def test_block_too_large_window_fallback():
     config = ChunkPlannerConfig(
         max_input_chars_per_request=10,
@@ -150,6 +155,7 @@ def test_block_too_large_window_fallback():
 # ---------------------------------------------------------------------------
 # test_window_coverage_complete
 # ---------------------------------------------------------------------------
+
 
 def test_window_coverage_complete():
     config = ChunkPlannerConfig(
@@ -170,6 +176,7 @@ def test_window_coverage_complete():
 # ---------------------------------------------------------------------------
 # test_hyphen_pair_not_split_by_window
 # ---------------------------------------------------------------------------
+
 
 def test_hyphen_pair_not_split_by_window():
     # window_size=3, overlap=1, step=2
@@ -195,14 +202,13 @@ def test_hyphen_pair_not_split_by_window():
     assert plan.granularity == ChunkGranularity.WINDOW
     for chunk in plan.chunks:
         if "L2" in chunk.line_ids:
-            assert "L3" in chunk.line_ids, (
-                f"PART1 L2 and PART2 L3 were split: {chunk.line_ids}"
-            )
+            assert "L3" in chunk.line_ids, f"PART1 L2 and PART2 L3 were split: {chunk.line_ids}"
 
 
 # ---------------------------------------------------------------------------
 # test_hyphen_pair_atomic_in_line_mode
 # ---------------------------------------------------------------------------
+
 
 def test_hyphen_pair_atomic_in_line_mode():
     lines = [
@@ -228,6 +234,7 @@ def test_hyphen_pair_atomic_in_line_mode():
 # test_downgrade_sequence
 # ---------------------------------------------------------------------------
 
+
 def test_downgrade_sequence():
     assert downgrade_granularity(ChunkGranularity.PAGE) == ChunkGranularity.BLOCK
     assert downgrade_granularity(ChunkGranularity.BLOCK) == ChunkGranularity.WINDOW
@@ -239,13 +246,20 @@ def test_downgrade_sequence():
 # test_chain_atomic_in_line_mode (PART1 → BOTH → PART2)
 # ---------------------------------------------------------------------------
 
+
 def test_chain_atomic_in_line_mode():
     """A chain PART1 → BOTH → PART2 must be grouped as a single chunk."""
     lines = [
         _line("L0", "TB1", "aa"),
         _line("L1", "TB1", "néces-", HyphenRole.PART1, hyphen_pair_line_id="L2"),
-        _line("L2", "TB1", "saires pour les me-", HyphenRole.BOTH,
-              hyphen_pair_line_id="L1", hyphen_forward_pair_id="L3"),
+        _line(
+            "L2",
+            "TB1",
+            "saires pour les me-",
+            HyphenRole.BOTH,
+            hyphen_pair_line_id="L1",
+            hyphen_forward_pair_id="L3",
+        ),
         _line("L3", "TB1", "sures nécessaires", HyphenRole.PART2, hyphen_pair_line_id="L2"),
         _line("L4", "TB1", "dd"),
     ]
@@ -272,17 +286,36 @@ def test_chain_atomic_in_line_mode():
 # test_long_chain_atomic_in_line_mode (5-line chain)
 # ---------------------------------------------------------------------------
 
+
 def test_long_chain_atomic_in_line_mode():
     """A 5-line chain PART1 → BOTH → BOTH → BOTH → PART2 stays together."""
     lines = [
         _line("L0", "TB1", "aa"),
         _line("A", "TB1", "pre et d'or, aux la-", HyphenRole.PART1, hyphen_pair_line_id="B"),
-        _line("B", "TB1", "quais vêtus com-", HyphenRole.BOTH,
-              hyphen_pair_line_id="A", hyphen_forward_pair_id="C"),
-        _line("C", "TB1", "me des princes, aux che-", HyphenRole.BOTH,
-              hyphen_pair_line_id="B", hyphen_forward_pair_id="D"),
-        _line("D", "TB1", "vaux flamands dont les har-", HyphenRole.BOTH,
-              hyphen_pair_line_id="C", hyphen_forward_pair_id="E"),
+        _line(
+            "B",
+            "TB1",
+            "quais vêtus com-",
+            HyphenRole.BOTH,
+            hyphen_pair_line_id="A",
+            hyphen_forward_pair_id="C",
+        ),
+        _line(
+            "C",
+            "TB1",
+            "me des princes, aux che-",
+            HyphenRole.BOTH,
+            hyphen_pair_line_id="B",
+            hyphen_forward_pair_id="D",
+        ),
+        _line(
+            "D",
+            "TB1",
+            "vaux flamands dont les har-",
+            HyphenRole.BOTH,
+            hyphen_pair_line_id="C",
+            hyphen_forward_pair_id="E",
+        ),
         _line("E", "TB1", "nais couverts", HyphenRole.PART2, hyphen_pair_line_id="D"),
         _line("L6", "TB1", "zz"),
     ]
@@ -300,6 +333,7 @@ def test_long_chain_atomic_in_line_mode():
 # test_chain_not_split_by_window
 # ---------------------------------------------------------------------------
 
+
 def test_chain_not_split_by_window():
     """Window boundary falling inside a chain must extend to include all."""
     # window_size=3, overlap=1, step=2
@@ -316,8 +350,14 @@ def test_chain_not_split_by_window():
         _line("L0", "TB1", "aa"),
         _line("L1", "TB1", "bb"),
         _line("L2", "TB1", "néces-", HyphenRole.PART1, hyphen_pair_line_id="L3"),
-        _line("L3", "TB1", "saires me-", HyphenRole.BOTH,
-              hyphen_pair_line_id="L2", hyphen_forward_pair_id="L4"),
+        _line(
+            "L3",
+            "TB1",
+            "saires me-",
+            HyphenRole.BOTH,
+            hyphen_pair_line_id="L2",
+            hyphen_forward_pair_id="L4",
+        ),
         _line("L4", "TB1", "sures", HyphenRole.PART2, hyphen_pair_line_id="L3"),
         _line("L5", "TB1", "ff"),
     ]
@@ -336,6 +376,7 @@ def test_chain_not_split_by_window():
 # test_cross_block_chain_merged
 # ---------------------------------------------------------------------------
 
+
 def test_cross_block_chain_merged():
     """BOTH's forward link across blocks triggers block merging."""
     config = ChunkPlannerConfig(
@@ -344,8 +385,14 @@ def test_cross_block_chain_merged():
     )
     lines_b1 = [
         _line("L1", "B1", "text abc-", HyphenRole.PART1, hyphen_pair_line_id="L2"),
-        _line("L2", "B1", "def ghi-", HyphenRole.BOTH,
-              hyphen_pair_line_id="L1", hyphen_forward_pair_id="L3"),
+        _line(
+            "L2",
+            "B1",
+            "def ghi-",
+            HyphenRole.BOTH,
+            hyphen_pair_line_id="L1",
+            hyphen_forward_pair_id="L3",
+        ),
     ]
     lines_b2 = [
         _line("L3", "B2", "jkl rest", HyphenRole.PART2, hyphen_pair_line_id="L2"),
@@ -375,6 +422,7 @@ def test_cross_block_chain_merged():
 # test_corpus_chains_never_split (real XML)
 # ---------------------------------------------------------------------------
 
+
 def test_corpus_chains_never_split():
     """On X0000002.xml, no BOTH line's forward partner is in a different chunk."""
     if not X0000002_PATH.exists():
@@ -397,7 +445,9 @@ def test_corpus_chains_never_split():
         # Verify all BOTH forward links are in the same chunk
         for lm in page.lines:
             if lm.hyphen_role == HyphenRole.BOTH and lm.hyphen_forward_pair_id:
-                assert lid_to_chunk.get(lm.line_id) == lid_to_chunk.get(lm.hyphen_forward_pair_id), (
+                assert lid_to_chunk.get(lm.line_id) == lid_to_chunk.get(
+                    lm.hyphen_forward_pair_id
+                ), (
                     f"BOTH line {lm.line_id} and forward partner "
                     f"{lm.hyphen_forward_pair_id} are in different chunks"
                 )

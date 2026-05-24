@@ -1,7 +1,6 @@
 """Validator for LLM structured responses."""
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 from app.alto._norm import ncfold
 from app.schemas import LLMLineOutput, LLMResponse
@@ -10,9 +9,9 @@ from app.schemas import LLMLineOutput, LLMResponse
 def validate_llm_response(
     raw: dict,
     expected_line_ids: list[str],
-    hyphen_pairs: Optional[dict[str, str]] = None,
-    ocr_texts: Optional[dict[str, str]] = None,
-    hyphen_subs: Optional[dict[str, str]] = None,
+    hyphen_pairs: dict[str, str] | None = None,
+    ocr_texts: dict[str, str] | None = None,
+    hyphen_subs: dict[str, str] | None = None,
 ) -> LLMResponse:
     """
     Validate an LLM response dict and return a typed LLMResponse.
@@ -55,8 +54,7 @@ def validate_llm_response(
     # --- Count ---
     if len(lines_raw) != len(expected_line_ids):
         raise ValueError(
-            f"Line count mismatch: expected {len(expected_line_ids)}, "
-            f"got {len(lines_raw)}"
+            f"Line count mismatch: expected {len(expected_line_ids)}, got {len(lines_raw)}"
         )
 
     seen_ids: set[str] = set()
@@ -81,9 +79,7 @@ def validate_llm_response(
         if not isinstance(corrected_text, str) or corrected_text == "":
             raise ValueError(f"corrected_text for {line_id!r} is empty or missing")
         if "\n" in corrected_text or "\r" in corrected_text:
-            raise ValueError(
-                f"corrected_text for {line_id!r} contains a newline character"
-            )
+            raise ValueError(f"corrected_text for {line_id!r} contains a newline character")
 
         outputs.append(LLMLineOutput(line_id=line_id, corrected_text=corrected_text))
 
@@ -96,8 +92,11 @@ def validate_llm_response(
     if hyphen_pairs:
         text_by_id = {o.line_id: o.corrected_text for o in outputs}
         _validate_hyphen_integrity(
-            text_by_id, hyphen_pairs, expected_set,
-            ocr_texts or {}, hyphen_subs or {},
+            text_by_id,
+            hyphen_pairs,
+            expected_set,
+            ocr_texts or {},
+            hyphen_subs or {},
         )
 
     return LLMResponse(lines=outputs)
@@ -138,13 +137,11 @@ def _validate_hyphen_integrity(
         # 1. Either side being empty means illegal fusion/deletion
         if not text_a:
             raise ValueError(
-                f"hyphen_integrity_violation: corrected_text for line "
-                f"{id_a!r} is empty"
+                f"hyphen_integrity_violation: corrected_text for line {id_a!r} is empty"
             )
         if not text_b:
             raise ValueError(
-                f"hyphen_integrity_violation: corrected_text for line "
-                f"{id_b!r} is empty"
+                f"hyphen_integrity_violation: corrected_text for line {id_b!r} is empty"
             )
 
         # 2–3. Semantic drift checks (only when OCR source is available)

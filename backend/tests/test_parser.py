@@ -1,18 +1,17 @@
 """Tests for alto/parser.py"""
+
 from __future__ import annotations
 
 import textwrap
 from pathlib import Path
 
-import pytest
-
 from app.alto.parser import build_document_manifest, parse_alto_file
 from app.schemas import HyphenRole
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def write_alto(tmp_path: Path, xml: str, name: str = "test.xml") -> Path:
     p = tmp_path / name
@@ -90,6 +89,7 @@ SIMPLE_BLOCK = """\
 # test_namespace_v2_v3_v4_none
 # ---------------------------------------------------------------------------
 
+
 def test_namespace_v2_v3_v4_none(tmp_path):
     for template in (alto_v2, alto_v3, alto_v4, alto_nons):
         xml_path = write_alto(tmp_path, template(SIMPLE_BLOCK))
@@ -102,6 +102,7 @@ def test_namespace_v2_v3_v4_none(tmp_path):
 # ---------------------------------------------------------------------------
 # test_ocr_text_string_sp_hyp
 # ---------------------------------------------------------------------------
+
 
 def test_ocr_text_string_sp_hyp(tmp_path):
     body = """\
@@ -152,6 +153,7 @@ def test_ocr_text_hyp_no_content(tmp_path):
 # test_page_manifest_counts
 # ---------------------------------------------------------------------------
 
+
 def test_page_manifest_counts(tmp_path):
     body = """\
 <TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="200">
@@ -183,6 +185,7 @@ def test_page_manifest_counts(tmp_path):
 # test_prev_next_links
 # ---------------------------------------------------------------------------
 
+
 def test_prev_next_links(tmp_path):
     body = """\
 <TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="200">
@@ -210,6 +213,7 @@ def test_prev_next_links(tmp_path):
 # ---------------------------------------------------------------------------
 # test_hyphen_explicit_subs_type
 # ---------------------------------------------------------------------------
+
 
 def test_hyphen_explicit_subs_type(tmp_path):
     """SUBS_TYPE=HypPart1 on last String → PART1, explicit."""
@@ -243,6 +247,7 @@ def test_hyphen_explicit_subs_type(tmp_path):
 # test_hyphen_explicit_hyp_element
 # ---------------------------------------------------------------------------
 
+
 def test_hyphen_explicit_hyp_element(tmp_path):
     """HYP element at end of line → PART1, source_explicit=True."""
     body = """\
@@ -269,6 +274,7 @@ def test_hyphen_explicit_hyp_element(tmp_path):
 # test_hyphen_heuristic
 # ---------------------------------------------------------------------------
 
+
 def test_hyphen_heuristic(tmp_path):
     """Last token ending with '-' and no SUBS_TYPE → heuristic PART1."""
     body = """\
@@ -291,6 +297,7 @@ def test_hyphen_heuristic(tmp_path):
 # ---------------------------------------------------------------------------
 # test_hyphen_pair_bidirectional
 # ---------------------------------------------------------------------------
+
 
 def test_hyphen_pair_bidirectional(tmp_path):
     """PART1 and PART2 must point to each other via hyphen_pair_line_id."""
@@ -315,6 +322,7 @@ def test_hyphen_pair_bidirectional(tmp_path):
 # ---------------------------------------------------------------------------
 # test_hyphen_subs_content_propagated
 # ---------------------------------------------------------------------------
+
 
 def test_hyphen_subs_content_propagated(tmp_path):
     """SUBS_CONTENT on PART1 only → propagated to PART2 and vice-versa."""
@@ -361,6 +369,7 @@ def test_hyphen_subs_content_propagated_from_part2(tmp_path):
 # test_multi_file
 # ---------------------------------------------------------------------------
 
+
 def test_multi_file(tmp_path):
     """Two XML files → continuous global line indices, all pages present."""
     file1 = write_alto(
@@ -401,6 +410,7 @@ def test_multi_file(tmp_path):
 # ---------------------------------------------------------------------------
 # Cross-page hyphenation linking
 # ---------------------------------------------------------------------------
+
 
 def test_cross_page_hyphen_pair_linked(tmp_path: Path):
     """PART1 on last line of page 1 should link to PART2 on first line of page 2."""
@@ -506,6 +516,7 @@ def test_single_page_no_cross_page_link(tmp_path: Path):
 # B-007 — _detect_namespace defensive against malformed tags
 # ---------------------------------------------------------------------------
 
+
 def test_detect_namespace_handles_missing_closing_brace():
     """A tag that starts with '{' but lacks '}' must not crash with ValueError."""
     from app.alto.parser import _detect_namespace
@@ -538,6 +549,7 @@ def test_detect_namespace_normal_namespaced_tag():
 # ---------------------------------------------------------------------------
 # B-006 — disambiguate_page_ids on cross-file Page ID collision
 # ---------------------------------------------------------------------------
+
 
 def test_colliding_page_ids_disambiguated_across_files(tmp_path: Path):
     """Two files declaring Page ID='P1' must get distinct page_ids in the manifest."""
@@ -575,8 +587,8 @@ def test_unique_page_ids_left_intact(tmp_path: Path):
         '<alto xmlns="http://www.loc.gov/standards/alto/ns-v3#">'
         '<Layout><Page ID="P2" WIDTH="2480" HEIGHT="3508">'
         '<PrintSpace HPOS="0" VPOS="0" WIDTH="2480" HEIGHT="3508">'
-        + body_b +
-        '</PrintSpace></Page></Layout></alto>'
+        + body_b
+        + "</PrintSpace></Page></Layout></alto>"
     )
     file2 = tmp_path / "fileB.xml"
     file2.write_text(file2_xml, encoding="utf-8")

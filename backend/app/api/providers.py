@@ -1,10 +1,11 @@
 """Providers API router."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
 from app.providers import get_provider
-from app.schemas import ListModelsRequest, ListModelsResponse, Provider
+from app.schemas import ListModelsRequest, ListModelsResponse
 
 router = APIRouter()
 

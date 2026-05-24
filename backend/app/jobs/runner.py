@@ -6,13 +6,14 @@ agnostic of how the JobStore is wired in: callers pass it at
 construction time, which is the seam future-1.4 work will use to
 replace the in-memory singleton with `request.app.state.job_store`.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from app.jobs.correction_pipeline import CorrectionPipeline, sanitize_error
 from app.protocols import BaseProvider, JobStore
@@ -49,7 +50,7 @@ class JobRunner:
         model: str,
         output_dir: Path,
         source_files: dict[str, Path],
-        provider: Optional[BaseProvider] = None,
+        provider: BaseProvider | None = None,
         timeout_seconds: int = 1800,
     ) -> None:
         """Run a job end-to-end. Updates the JobStore as side effect.
@@ -62,6 +63,7 @@ class JobRunner:
         if provider is None:
             from app.providers import get_provider
             from app.schemas import Provider
+
             provider = get_provider(Provider(provider_name))
 
         output_writer = FilesystemOutputWriter(output_dir)
@@ -84,7 +86,8 @@ class JobRunner:
             )
 
             lines_modified = sum(
-                1 for page in document_manifest.pages
+                1
+                for page in document_manifest.pages
                 for lm in page.lines
                 if lm.corrected_text is not None and lm.corrected_text != lm.ocr_text
             )
@@ -98,21 +101,27 @@ class JobRunner:
                 duration_seconds=elapsed,
             )
 
-            self.job_store.emit(job_id, "completed", {
-                "job_id": job_id,
-                "total_lines": document_manifest.total_lines,
-                "lines_modified": lines_modified,
-                "hyphen_pairs_total": total_reconciled,
-                "chunks_total": total_chunks,
-                "duration_seconds": elapsed,
-            })
+            self.job_store.emit(
+                job_id,
+                "completed",
+                {
+                    "job_id": job_id,
+                    "total_lines": document_manifest.total_lines,
+                    "lines_modified": lines_modified,
+                    "hyphen_pairs_total": total_reconciled,
+                    "chunks_total": total_chunks,
+                    "duration_seconds": elapsed,
+                },
+            )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error("Job %s timed out after %ss", job_id, timeout_seconds)
             elapsed = round(time.monotonic() - start_time, 2)
             safe_error = f"Job timed out after {timeout_seconds}s"
             self.job_store.update_job(
-                job_id, status=JobStatus.FAILED, error=safe_error,
+                job_id,
+                status=JobStatus.FAILED,
+                error=safe_error,
                 duration_seconds=elapsed,
             )
             self.job_store.emit(job_id, "failed", {"job_id": job_id, "error": safe_error})
@@ -129,10 +138,14 @@ class JobRunner:
                 error=safe_error,
                 duration_seconds=time.monotonic() - start_time,
             )
-            self.job_store.emit(job_id, "failed", {
-                "job_id": job_id,
-                "error": safe_error,
-            })
+            self.job_store.emit(
+                job_id,
+                "failed",
+                {
+                    "job_id": job_id,
+                    "error": safe_error,
+                },
+            )
 
     async def _run_pipeline(
         self,
