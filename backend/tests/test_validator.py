@@ -1,4 +1,5 @@
 """Tests for jobs/validator.py"""
+
 from __future__ import annotations
 
 import pytest
@@ -6,10 +7,10 @@ import pytest
 from app.jobs.validator import validate_llm_response
 from app.schemas import LLMResponse
 
-
 # ---------------------------------------------------------------------------
 # test_valid_response
 # ---------------------------------------------------------------------------
+
 
 def test_valid_response():
     raw = {
@@ -29,6 +30,7 @@ def test_valid_response():
 # test_missing_lines_key
 # ---------------------------------------------------------------------------
 
+
 def test_missing_lines_key():
     with pytest.raises(ValueError, match="Missing key 'lines'"):
         validate_llm_response({"data": []}, ["L1"])
@@ -37,6 +39,7 @@ def test_missing_lines_key():
 # ---------------------------------------------------------------------------
 # test_missing_line_id
 # ---------------------------------------------------------------------------
+
 
 def test_missing_line_id():
     raw = {
@@ -51,6 +54,7 @@ def test_missing_line_id():
 # ---------------------------------------------------------------------------
 # test_duplicate_line_id
 # ---------------------------------------------------------------------------
+
 
 def test_duplicate_line_id():
     raw = {
@@ -67,6 +71,7 @@ def test_duplicate_line_id():
 # test_unknown_line_id
 # ---------------------------------------------------------------------------
 
+
 def test_unknown_line_id():
     raw = {
         "lines": [
@@ -82,6 +87,7 @@ def test_unknown_line_id():
 # test_newline_in_text
 # ---------------------------------------------------------------------------
 
+
 def test_newline_in_text():
     raw = {
         "lines": [
@@ -95,6 +101,7 @@ def test_newline_in_text():
 # ---------------------------------------------------------------------------
 # test_empty_corrected_text
 # ---------------------------------------------------------------------------
+
 
 def test_empty_corrected_text():
     raw = {
@@ -110,6 +117,7 @@ def test_empty_corrected_text():
 # test_count_mismatch
 # ---------------------------------------------------------------------------
 
+
 def test_count_mismatch():
     raw = {
         "lines": [
@@ -124,6 +132,7 @@ def test_count_mismatch():
 # test_hyphen_part2_empty_violation
 # ---------------------------------------------------------------------------
 
+
 def test_hyphen_part2_empty_violation():
     raw_empty = {
         "lines": [
@@ -133,7 +142,8 @@ def test_hyphen_part2_empty_violation():
     }
     with pytest.raises(ValueError):
         validate_llm_response(
-            raw_empty, ["L1", "L2"],
+            raw_empty,
+            ["L1", "L2"],
             hyphen_pairs={"L1": "L2", "L2": "L1"},
         )
 
@@ -141,6 +151,7 @@ def test_hyphen_part2_empty_violation():
 # ---------------------------------------------------------------------------
 # test_hyphen_part1_fusion_violation
 # ---------------------------------------------------------------------------
+
 
 def test_hyphen_part1_fusion_violation():
     """PART1 corrected_text stripped of '-' equals full subs_content → fusion."""
@@ -163,6 +174,7 @@ def test_hyphen_part1_fusion_violation():
 # test_hyphen_part1_drift_violation
 # ---------------------------------------------------------------------------
 
+
 def test_hyphen_part1_drift_violation():
     """PART1 grew by more than 2 words → text migration suspected."""
     raw = {
@@ -183,6 +195,7 @@ def test_hyphen_part1_drift_violation():
 # ---------------------------------------------------------------------------
 # test_hyphen_fusion_multiword_part1
 # ---------------------------------------------------------------------------
+
 
 def test_hyphen_fusion_multiword_part1():
     """PART1 with multiple words — last word equals subs → fusion detected."""

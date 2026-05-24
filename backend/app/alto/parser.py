@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import unicodedata
 from pathlib import Path
-from typing import Optional
 
 from lxml import etree
 
@@ -16,10 +15,10 @@ from app.schemas import (
     PageManifest,
 )
 
-
 # ---------------------------------------------------------------------------
 # ocr_text reconstruction
 # ---------------------------------------------------------------------------
+
 
 def _build_ocr_text(textline: etree._Element, ns: str) -> str:
     parts: list[str] = []
@@ -50,6 +49,7 @@ def _build_ocr_text(textline: etree._Element, ns: str) -> str:
 # ---------------------------------------------------------------------------
 # Hyphenation detection (mutates lines in-place)
 # ---------------------------------------------------------------------------
+
 
 def _detect_hyphenation(lines: list[LineManifest]) -> None:
     """
@@ -95,7 +95,9 @@ def _link_hyphen_pairs(lines: list[LineManifest]) -> None:
 
         # Accept PART2, BOTH, or NONE as forward partner
         if candidate.hyphen_role not in (
-            HyphenRole.PART2, HyphenRole.BOTH, HyphenRole.NONE,
+            HyphenRole.PART2,
+            HyphenRole.BOTH,
+            HyphenRole.NONE,
         ):
             continue
 
@@ -111,11 +113,7 @@ def _link_hyphen_pairs(lines: list[LineManifest]) -> None:
         # Determine subs_content and set links for this pair
         if line.hyphen_role == HyphenRole.BOTH:
             # Forward side of a BOTH line
-            subs = (
-                line.hyphen_forward_subs_content
-                or candidate.hyphen_subs_content
-                or None
-            )
+            subs = line.hyphen_forward_subs_content or candidate.hyphen_subs_content or None
 
             # Set forward link on the BOTH line
             line.hyphen_forward_pair_id = candidate.line_id
@@ -162,15 +160,12 @@ def _parse_textline_hyphen_info(
         return
 
     string_tag = _tag("String", ns)
-    hyp_tag = _tag("HYP", ns)
 
     # --- Detect PART2: first String has SUBS_TYPE="HypPart2" ---
     is_part2 = False
-    backward_subs: Optional[str] = None
+    backward_subs: str | None = None
 
-    first_string = next(
-        (c for c in children if c.tag == string_tag), None
-    )
+    first_string = next((c for c in children if c.tag == string_tag), None)
     if first_string is not None:
         subs_type = first_string.get("SUBS_TYPE", "")
         if subs_type == "HypPart2":
@@ -180,7 +175,7 @@ def _parse_textline_hyphen_info(
     # --- Detect PART1: trailing HYP, or last String SUBS_TYPE="HypPart1",
     #     or heuristic trailing dash ---
     is_part1 = False
-    forward_subs: Optional[str] = None
+    forward_subs: str | None = None
     forward_explicit = False
 
     last_child = children[-1]
@@ -193,9 +188,7 @@ def _parse_textline_hyphen_info(
             if sc:
                 forward_subs = sc
     else:
-        last_string = next(
-            (c for c in reversed(children) if c.tag == string_tag), None
-        )
+        last_string = next((c for c in reversed(children) if c.tag == string_tag), None)
         if last_string is not None:
             if last_string.get("SUBS_TYPE", "") == "HypPart1":
                 is_part1 = True
@@ -237,6 +230,7 @@ def _parse_textline_hyphen_info(
 # ---------------------------------------------------------------------------
 # Core parsing
 # ---------------------------------------------------------------------------
+
 
 def parse_alto_file(
     xml_path: Path,
@@ -428,9 +422,8 @@ def build_document_manifest(
         # Only attempt if the last line looks like a PART1/BOTH that
         # was NOT linked during intra-page pass (pair_line_id is None).
         needs_forward_link = (
-            (last_line.hyphen_role == HyphenRole.PART1 and not last_line.hyphen_pair_line_id)
-            or (last_line.hyphen_role == HyphenRole.BOTH and not last_line.hyphen_forward_pair_id)
-        )
+            last_line.hyphen_role == HyphenRole.PART1 and not last_line.hyphen_pair_line_id
+        ) or (last_line.hyphen_role == HyphenRole.BOTH and not last_line.hyphen_forward_pair_id)
         if needs_forward_link:
             _link_hyphen_pairs([last_line, first_line])
 

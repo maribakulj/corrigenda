@@ -1,0 +1,134 @@
+# ---------------------------------------------------------------------------
+# Tooling configuration for the backend package.
+#
+# Quality gates (Phase 1.1 of MIGRATION.md):
+#   - ruff check + ruff format (lint + format)
+#   - mypy (type check, currently lenient; will tighten as code is typed)
+#   - pytest + coverage (gate at 80%)
+#
+# This file is intentionally NOT a build config yet — the backend is still
+# imported as a flat `app` package via PYTHONPATH=. for the time being.
+# It will become a proper hatchling-built package in Phase 2.
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["build", "dist", ".venv", "venv"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",   # line-too-long — formatter handles wrapping; long literals are fine
+    "B008",   # function calls in default args (common FastAPI Depends pattern)
+    "SIM117", # nested with statements — sometimes clearer than combined
+    "RUF059", # unused-unpacked-variable — `for k, _ in items.items()` is idiomatic
+    "UP042",  # replace-str-enum — `class X(str, Enum)` is fine; StrEnum changes serialisation
+    "RUF002", # ambiguous-unicode-character-docstring — false positives on French
+    "RUF003", # ambiguous-unicode-character-comment — idem
+    "B904",   # raise-without-from — chain origin not always useful in our handlers
+    "B905",   # zip-without-explicit-strict — adds noise without catching real bugs here
+    "E402",   # module-import-not-at-top — used intentionally for late imports
+    "SIM105", # suppressible-exception — `try/except: pass` is sometimes clearer
+    # Stylistic checks deferred to a future tightening pass — keeping the
+    # baseline green so CI can fail on real regressions today.
+    "SIM102", # collapsible-if
+    "SIM103", # needless-bool
+    "SIM108", # if-else-block-instead-of-if-exp
+    "SIM113", # enumerate-for-loop
+    "C416",   # unnecessary-comprehension
+    "RUF007", # zip-instead-of-pairwise
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "B011",   # assert False — legit in tests
+    "SIM",    # over-zealous in test fixtures
+    "E741",   # `l` as a loop variable is fine in compact test code
+    "C416",   # `[x for x in xs]` is sometimes clearer than `list(xs)` in tests
+    "F841",   # locals kept for readability mid-test
+    "RUF043", # explicit match strings in pytest.raises are fine
+    "RUF015", # `next(iter(xs))` vs `xs[0]` is style
+]
+"app/providers/__init__.py" = ["F401"]  # re-exports
+"app/protocols/__init__.py" = ["F401"]  # re-exports
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# mypy — start lenient, tighten module-by-module as we annotate
+# ---------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.11"
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = false
+no_implicit_optional = true
+check_untyped_defs = false
+ignore_missing_imports = true
+# Pure-domain modules: keep them strictly typed
+[[tool.mypy.overrides]]
+module = [
+    "app.alto.*",
+    "app.jobs.correction_pipeline",
+    "app.jobs.runner",
+    "app.protocols.*",
+    "app.storage.output_writer",
+]
+disallow_untyped_defs = false  # promote to true once existing gaps are closed
+warn_return_any = true
+
+# Tests don't need strict typing
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+ignore_errors = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = [
+    "tests/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]

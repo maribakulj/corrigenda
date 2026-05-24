@@ -7,6 +7,7 @@ Proves:
   4. Hyphen pairs still correctly detected after normalization
   5. Rewriter round-trip preserves XML structure
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -35,8 +36,10 @@ def _write(tmp_path: Path, name: str, xml: str) -> Path:
 # Fixtures
 # ---------------------------------------------------------------------------
 
-def _make_alto(part1_content: str, hyp_content: str, part2_content: str,
-               subs_content: str = "dénonçait") -> str:
+
+def _make_alto(
+    part1_content: str, hyp_content: str, part2_content: str, subs_content: str = "dénonçait"
+) -> str:
     """Build minimal ALTO with PART1 (String + HYP) and PART2."""
     return f"""\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -74,6 +77,7 @@ def _make_alto(part1_content: str, hyp_content: str, part2_content: str,
 # ===========================================================================
 # Test 1: CONTENT="dénon-" + HYP="-" → "dénon-" (not "dénon--")
 # ===========================================================================
+
 
 class TestContentDashPlusHypDash:
     """CONTENT already has trailing dash + HYP adds another → single dash."""
@@ -116,6 +120,7 @@ class TestContentDashPlusHypDash:
 # Test 2: CONTENT="xxx" + HYP="\xad" → "xxx-" (normalized)
 # ===========================================================================
 
+
 class TestContentPlusSoftHyphen:
     """CONTENT without dash + HYP=soft-hyphen → normalized to single dash."""
 
@@ -141,6 +146,7 @@ class TestContentPlusSoftHyphen:
 # ===========================================================================
 # Test 3: CONTENT="xxx" + HYP="-" → "xxx-" (baseline, no change)
 # ===========================================================================
+
 
 class TestContentPlusHypDash:
     """Standard ALTO: CONTENT without dash + HYP="-" → "xxx-"."""

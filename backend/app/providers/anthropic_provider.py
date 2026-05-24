@@ -1,4 +1,5 @@
 """Anthropic provider implementation."""
+
 from __future__ import annotations
 
 import json
@@ -110,9 +111,7 @@ def _extract_anthropic_payload(
     """
     blocks = data.get("content")
     if not blocks or not isinstance(blocks, list):
-        raise ValueError(
-            f"Anthropic response missing 'content': {list(data.keys())}"
-        )
+        raise ValueError(f"Anthropic response missing 'content': {list(data.keys())}")
 
     # Preferred path: forced tool_use
     for block in blocks:

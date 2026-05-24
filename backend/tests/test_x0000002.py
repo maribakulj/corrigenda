@@ -9,12 +9,12 @@ Tests:
   - Slow path qualification
   - Non-regression: no incoherent pair after reconciliation
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from lxml import etree
 
 from app.alto.hyphenation import (
     ReconcileMetrics,
@@ -22,19 +22,18 @@ from app.alto.hyphenation import (
     reconcile_hyphen_pair,
 )
 from app.alto.parser import parse_alto_file
-from app.alto.rewriter import RewriterMetrics, rewrite_alto_file
+from app.alto.rewriter import rewrite_alto_file
 from app.schemas import HyphenRole
 
 X0000002_PATH = Path(__file__).resolve().parent.parent.parent / "examples" / "X0000002.xml"
 
-pytestmark = pytest.mark.skipif(
-    not X0000002_PATH.exists(), reason="X0000002.xml not found"
-)
+pytestmark = pytest.mark.skipif(not X0000002_PATH.exists(), reason="X0000002.xml not found")
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _all_lines(pages):
     return {lm.line_id: lm for pg in pages for lm in pg.lines}
@@ -42,6 +41,7 @@ def _all_lines(pages):
 
 def _reconcile_all_pairs(pages) -> ReconcileMetrics:
     from copy import copy
+
     metrics = ReconcileMetrics()
     for page in pages:
         line_by_id = {lm.line_id: lm for lm in page.lines}
@@ -55,7 +55,10 @@ def _reconcile_all_pairs(pages) -> ReconcileMetrics:
                 corrected_p2 = part2.corrected_text or part2.ocr_text
 
                 final_p1, final_p2, subs = reconcile_hyphen_pair(
-                    lm, part2, corrected_p1, corrected_p2,
+                    lm,
+                    part2,
+                    corrected_p1,
+                    corrected_p2,
                 )
                 lm.corrected_text = final_p1
                 lm.hyphen_subs_content = subs
@@ -63,9 +66,13 @@ def _reconcile_all_pairs(pages) -> ReconcileMetrics:
                 part2.hyphen_subs_content = subs
 
                 outcome = classify_reconcile_outcome(
-                    lm.ocr_text, part2.ocr_text,
-                    corrected_p1, corrected_p2,
-                    final_p1, final_p2, subs,
+                    lm.ocr_text,
+                    part2.ocr_text,
+                    corrected_p1,
+                    corrected_p2,
+                    final_p1,
+                    final_p2,
+                    subs,
                 )
             # BOTH forward pairs
             elif lm.hyphen_role == HyphenRole.BOTH and lm.hyphen_forward_pair_id:
@@ -81,7 +88,10 @@ def _reconcile_all_pairs(pages) -> ReconcileMetrics:
                 lm_as_p1.hyphen_source_explicit = lm.hyphen_forward_explicit
 
                 final_p1, final_p2, subs = reconcile_hyphen_pair(
-                    lm_as_p1, part2, corrected_p1, corrected_p2,
+                    lm_as_p1,
+                    part2,
+                    corrected_p1,
+                    corrected_p2,
                 )
                 lm.corrected_text = final_p1
                 lm.hyphen_forward_subs_content = subs
@@ -89,9 +99,13 @@ def _reconcile_all_pairs(pages) -> ReconcileMetrics:
                 part2.hyphen_subs_content = subs
 
                 outcome = classify_reconcile_outcome(
-                    lm.ocr_text, part2.ocr_text,
-                    corrected_p1, corrected_p2,
-                    final_p1, final_p2, subs,
+                    lm.ocr_text,
+                    part2.ocr_text,
+                    corrected_p1,
+                    corrected_p2,
+                    final_p1,
+                    final_p2,
+                    subs,
                 )
             else:
                 continue
@@ -108,6 +122,7 @@ def _reconcile_all_pairs(pages) -> ReconcileMetrics:
 # ===========================================================================
 # A. Structure parsing
 # ===========================================================================
+
 
 class TestX0000002Structure:
     """Verify parser extracts expected structure from X0000002.xml."""
@@ -130,8 +145,8 @@ class TestX0000002Structure:
         assert len(p1) == 104
         assert len(explicit) == 90
         assert len(heuristic) == 14
-        assert len(p2) == 100     # was 125, 25 moved to BOTH
-        assert len(both) == 26    # chained hyphenation lines
+        assert len(p2) == 100  # was 125, 25 moved to BOTH
+        assert len(both) == 26  # chained hyphenation lines
 
     def test_linked_pairs(self):
         """All PART1/BOTH lines with forward links have matching partners."""
@@ -140,7 +155,8 @@ class TestX0000002Structure:
 
         # PART1 forward links
         linked_p1 = [
-            lm for lm in lines.values()
+            lm
+            for lm in lines.values()
             if lm.hyphen_role == HyphenRole.PART1 and lm.hyphen_pair_line_id
         ]
         assert len(linked_p1) == 100
@@ -152,19 +168,23 @@ class TestX0000002Structure:
 
         # BOTH forward links
         linked_both = [
-            lm for lm in lines.values()
+            lm
+            for lm in lines.values()
             if lm.hyphen_role == HyphenRole.BOTH and lm.hyphen_forward_pair_id
         ]
         assert len(linked_both) == 26
 
         for lm in linked_both:
             partner = lines.get(lm.hyphen_forward_pair_id)
-            assert partner is not None, f"{lm.line_id} forward links to missing {lm.hyphen_forward_pair_id}"
+            assert partner is not None, (
+                f"{lm.line_id} forward links to missing {lm.hyphen_forward_pair_id}"
+            )
             assert partner.hyphen_role in (HyphenRole.PART2, HyphenRole.BOTH)
 
         # Zero unpaired PART2
         unpaired = [
-            lm for lm in lines.values()
+            lm
+            for lm in lines.values()
             if lm.hyphen_role == HyphenRole.PART2 and not lm.hyphen_pair_line_id
         ]
         assert len(unpaired) == 0
@@ -173,6 +193,7 @@ class TestX0000002Structure:
 # ===========================================================================
 # B. Double-dash / soft-hyphen normalization
 # ===========================================================================
+
 
 class TestSoftHyphenNormalization:
     """Verify soft-hyphen (\xad) is normalized to '-' in ocr_text."""
@@ -208,6 +229,7 @@ class TestSoftHyphenNormalization:
 # C. Sensitive zones
 # ===========================================================================
 
+
 class TestSensitiveZones:
     """Verify correct parsing of historically sensitive zones."""
 
@@ -238,7 +260,9 @@ class TestSensitiveZones:
         assert p1.ocr_text.endswith("pratica-")
 
         p2 = lines["PAG_00000002_TL000017"]
-        assert p2.hyphen_role == HyphenRole.BOTH  # chained: PART2 of praticables + PART1 of desservent
+        assert (
+            p2.hyphen_role == HyphenRole.BOTH
+        )  # chained: PART2 of praticables + PART1 of desservent
         assert p2.hyphen_subs_content == "praticables."  # backward subs
         assert p2.hyphen_forward_subs_content == "desservent"  # forward subs
 
@@ -270,13 +294,17 @@ class TestSensitiveZones:
 # D. Rewriter metrics — unchanged corpus
 # ===========================================================================
 
+
 class TestX0000002UnchangedRewrite:
     """No corrections applied → all lines untouched."""
 
     def test_all_untouched(self, tmp_path):
         pages, _ = parse_alto_file(X0000002_PATH, "X0000002.xml")
         _xml_bytes, metrics, _paths = rewrite_alto_file(
-            X0000002_PATH, pages, "test", "test-model",
+            X0000002_PATH,
+            pages,
+            "test",
+            "test-model",
         )
         assert metrics.total_lines == 566
         assert metrics.untouched == 566
@@ -288,6 +316,7 @@ class TestX0000002UnchangedRewrite:
 # ===========================================================================
 # E. Rewriter metrics — simulated corrections (fast/slow path)
 # ===========================================================================
+
 
 class TestX0000002SimulatedCorrections:
     """Apply targeted corrections to exercise rewriter paths."""
@@ -310,30 +339,36 @@ class TestX0000002SimulatedCorrections:
 
     def test_fast_path_real_correction(self, tmp_path):
         """Correction that changes text but keeps word count → fast path."""
-        pages = self._parse_and_correct({
-            "PAG_00000002_TL000011": "en cet état, presque tous les chemins RU",  # changed last word
-        })
+        pages = self._parse_and_correct(
+            {
+                "PAG_00000002_TL000011": "en cet état, presque tous les chemins RU",  # changed last word
+            }
+        )
         _, metrics, _paths = rewrite_alto_file(X0000002_PATH, pages, "test", "test-model")
         assert metrics.fast_path == 1
         assert metrics.slow_path == 0
 
     def test_slow_path_word_count_change(self, tmp_path):
         """Correction that changes word count → slow path."""
-        pages = self._parse_and_correct({
-            "PAG_00000002_TL000011": "en cet état presque tous les chemins ruraux vicinaux",  # more words
-        })
+        pages = self._parse_and_correct(
+            {
+                "PAG_00000002_TL000011": "en cet état presque tous les chemins ruraux vicinaux",  # more words
+            }
+        )
         _, metrics, _paths = rewrite_alto_file(X0000002_PATH, pages, "test", "test-model")
         assert metrics.slow_path == 1
 
     def test_mixed_paths(self, tmp_path):
         """Mix of unchanged, fast, and slow corrections."""
-        pages = self._parse_and_correct({
-            # Fast path: same word count, text changed
-            "PAG_00000002_TL000024": "cou s'ils y vont en voiture, à se donner UNE",
-            "PAG_00000002_TL000025": "entorse s'ils y vont à pieds!",
-            # Slow path: word count changed
-            "PAG_00000002_TL000026": "G. Dupont.",  # 1→2 words
-        })
+        pages = self._parse_and_correct(
+            {
+                # Fast path: same word count, text changed
+                "PAG_00000002_TL000024": "cou s'ils y vont en voiture, à se donner UNE",
+                "PAG_00000002_TL000025": "entorse s'ils y vont à pieds!",
+                # Slow path: word count changed
+                "PAG_00000002_TL000026": "G. Dupont.",  # 1→2 words
+            }
+        )
         _, metrics, _paths = rewrite_alto_file(X0000002_PATH, pages, "test", "test-model")
         assert metrics.fast_path == 2
         assert metrics.slow_path == 1
@@ -343,6 +378,7 @@ class TestX0000002SimulatedCorrections:
 # ===========================================================================
 # F. Reconciliation on real corpus — no incoherent pair
 # ===========================================================================
+
 
 class TestX0000002ReconcileInvariant:
     """After reconciliation, no mixed pair (one OCR, one corrected) exists."""
@@ -361,12 +397,10 @@ class TestX0000002ReconcileInvariant:
         lines = _all_lines(pages)
 
         # Correct both sides preserving structure
-        lines["PAG_00000002_TL000014"].corrected_text = (
-            "la municipalité prenne les mesures néces-"
-        )
-        lines["PAG_00000002_TL000015"].corrected_text = (
-            "saires pour y faire les réparations les plus"
-        )
+        lines["PAG_00000002_TL000014"].corrected_text = "la municipalité prenne les mesures néces-"
+        lines[
+            "PAG_00000002_TL000015"
+        ].corrected_text = "saires pour y faire les réparations les plus"
 
         rec = _reconcile_all_pairs(pages)
         # This specific pair should be coherent (join matches subs)
@@ -379,12 +413,12 @@ class TestX0000002ReconcileInvariant:
         lines = _all_lines(pages)
 
         # Make TL000033 (con-) incoherent: change boundary word
-        lines["PAG_00000002_TL000033"].corrected_text = (
-            'crient : « Vive la liberté ! » quand on con-'
-        )
-        lines["PAG_00000002_TL000034"].corrected_text = (
-            'tinue les patriotes qui crient : « Vive'  # con+tinue ≠ condamne
-        )
+        lines[
+            "PAG_00000002_TL000033"
+        ].corrected_text = "crient : « Vive la liberté ! » quand on con-"
+        lines[
+            "PAG_00000002_TL000034"
+        ].corrected_text = "tinue les patriotes qui crient : « Vive"  # con+tinue ≠ condamne
 
         _reconcile_all_pairs(pages)
 
@@ -400,6 +434,7 @@ class TestX0000002ReconcileInvariant:
 # ===========================================================================
 # G. Diagnostic report
 # ===========================================================================
+
 
 def test_x0000002_diagnostic_report(tmp_path, capsys):
     """Print diagnostic report for X0000002.xml."""

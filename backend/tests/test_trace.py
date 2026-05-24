@@ -1,4 +1,5 @@
 """Tests for Sprint 5bis — line trace pipeline."""
+
 from __future__ import annotations
 
 import asyncio
@@ -7,22 +8,19 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lxml import etree
 
 from app.alto.parser import build_document_manifest, parse_alto_file
 from app.alto.rewriter import extract_output_texts, rewrite_alto_file
 from app.jobs.orchestrator import run_job
-from app.jobs.store import job_store
+from app.jobs.store import JobStore
 from app.schemas import (
     HyphenRole,
     JobTrace,
-    LineStatus,
     LineTrace,
     ModelInfo,
     Provider,
 )
 from app.storage import (
-    get_output_files,
     init_job_dirs,
     output_dir,
     save_uploaded_files,
@@ -38,6 +36,7 @@ NS = "http://www.loc.gov/standards/alto/ns-v3#"
 # Mock providers
 # ---------------------------------------------------------------------------
 
+
 class IdentityProvider:
     """Returns each line's OCR text unchanged."""
 
@@ -45,8 +44,12 @@ class IdentityProvider:
         return [ModelInfo(id="mock", label="Mock")]
 
     async def complete_structured(
-        self, api_key: str, model: str, system_prompt: str,
-        user_payload: dict[str, Any], json_schema: dict[str, Any],
+        self,
+        api_key: str,
+        model: str,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        json_schema: dict[str, Any],
         temperature: float = 0.0,
     ) -> dict[str, Any]:
         return {
@@ -67,8 +70,12 @@ class CorrectionProvider:
         return [ModelInfo(id="mock", label="Mock")]
 
     async def complete_structured(
-        self, api_key: str, model: str, system_prompt: str,
-        user_payload: dict[str, Any], json_schema: dict[str, Any],
+        self,
+        api_key: str,
+        model: str,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        json_schema: dict[str, Any],
         temperature: float = 0.0,
     ) -> dict[str, Any]:
         lines_out = []
@@ -86,8 +93,12 @@ class DriftProvider:
         return [ModelInfo(id="mock", label="Mock")]
 
     async def complete_structured(
-        self, api_key: str, model: str, system_prompt: str,
-        user_payload: dict[str, Any], json_schema: dict[str, Any],
+        self,
+        api_key: str,
+        model: str,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        json_schema: dict[str, Any],
         temperature: float = 0.0,
     ) -> dict[str, Any]:
         return {
@@ -105,6 +116,7 @@ class DriftProvider:
 # Helper
 # ---------------------------------------------------------------------------
 
+
 def _run(coro):
     return asyncio.run(coro)
 
@@ -117,26 +129,30 @@ def _run_job_with_traces(
     if provider is None:
         provider = IdentityProvider()
 
-    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    store = JobStore()
+    job_id = store.create_job(Provider.OPENAI, "mock")
     init_job_dirs(job_id)
 
     saved, _ = save_uploaded_files(job_id, list(source_bytes.items()))
     doc = build_document_manifest([(p, n) for n, p in saved.items()])
-    job_store.update_job(job_id, document_manifest=doc)
+    store.update_job(job_id, document_manifest=doc)
 
     out_dir = output_dir(job_id)
-    _run(run_job(
-        job_id=job_id,
-        document_manifest=doc,
-        provider_name="openai",
-        api_key="fake-key",
-        model="mock",
-        output_dir=out_dir,
-        source_files={n: p for n, p in saved.items()},
-        provider=provider,
-    ))
+    _run(
+        run_job(
+            job_id=job_id,
+            document_manifest=doc,
+            provider_name="openai",
+            api_key="fake-key",
+            model="mock",
+            output_dir=out_dir,
+            source_files={n: p for n, p in saved.items()},
+            provider=provider,
+            job_store_override=store,
+        )
+    )
 
-    job = job_store.get_job(job_id)
+    job = store.get_job(job_id)
     # Build a line_id-keyed view (traces use composite page_id:line_id keys internally)
     by_line_id = {t.line_id: t for t in job.line_traces.values()}
     return job_id, by_line_id
@@ -146,8 +162,8 @@ def _run_job_with_traces(
 # Test 1: Normal line produces all 5 text states
 # ===========================================================================
 
-class TestTraceNormalLine:
 
+class TestTraceNormalLine:
     def test_identity_line_has_5_states(self):
         """A normal unchanged line produces all 5 text states."""
         job_id, traces = _run_job_with_traces(
@@ -169,9 +185,7 @@ class TestTraceNormalLine:
             {"sample.xml": SAMPLE_XML.read_bytes()},
         )
         for t in traces.values():
-            assert t.source_ocr_text == t.projected_text, (
-                f"{t.line_id}: source_ocr != projected"
-            )
+            assert t.source_ocr_text == t.projected_text, f"{t.line_id}: source_ocr != projected"
             assert t.source_ocr_text == t.output_alto_text, (
                 f"{t.line_id}: source_ocr != output_alto"
             )
@@ -183,7 +197,10 @@ class TestTraceNormalLine:
         )
         for t in traces.values():
             assert t.rewriter_path in (
-                "untouched", "subs_only", "fast_path", "slow_path",
+                "untouched",
+                "subs_only",
+                "fast_path",
+                "slow_path",
             ), f"{t.line_id}: bad rewriter_path={t.rewriter_path}"
 
 
@@ -191,8 +208,8 @@ class TestTraceNormalLine:
 # Test 2: Correction accepted — model_corrected differs from source
 # ===========================================================================
 
-class TestTraceCorrectionAccepted:
 
+class TestTraceCorrectionAccepted:
     def test_correction_distinguished(self):
         """A corrected line distinguishes source, model_corrected, projected."""
         # Parse sample to get a line_id
@@ -218,8 +235,8 @@ class TestTraceCorrectionAccepted:
 # Test 3: Drift guard fallback
 # ===========================================================================
 
-class TestTraceFallback:
 
+class TestTraceFallback:
     def test_drift_fallback_distinguished(self):
         """A drift-guarded line shows model_corrected != projected."""
         job_id, traces = _run_job_with_traces(
@@ -239,15 +256,17 @@ class TestTraceFallback:
             assert t.fallback_reason is not None
             # Fallback can be drift_guard or all_attempts_exhausted
             # depending on whether validator or drift guard catches it first
-            assert "drift_guard" in t.fallback_reason or "all_attempts_exhausted" in t.fallback_reason
+            assert (
+                "drift_guard" in t.fallback_reason or "all_attempts_exhausted" in t.fallback_reason
+            )
 
 
 # ===========================================================================
 # Test 4: trace.json file written
 # ===========================================================================
 
-class TestTraceJsonFile:
 
+class TestTraceJsonFile:
     def test_trace_json_exists(self):
         """trace.json is written to the output directory."""
         job_id, _ = _run_job_with_traces(
@@ -276,8 +295,8 @@ class TestTraceJsonFile:
 # Test 5: extract_output_texts consistency
 # ===========================================================================
 
-class TestExtractOutputTexts:
 
+class TestExtractOutputTexts:
     def test_no_double_dash(self):
         """output_alto_text doesn't introduce double-dash for HYP lines."""
         if not X0000002_PATH.exists():
@@ -285,19 +304,22 @@ class TestExtractOutputTexts:
 
         pages, _ = parse_alto_file(X0000002_PATH, "X0000002.xml")
         xml_bytes, _metrics, _paths = rewrite_alto_file(
-            X0000002_PATH, pages, "test", "test-model",
+            X0000002_PATH,
+            pages,
+            "test",
+            "test-model",
         )
 
         hyp_lines = {
-            lm.line_id for page in pages for lm in page.lines
+            lm.line_id
+            for page in pages
+            for lm in page.lines
             if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
         }
         output_texts = extract_output_texts(xml_bytes, hyp_lines)
 
         for lid, text in output_texts.items():
-            assert not text.endswith("--"), (
-                f"{lid}: output_alto_text ends with '--' (double dash)"
-            )
+            assert not text.endswith("--"), f"{lid}: output_alto_text ends with '--' (double dash)"
 
     def test_extract_matches_source_for_untouched(self):
         """For untouched lines, extracted output matches source OCR text."""
@@ -309,13 +331,14 @@ class TestExtractOutputTexts:
 
         # Rewrite without corrections (identity)
         xml_bytes, _m, _p = rewrite_alto_file(
-            X0000002_PATH, pages, "test", "test-model",
+            X0000002_PATH,
+            pages,
+            "test",
+            "test-model",
         )
         output_texts = extract_output_texts(xml_bytes, all_ids)
 
-        line_by_id = {
-            lm.line_id: lm for page in pages for lm in page.lines
-        }
+        line_by_id = {lm.line_id: lm for page in pages for lm in page.lines}
         for lid, otxt in output_texts.items():
             lm = line_by_id[lid]
             assert otxt == lm.ocr_text, (
@@ -327,8 +350,8 @@ class TestExtractOutputTexts:
 # Test 6: Hyphen and BOTH lines produce coherent traces
 # ===========================================================================
 
-class TestTraceHyphenLines:
 
+class TestTraceHyphenLines:
     def test_hyphen_traces_on_corpus(self):
         """Hyphen and BOTH lines on X0000002 get correct trace metadata."""
         if not X0000002_PATH.exists():
@@ -352,15 +375,9 @@ class TestTraceHyphenLines:
             assert t.output_alto_text is not None
 
         # PART1 and BOTH lines have correct hyphen_role
-        line_by_id = {
-            lm.line_id: lm for page in pages for lm in page.lines
-        }
-        part1_traces = [
-            t for t in traces.values() if t.hyphen_role == "HypPart1"
-        ]
-        both_traces = [
-            t for t in traces.values() if t.hyphen_role == "HypBoth"
-        ]
+        line_by_id = {lm.line_id: lm for page in pages for lm in page.lines}
+        part1_traces = [t for t in traces.values() if t.hyphen_role == "HypPart1"]
+        both_traces = [t for t in traces.values() if t.hyphen_role == "HypBoth"]
         assert len(part1_traces) > 0
         assert len(both_traces) > 0
 
@@ -386,6 +403,5 @@ class TestTraceHyphenLines:
         )
         for t in traces.values():
             assert t.source_ocr_text == t.output_alto_text, (
-                f"{t.line_id}: source={t.source_ocr_text!r} "
-                f"!= output={t.output_alto_text!r}"
+                f"{t.line_id}: source={t.source_ocr_text!r} != output={t.output_alto_text!r}"
             )

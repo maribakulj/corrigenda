@@ -1,14 +1,10 @@
 """Tests for FastAPI routes."""
+
 from __future__ import annotations
 
 import asyncio
-import io
-import json
-import time
-import zipfile
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,6 +22,7 @@ SAMPLE_XML = Path(__file__).parent.parent.parent / "examples" / "sample.xml"
 # MockProvider (same as test_orchestrator, local copy)
 # ---------------------------------------------------------------------------
 
+
 class MockProvider:
     async def list_models(self, api_key: str) -> list[ModelInfo]:
         return [ModelInfo(id="mock-model", label="Mock Model")]
@@ -41,15 +38,18 @@ class MockProvider:
     ) -> dict[str, Any]:
         lines_out = []
         for line_in in user_payload.get("lines", []):
-            lines_out.append({
-                "line_id": line_in["line_id"],
-                "corrected_text": line_in["ocr_text"],
-            })
+            lines_out.append(
+                {
+                    "line_id": line_in["line_id"],
+                    "corrected_text": line_in["ocr_text"],
+                }
+            )
         return {"lines": lines_out}
 
 
 class BadKeyProvider:
     """Always raises on list_models."""
+
     async def list_models(self, api_key: str) -> list[ModelInfo]:
         raise ValueError("Invalid API key")
 
@@ -61,11 +61,12 @@ class BadKeyProvider:
 # App fixture with patched provider registry
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def client():
     """TestClient with MockProvider injected into the provider registry."""
-    from app.main import create_app
     from app import providers as prov_module
+    from app.main import create_app
 
     mock = MockProvider()
     orig_registry = prov_module._REGISTRY.copy()
@@ -83,8 +84,8 @@ def client():
 @pytest.fixture()
 def bad_key_client():
     """TestClient with BadKeyProvider."""
-    from app.main import create_app
     from app import providers as prov_module
+    from app.main import create_app
 
     bad = BadKeyProvider()
     orig_registry = prov_module._REGISTRY.copy()
@@ -102,6 +103,7 @@ def bad_key_client():
 # Helper
 # ---------------------------------------------------------------------------
 
+
 def _sample_xml_upload(filename: str = "sample.xml"):
     return ("files", (filename, SAMPLE_XML.read_bytes(), "application/xml"))
 
@@ -118,6 +120,7 @@ def _form_fields(provider: str = "openai") -> dict:
 # test_list_models_invalid_provider
 # ---------------------------------------------------------------------------
 
+
 def test_list_models_invalid_provider(client: TestClient):
     resp = client.post(
         "/api/providers/models",
@@ -129,6 +132,7 @@ def test_list_models_invalid_provider(client: TestClient):
 # ---------------------------------------------------------------------------
 # test_list_models_bad_api_key
 # ---------------------------------------------------------------------------
+
 
 def test_list_models_bad_api_key(bad_key_client: TestClient):
     resp = bad_key_client.post(
@@ -142,6 +146,7 @@ def test_list_models_bad_api_key(bad_key_client: TestClient):
 # ---------------------------------------------------------------------------
 # test_create_job_no_files
 # ---------------------------------------------------------------------------
+
 
 def test_create_job_no_files(client: TestClient):
     resp = client.post(
@@ -157,6 +162,7 @@ def test_create_job_no_files(client: TestClient):
 # test_create_job_invalid_extension
 # ---------------------------------------------------------------------------
 
+
 def test_create_job_invalid_extension(client: TestClient):
     resp = client.post(
         "/api/jobs",
@@ -170,6 +176,7 @@ def test_create_job_invalid_extension(client: TestClient):
 # ---------------------------------------------------------------------------
 # test_create_job_valid_xml
 # ---------------------------------------------------------------------------
+
 
 def test_create_job_valid_xml(client: TestClient):
     resp = client.post(
@@ -187,6 +194,7 @@ def test_create_job_valid_xml(client: TestClient):
 # test_get_job_unknown
 # ---------------------------------------------------------------------------
 
+
 def test_get_job_unknown(client: TestClient):
     resp = client.get("/api/jobs/nonexistent-id-xyz")
     assert resp.status_code == 404
@@ -195,6 +203,7 @@ def test_get_job_unknown(client: TestClient):
 # ---------------------------------------------------------------------------
 # test_get_job_known
 # ---------------------------------------------------------------------------
+
 
 def test_get_job_known(client: TestClient):
     # Create a job first
@@ -218,12 +227,12 @@ def test_get_job_known(client: TestClient):
 # test_download_not_ready
 # ---------------------------------------------------------------------------
 
+
 def test_download_not_ready(client: TestClient):
     # Create job but do NOT wait for completion
-    from app.jobs.store import job_store
     from app.schemas import Provider
 
-    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    job_id = client.app.state.job_store.create_job(Provider.OPENAI, "mock")
     resp = client.get(f"/api/jobs/{job_id}/download")
     assert resp.status_code == 404
 
@@ -232,22 +241,21 @@ def test_download_not_ready(client: TestClient):
 # test_download_single_xml
 # ---------------------------------------------------------------------------
 
+
 def test_download_single_xml(client: TestClient):
     """Complete a job synchronously then download the output XML."""
-    import asyncio
-    from app.jobs.store import job_store
-    from app.jobs.orchestrator import run_job
     from app.alto.parser import build_document_manifest
+    from app.jobs.orchestrator import run_job
     from app.storage import init_job_dirs, output_dir, save_uploaded_files
-    from app import providers as prov_module
 
+    store = client.app.state.job_store
     provider_enum = Provider.OPENAI
-    job_id = job_store.create_job(provider_enum, "mock")
+    job_id = store.create_job(provider_enum, "mock")
     init_job_dirs(job_id)
 
     saved, _ = save_uploaded_files(job_id, [(SAMPLE_XML.name, SAMPLE_XML.read_bytes())])
     doc = build_document_manifest([(p, n) for n, p in saved.items()])
-    job_store.update_job(job_id, document_manifest=doc)
+    store.update_job(job_id, document_manifest=doc)
 
     out_dir = output_dir(job_id)
 
@@ -261,6 +269,7 @@ def test_download_single_xml(client: TestClient):
             output_dir=out_dir,
             source_files={n: p for n, p in saved.items()},
             provider=MockProvider(),
+            job_store_override=store,
         )
     )
 
@@ -269,6 +278,7 @@ def test_download_single_xml(client: TestClient):
     assert resp.headers["content-type"].startswith("application/xml")
     # Must be valid XML
     from lxml import etree
+
     etree.fromstring(resp.content)
 
 
@@ -276,15 +286,16 @@ def test_download_single_xml(client: TestClient):
 # test_sse_endpoint_exists
 # ---------------------------------------------------------------------------
 
+
 def test_sse_endpoint_exists(client: TestClient):
     """SSE endpoint returns 200 and streams events; terminates if job is done."""
-    from app.jobs.store import job_store
     from app.schemas import JobStatus
 
-    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    store = client.app.state.job_store
+    job_id = store.create_job(Provider.OPENAI, "mock")
 
     # Mark job as already completed so stream_events exits immediately
-    job_store.update_job(job_id, status=JobStatus.COMPLETED)
+    store.update_job(job_id, status=JobStatus.COMPLETED)
 
     resp = client.get(f"/api/jobs/{job_id}/events")
     assert resp.status_code == 200

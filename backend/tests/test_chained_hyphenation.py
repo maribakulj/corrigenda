@@ -6,24 +6,22 @@ Tests:
   - Real X0000002.xml chained zone (pratica-/bles./des-/servent)
   - Diagnostic text traces: source OCR → model corrected → projected → output ALTO
 """
+
 from __future__ import annotations
 
 from copy import copy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import pytest
 from lxml import etree
 
 from app.alto.hyphenation import (
-    ReconcileMetrics,
-    classify_reconcile_outcome,
     reconcile_hyphen_pair,
 )
 from app.alto.parser import parse_alto_file
-from app.alto.rewriter import RewriterMetrics, rewrite_alto_file, _extract_text_from_line, _tag
-from app.schemas import Coords, HyphenRole, LineManifest
+from app.alto.rewriter import _extract_text_from_line, rewrite_alto_file
+from app.schemas import HyphenRole
 
 NS = "http://www.loc.gov/standards/alto/ns-v3#"
 
@@ -36,19 +34,22 @@ def _ns(local: str) -> str:
 # Diagnostic trace dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class LineTrace:
     """Diagnostic trace for a single line through the pipeline."""
+
     line_id: str
-    source_ocr_text: str           # text extracted from ALTO source
-    model_corrected_text: str      # text returned by LLM (simulated)
-    projected_text: str            # text retained after reconciliation, before rewrite
-    output_alto_text: str          # text re-extracted from output ALTO
+    source_ocr_text: str  # text extracted from ALTO source
+    model_corrected_text: str  # text returned by LLM (simulated)
+    projected_text: str  # text retained after reconciliation, before rewrite
+    output_alto_text: str  # text re-extracted from output ALTO
 
 
 # ---------------------------------------------------------------------------
 # ALTO fixture builder
 # ---------------------------------------------------------------------------
+
 
 def _alto_xml(textlines_xml: str) -> str:
     return f"""\
@@ -81,6 +82,7 @@ def _write_fixture(tmp_path: Path, name: str, content: str) -> Path:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _extract_output_text(root, line_id: str) -> str:
     """Re-extract text from output ALTO for a given line."""
     tl = root.find(f".//{_ns('TextLine')}[@ID='{line_id}']")
@@ -89,7 +91,7 @@ def _extract_output_text(root, line_id: str) -> str:
     return _extract_text_from_line(tl, NS)
 
 
-def _get_subs(root, line_id: str, position: str) -> tuple[Optional[str], Optional[str]]:
+def _get_subs(root, line_id: str, position: str) -> tuple[str | None, str | None]:
     tl = root.find(f".//{_ns('TextLine')}[@ID='{line_id}']")
     if tl is None:
         return None, None
@@ -136,6 +138,7 @@ CHAINED_XML = _alto_xml("""\
 # Test 1: Simple PART1-only
 # ===========================================================================
 
+
 class TestSimplePart1:
     def test_part1_only_detected(self, tmp_path):
         xml = _alto_xml("""\
@@ -166,6 +169,7 @@ class TestSimplePart1:
 # Test 2: Simple PART2-only (no forward hyphen)
 # ===========================================================================
 
+
 class TestSimplePart2:
     def test_part2_only_detected(self, tmp_path):
         xml = _alto_xml("""\
@@ -193,6 +197,7 @@ class TestSimplePart2:
 # ===========================================================================
 # Test 3: Chained hyphenation — BOTH role detection
 # ===========================================================================
+
 
 class TestChainedDetection:
     def test_both_role_detected(self, tmp_path):
@@ -236,6 +241,7 @@ class TestChainedDetection:
 # Test 4: Chained reconciliation — coherent chain
 # ===========================================================================
 
+
 class TestChainedReconciliation:
     def test_coherent_chain(self, tmp_path):
         """Both pairs in the chain are coherent after correction."""
@@ -251,7 +257,10 @@ class TestChainedReconciliation:
         # Reconcile pair 1: TL1 (PART1) → TL2 (BOTH backward)
         p1, p2 = lines["TL1"], lines["TL2"]
         final_p1, final_p2, subs1 = reconcile_hyphen_pair(
-            p1, p2, p1.corrected_text, p2.corrected_text,
+            p1,
+            p2,
+            p1.corrected_text,
+            p2.corrected_text,
         )
         p1.corrected_text = final_p1
         p1.hyphen_subs_content = subs1
@@ -266,8 +275,10 @@ class TestChainedReconciliation:
         p2_as_p1.hyphen_source_explicit = p2.hyphen_forward_explicit
 
         final_p2b, final_p3, subs2 = reconcile_hyphen_pair(
-            p2_as_p1, lines["TL3"],
-            p2.corrected_text, lines["TL3"].corrected_text,
+            p2_as_p1,
+            lines["TL3"],
+            p2.corrected_text,
+            lines["TL3"].corrected_text,
         )
         p2.corrected_text = final_p2b
         p2.hyphen_forward_subs_content = subs2
@@ -297,8 +308,10 @@ class TestChainedReconciliation:
         p2_as_p1.hyphen_source_explicit = p2.hyphen_forward_explicit
 
         final_p2b, final_p3, subs2 = reconcile_hyphen_pair(
-            p2_as_p1, lines["TL3"],
-            p2.corrected_text, lines["TL3"].corrected_text,
+            p2_as_p1,
+            lines["TL3"],
+            p2.corrected_text,
+            lines["TL3"].corrected_text,
         )
         # Forward pair falls back
         assert subs2 is None
@@ -309,6 +322,7 @@ class TestChainedReconciliation:
 # ===========================================================================
 # Test 5: Chained rewriting — SUBS on both ends of BOTH line
 # ===========================================================================
+
 
 class TestChainedRewriting:
     def test_both_line_subs_on_both_strings(self, tmp_path):
@@ -368,7 +382,8 @@ class TestX0000002ChainedZone:
         lines = {lm.line_id: lm for pg in pages for lm in pg.lines}
 
         unpaired = [
-            lm for lm in lines.values()
+            lm
+            for lm in lines.values()
             if lm.hyphen_role == HyphenRole.PART2 and not lm.hyphen_pair_line_id
         ]
         assert len(unpaired) == 0, f"Orphan PART2: {[lm.line_id for lm in unpaired]}"
@@ -377,6 +392,7 @@ class TestX0000002ChainedZone:
 # ===========================================================================
 # Test 7: Diagnostic text traces
 # ===========================================================================
+
 
 class TestDiagnosticTraces:
     """Verify text traces through the pipeline for a chained case."""
@@ -410,7 +426,10 @@ class TestDiagnosticTraces:
         # 3. Reconcile pair 1
         p1, p2 = lines["TL1"], lines["TL2"]
         final_p1, final_p2, subs1 = reconcile_hyphen_pair(
-            p1, p2, p1.corrected_text, p2.corrected_text,
+            p1,
+            p2,
+            p1.corrected_text,
+            p2.corrected_text,
         )
         p1.corrected_text = final_p1
         p1.hyphen_subs_content = subs1
@@ -424,8 +443,10 @@ class TestDiagnosticTraces:
         p2_as_p1.hyphen_source_explicit = p2.hyphen_forward_explicit
 
         final_p2b, final_p3, subs2 = reconcile_hyphen_pair(
-            p2_as_p1, lines["TL3"],
-            p2.corrected_text, lines["TL3"].corrected_text,
+            p2_as_p1,
+            lines["TL3"],
+            p2.corrected_text,
+            lines["TL3"].corrected_text,
         )
         p2.corrected_text = final_p2b
         p2.hyphen_forward_subs_content = subs2

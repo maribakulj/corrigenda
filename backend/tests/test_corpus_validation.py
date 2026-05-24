@@ -11,6 +11,7 @@ Covers:
   - Rewriter path distribution metrics
   - No incoherent pair survives reconciliation
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,7 +26,7 @@ from app.alto.hyphenation import (
 )
 from app.alto.parser import parse_alto_file
 from app.alto.rewriter import RewriterMetrics, rewrite_alto_file
-from app.schemas import Coords, HyphenRole, LineManifest
+from app.schemas import HyphenRole
 
 NS = "http://www.loc.gov/standards/alto/ns-v3#"
 
@@ -37,6 +38,7 @@ def _ns(local: str) -> str:
 # ---------------------------------------------------------------------------
 # ALTO fixture builder
 # ---------------------------------------------------------------------------
+
 
 def _alto_xml(textlines_xml: str, page_id: str = "P1", block_id: str = "TB1") -> str:
     return f"""\
@@ -71,8 +73,10 @@ def _write_fixture(tmp_path: Path, name: str, content: str) -> Path:
 # Helpers for end-to-end simulation
 # ---------------------------------------------------------------------------
 
+
 def _simulate_corrections(
-    pages, corrections: dict[str, str | None],
+    pages,
+    corrections: dict[str, str | None],
 ) -> None:
     """Apply simulated LLM corrections to parsed pages."""
     for page in pages:
@@ -96,7 +100,10 @@ def _reconcile_all_pairs(pages) -> ReconcileMetrics:
             corrected_p2 = part2.corrected_text or part2.ocr_text
 
             final_p1, final_p2, subs = reconcile_hyphen_pair(
-                lm, part2, corrected_p1, corrected_p2,
+                lm,
+                part2,
+                corrected_p1,
+                corrected_p2,
             )
             lm.corrected_text = final_p1
             lm.hyphen_subs_content = subs
@@ -104,9 +111,12 @@ def _reconcile_all_pairs(pages) -> ReconcileMetrics:
             part2.hyphen_subs_content = subs
 
             outcome = classify_reconcile_outcome(
-                lm.ocr_text, part2.ocr_text,
-                corrected_p1, corrected_p2,
-                final_p1, final_p2,
+                lm.ocr_text,
+                part2.ocr_text,
+                corrected_p1,
+                corrected_p2,
+                final_p1,
+                final_p2,
                 subs,
             )
             if outcome == "coherent":
@@ -119,7 +129,9 @@ def _reconcile_all_pairs(pages) -> ReconcileMetrics:
 
 
 def _rewrite_and_parse(
-    xml_path: Path, pages, tmp_path: Path,
+    xml_path: Path,
+    pages,
+    tmp_path: Path,
 ) -> tuple[etree._Element, RewriterMetrics]:
     """Rewrite and return (root_element, metrics)."""
     xml_bytes, metrics, _paths = rewrite_alto_file(xml_path, pages, "test", "test-model")
@@ -170,10 +182,13 @@ class TestNecessaires:
         xml_path = _write_fixture(tmp_path, "neces.xml", NECES_SAIRES_XML)
         pages, _ = parse_alto_file(xml_path, "neces.xml")
 
-        _simulate_corrections(pages, {
-            "TL1": "Il néces-",
-            "TL2": "saires pour vivre.",
-        })
+        _simulate_corrections(
+            pages,
+            {
+                "TL1": "Il néces-",
+                "TL2": "saires pour vivre.",
+            },
+        )
         rec = _reconcile_all_pairs(pages)
         assert rec.coherent == 1
         assert rec.fallback == 0
@@ -189,10 +204,13 @@ class TestNecessaires:
         xml_path = _write_fixture(tmp_path, "neces.xml", NECES_SAIRES_XML)
         pages, _ = parse_alto_file(xml_path, "neces.xml")
 
-        _simulate_corrections(pages, {
-            "TL1": "Il nécessaires",  # fusion: full word on PART1
-            "TL2": "pour vivre.",     # PART2 lost its first word
-        })
+        _simulate_corrections(
+            pages,
+            {
+                "TL1": "Il nécessaires",  # fusion: full word on PART1
+                "TL2": "pour vivre.",  # PART2 lost its first word
+            },
+        )
         rec = _reconcile_all_pairs(pages)
         assert rec.fallback == 1
         assert rec.coherent == 0
@@ -210,10 +228,13 @@ class TestNecessaires:
         xml_path = _write_fixture(tmp_path, "neces.xml", NECES_SAIRES_XML)
         pages, _ = parse_alto_file(xml_path, "neces.xml")
 
-        _simulate_corrections(pages, {
-            "TL1": "Il néces- saires pour vivre.",  # absorbed PART2
-            "TL2": "",
-        })
+        _simulate_corrections(
+            pages,
+            {
+                "TL1": "Il néces- saires pour vivre.",  # absorbed PART2
+                "TL2": "",
+            },
+        )
         rec = _reconcile_all_pairs(pages)
         assert rec.fallback == 1
 
@@ -247,10 +268,13 @@ class TestCondamne:
         xml_path = _write_fixture(tmp_path, "cond.xml", CONDAMNE_XML)
         pages, _ = parse_alto_file(xml_path, "cond.xml")
 
-        _simulate_corrections(pages, {
-            "TL1": "On con-",
-            "TL2": "damne le tyran.",
-        })
+        _simulate_corrections(
+            pages,
+            {
+                "TL1": "On con-",
+                "TL2": "damne le tyran.",
+            },
+        )
         rec = _reconcile_all_pairs(pages)
         assert rec.coherent == 1
 
@@ -264,10 +288,13 @@ class TestCondamne:
         xml_path = _write_fixture(tmp_path, "cond.xml", CONDAMNE_XML)
         pages, _ = parse_alto_file(xml_path, "cond.xml")
 
-        _simulate_corrections(pages, {
-            "TL1": "On con-",
-            "TL2": "tinue le tyran.",  # con+tinue ≠ condamne
-        })
+        _simulate_corrections(
+            pages,
+            {
+                "TL1": "On con-",
+                "TL2": "tinue le tyran.",  # con+tinue ≠ condamne
+            },
+        )
         rec = _reconcile_all_pairs(pages)
         assert rec.fallback == 1
 
@@ -301,10 +328,13 @@ class TestPraticables:
         xml_path = _write_fixture(tmp_path, "prat.xml", PRATICABLES_XML)
         pages, _ = parse_alto_file(xml_path, "prat.xml")
 
-        _simulate_corrections(pages, {
-            "TL1": "Les routes pratica-",
-            "TL2": "bles sont rares.",
-        })
+        _simulate_corrections(
+            pages,
+            {
+                "TL1": "Les routes pratica-",
+                "TL2": "bles sont rares.",
+            },
+        )
         rec = _reconcile_all_pairs(pages)
         # Heuristic → subs_content=None → neutralised
         assert rec.neutralised == 1
@@ -321,10 +351,13 @@ class TestPraticables:
         xml_path = _write_fixture(tmp_path, "prat.xml", PRATICABLES_XML)
         pages, _ = parse_alto_file(xml_path, "prat.xml")
 
-        _simulate_corrections(pages, {
-            "TL1": "Les routes pratica-",
-            "TL2": "urgentes sont rares.",  # "bles" → "urgentes" = diverged
-        })
+        _simulate_corrections(
+            pages,
+            {
+                "TL1": "Les routes pratica-",
+                "TL2": "urgentes sont rares.",  # "bles" → "urgentes" = diverged
+            },
+        )
         rec = _reconcile_all_pairs(pages)
         assert rec.fallback == 1
 
@@ -333,10 +366,13 @@ class TestPraticables:
         xml_path = _write_fixture(tmp_path, "prat.xml", PRATICABLES_XML)
         pages, _ = parse_alto_file(xml_path, "prat.xml")
 
-        _simulate_corrections(pages, {
-            "TL1": "Les routes praticables",  # no dash
-            "TL2": "sont rares.",
-        })
+        _simulate_corrections(
+            pages,
+            {
+                "TL1": "Les routes praticables",  # no dash
+                "TL2": "sont rares.",
+            },
+        )
         rec = _reconcile_all_pairs(pages)
         assert rec.fallback == 1
 
@@ -361,14 +397,18 @@ class TestSampleCorpus:
 
         # Explicit pairs
         explicit_p1 = [
-            lm for p in pages for lm in p.lines
+            lm
+            for p in pages
+            for lm in p.lines
             if lm.hyphen_role == HyphenRole.PART1 and lm.hyphen_source_explicit
         ]
         assert len(explicit_p1) == 2  # TL4 (dénon-) and TL8 (fonda-)
 
         # Heuristic pair
         heuristic_p1 = [
-            lm for p in pages for lm in p.lines
+            lm
+            for p in pages
+            for lm in p.lines
             if lm.hyphen_role == HyphenRole.PART1 and not lm.hyphen_source_explicit
         ]
         assert len(heuristic_p1) == 1  # TL6 (bouleYerse-)
@@ -389,7 +429,7 @@ class TestSampleCorpus:
 
         # Corrections that preserve word count (fast path)
         fast_path_corrections = {
-            "TL1": "HISTOIRE DE LA RÉVOLUTION",        # fix RÉVOLUTIOM
+            "TL1": "HISTOIRE DE LA RÉVOLUTION",  # fix RÉVOLUTIOM
             "TL2": "La France traversa une période troublée.",  # fix Frauce, uue, tronblée
             "TL3": "Les citoyens se soulevèrent contre l'oppression.",  # fix citoyeus etc
             "TL5": "çait les abus du pouvoir absolu.",  # fix pouvolr
@@ -415,12 +455,19 @@ class TestSampleCorpus:
         assert rw_metrics.fast_path > 0
         # Slow path should be minimal or zero with careful corrections
         # Untouched should be any lines where text didn't change
-        assert rw_metrics.untouched + rw_metrics.fast_path + rw_metrics.slow_path + rw_metrics.subs_only == 10
+        assert (
+            rw_metrics.untouched
+            + rw_metrics.fast_path
+            + rw_metrics.slow_path
+            + rw_metrics.subs_only
+            == 10
+        )
 
 
 # ===========================================================================
 # Invariant: no incoherent pair survives
 # ===========================================================================
+
 
 class TestIncoherentPairInvariant:
     """
@@ -435,10 +482,13 @@ class TestIncoherentPairInvariant:
         pages, _ = parse_alto_file(xml_path, "neces.xml")
 
         # Simulate: PART1 corrected, PART2 has different boundary word
-        _simulate_corrections(pages, {
-            "TL1": "Il néces-",
-            "TL2": "urgentes pour vivre.",  # boundary diverged from "saires"
-        })
+        _simulate_corrections(
+            pages,
+            {
+                "TL1": "Il néces-",
+                "TL2": "urgentes pour vivre.",  # boundary diverged from "saires"
+            },
+        )
         _reconcile_all_pairs(pages)
 
         # Verify: both sides must be OCR (fallback)
@@ -454,10 +504,13 @@ class TestIncoherentPairInvariant:
         xml_path = _write_fixture(tmp_path, "cond.xml", CONDAMNE_XML)
         pages, _ = parse_alto_file(xml_path, "cond.xml")
 
-        _simulate_corrections(pages, {
-            "TL1": "On condamne",  # fusion: full word, no dash
-            "TL2": "le tyran.",
-        })
+        _simulate_corrections(
+            pages,
+            {
+                "TL1": "On condamne",  # fusion: full word, no dash
+                "TL2": "le tyran.",
+            },
+        )
         _reconcile_all_pairs(pages)
 
         line_by_id = {lm.line_id: lm for p in pages for lm in p.lines}
@@ -468,6 +521,7 @@ class TestIncoherentPairInvariant:
 # ===========================================================================
 # Rewriter path tests: unchanged line stays XML-identical
 # ===========================================================================
+
 
 class TestUnchangedLineIdentity:
     """Lines with no correction must be byte-identical in output."""
@@ -497,6 +551,7 @@ class TestUnchangedLineIdentity:
 # ===========================================================================
 # Rewriter path: fast path preserves attributes
 # ===========================================================================
+
 
 class TestFastPathPreservation:
     """Fast path (word count same) only changes CONTENT, preserves all else."""
@@ -533,6 +588,7 @@ class TestFastPathPreservation:
 # Rewriter path: slow path observable
 # ===========================================================================
 
+
 class TestSlowPathObservable:
     """Slow path triggered when word count changes — metric is observable."""
 
@@ -562,6 +618,7 @@ class TestSlowPathObservable:
 # ===========================================================================
 # Diagnostic report: aggregate metrics from sample.xml
 # ===========================================================================
+
 
 @pytest.mark.skipif(not SAMPLE_XML_PATH.exists(), reason="sample.xml not found")
 def test_diagnostic_report(tmp_path, capsys):

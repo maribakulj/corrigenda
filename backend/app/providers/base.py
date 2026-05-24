@@ -1,4 +1,5 @@
 """Shared protocol, system prompt, and JSON schema for all LLM providers."""
+
 from __future__ import annotations
 
 import json
@@ -72,6 +73,7 @@ te sont fournis à titre indicatif uniquement pour le contexte.\
 # Protocol
 # ---------------------------------------------------------------------------
 
+
 @runtime_checkable
 class BaseProvider(Protocol):
     async def list_models(self, api_key: str) -> list[ModelInfo]: ...
@@ -91,6 +93,7 @@ class BaseProvider(Protocol):
 # HTTP helper for concrete providers
 # ---------------------------------------------------------------------------
 
+
 async def call_llm(
     *,
     url: str,
@@ -107,13 +110,21 @@ async def call_llm(
     """
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            url, headers=headers, json=body, params=params, timeout=timeout,
+            url,
+            headers=headers,
+            json=body,
+            params=params,
+            timeout=timeout,
         )
 
         if resp.status_code in (400, 422) and fallback_body is not None:
             logger.info("Schema rejected (%s) — retrying with fallback body", resp.status_code)
             resp = await client.post(
-                url, headers=headers, json=fallback_body, params=params, timeout=timeout,
+                url,
+                headers=headers,
+                json=fallback_body,
+                params=params,
+                timeout=timeout,
             )
 
         resp.raise_for_status()

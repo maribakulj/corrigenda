@@ -1,4 +1,5 @@
 """FastAPI application entry point."""
+
 from __future__ import annotations
 
 import os
@@ -12,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.jobs import router as jobs_router
 from app.api.providers import router as providers_router
+from app.jobs.store import JobStore
 
 # Resolved once at import time — same process for the lifetime of the container
 _STATIC_DIR = Path(__file__).parent.parent / "static"
@@ -22,6 +24,7 @@ _INDEX_HTML = _STATIC_DIR / "index.html"
 # Lifespan
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
@@ -31,6 +34,7 @@ async def lifespan(app: FastAPI):
 # App factory
 # ---------------------------------------------------------------------------
 
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="ALTO LLM Corrector",
@@ -39,17 +43,18 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Bind infrastructure to app.state for dependency injection.
+    # Endpoints reach this through `Depends(get_job_store)` rather than
+    # importing a module-level singleton — see app/api/deps.py.
+    app.state.job_store = JobStore()
+
     # ------------------------------------------------------------------
     # CORS
     # Origins are configurable via CORS_ORIGINS env var (comma-separated).
     # Default: wildcard. No credentials — NEVER combine allow_credentials
     # with allow_origins=["*"] (Starlette raises ValueError).
     # ------------------------------------------------------------------
-    cors_origins = [
-        o.strip()
-        for o in os.environ.get("CORS_ORIGINS", "*").split(",")
-        if o.strip()
-    ]
+    cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,

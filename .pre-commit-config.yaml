@@ -1,0 +1,38 @@
+# Pre-commit hooks for alto-llm-corrector.
+# Install with: pre-commit install
+#
+# All hooks run on changed files only — fast enough to run on every commit.
+# CI re-runs the full suite on every push.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.14
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        files: ^backend/app/
+        args: [--config-file=backend/pyproject.toml, --explicit-package-bases]
+        additional_dependencies:
+          - pydantic>=2.0
+          - lxml>=5.0
+          - httpx>=0.27
+          - fastapi>=0.115

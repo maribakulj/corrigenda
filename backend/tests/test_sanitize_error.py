@@ -1,12 +1,13 @@
 """Tests for orchestrator._sanitize_error (T-005, B-010 regression)."""
+
 from __future__ import annotations
 
-from app.jobs.orchestrator import _sanitize_error
-
+from app.jobs.correction_pipeline import sanitize_error as _sanitize_error
 
 # ---------------------------------------------------------------------------
 # Regex-based stripping
 # ---------------------------------------------------------------------------
+
 
 def test_strips_bearer_token():
     msg = "401 Unauthorized: Bearer sk-abcdefghijklmnop"
@@ -42,6 +43,7 @@ def test_handles_multiple_tokens_in_one_message():
 # api_key parameter
 # ---------------------------------------------------------------------------
 
+
 def test_masks_user_supplied_api_key():
     api_key = "user-secret-key-12345"
     msg = f"Request failed with {api_key} in payload"
@@ -55,7 +57,7 @@ def test_short_api_key_not_masked():
     """An api_key under 9 chars is too short to be safely partial-masked
     (could mask non-key substrings). The function ignores it."""
     api_key = "shortkey"  # 8 chars — at the boundary
-    msg = f"Bad request for shortkey provided"
+    msg = "Bad request for shortkey provided"
     out = _sanitize_error(msg, api_key=api_key)
     # Behavior: the literal short api_key is left intact.
     assert "shortkey" in out
@@ -70,6 +72,7 @@ def test_no_api_key_passes_message_through():
 # ---------------------------------------------------------------------------
 # B-010 regression — the caller in run_job must sanitize BEFORE truncating
 # ---------------------------------------------------------------------------
+
 
 def test_truncate_then_sanitize_loses_partial_key():
     """Documents the OLD broken ordering that B-010 fixed.
@@ -101,6 +104,7 @@ def test_truncate_then_sanitize_loses_partial_key():
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
+
 
 def test_empty_message():
     assert _sanitize_error("") == ""

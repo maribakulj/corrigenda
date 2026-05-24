@@ -1,24 +1,21 @@
 """Tests for line_acceptance — centralized accept/fallback policy (Sprint 7)."""
+
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
 
 import pytest
 
+from app.alto.parser import build_document_manifest, parse_alto_file
 from app.jobs.line_acceptance import (
-    AcceptanceResult,
     check_adjacent_duplicates,
     check_line,
-    _similarity,
 )
-from app.alto.parser import parse_alto_file
 from app.jobs.orchestrator import run_job
-from app.jobs.store import job_store
-from app.schemas import LineTrace, ModelInfo, Provider
+from app.jobs.store import JobStore
+from app.schemas import ModelInfo, Provider
 from app.storage import init_job_dirs, output_dir, save_uploaded_files
-from app.alto.parser import build_document_manifest
 
 SAMPLE_XML = Path(__file__).parent.parent.parent / "examples" / "sample.xml"
 X0000002_PATH = Path(__file__).parent.parent.parent / "examples" / "X0000002.xml"
@@ -27,6 +24,7 @@ X0000002_PATH = Path(__file__).parent.parent.parent / "examples" / "X0000002.xml
 # ===========================================================================
 # Unit tests for check_line
 # ===========================================================================
+
 
 class TestCheckLineAccepted:
     """Test 1: reasonable corrections are accepted."""
@@ -120,6 +118,7 @@ class TestCheckLineNeighbourNext:
 # Test: absorption guard
 # ===========================================================================
 
+
 class TestAbsorption:
     """Guard 3: correction absorbs adjacent line content."""
 
@@ -204,12 +203,23 @@ class TestAdjacentDuplicates:
 
     def test_duplicate_corrections_flagged(self):
         lines = [
-            ("L1", "la municipalité prenne les mesures", "la municipalité prenne les mesures nécessaires"),
-            ("L2", "saires pour que les chemins soient", "la municipalité prenne les mesures nécessaires"),
+            (
+                "L1",
+                "la municipalité prenne les mesures",
+                "la municipalité prenne les mesures nécessaires",
+            ),
+            (
+                "L2",
+                "saires pour que les chemins soient",
+                "la municipalité prenne les mesures nécessaires",
+            ),
         ]
         reverts = check_adjacent_duplicates(lines)
         assert "L1" in reverts or "L2" in reverts
-        assert reverts.get("L1") == "adjacent_duplicate_detected" or reverts.get("L2") == "adjacent_duplicate_detected"
+        assert (
+            reverts.get("L1") == "adjacent_duplicate_detected"
+            or reverts.get("L2") == "adjacent_duplicate_detected"
+        )
 
     def test_same_source_not_flagged(self):
         """If sources are already similar, identical corrections are OK."""
@@ -233,8 +243,8 @@ class TestAdjacentDuplicates:
 # Test 6: Trace key robustness with repeated line_ids across pages
 # ===========================================================================
 
-class TestTraceKeyCollision:
 
+class TestTraceKeyCollision:
     def test_multi_page_trace_keys_no_collision(self):
         """Two pages with the same line_ids produce separate traces."""
         if not SAMPLE_XML.exists():
@@ -243,7 +253,8 @@ class TestTraceKeyCollision:
         # Build two copies of the same XML as separate "pages"
         xml_bytes = SAMPLE_XML.read_bytes()
 
-        job_id = job_store.create_job(Provider.OPENAI, "mock")
+        store = JobStore()
+        job_id = store.create_job(Provider.OPENAI, "mock")
         init_job_dirs(job_id)
 
         saved, _ = save_uploaded_files(
@@ -251,12 +262,16 @@ class TestTraceKeyCollision:
             [("page1.xml", xml_bytes), ("page2.xml", xml_bytes)],
         )
         doc = build_document_manifest([(p, n) for n, p in saved.items()])
-        job_store.update_job(job_id, document_manifest=doc)
+        store.update_job(job_id, document_manifest=doc)
 
         # Must have pages from both files with overlapping line_ids
         assert len(doc.pages) >= 2
-        file1_ids = {lm.line_id for p in doc.pages if p.source_file == "page1.xml" for lm in p.lines}
-        file2_ids = {lm.line_id for p in doc.pages if p.source_file == "page2.xml" for lm in p.lines}
+        file1_ids = {
+            lm.line_id for p in doc.pages if p.source_file == "page1.xml" for lm in p.lines
+        }
+        file2_ids = {
+            lm.line_id for p in doc.pages if p.source_file == "page2.xml" for lm in p.lines
+        }
         overlap = file1_ids & file2_ids
         assert len(overlap) > 0, "Expected overlapping line IDs from two copies of same XML"
 
@@ -264,6 +279,7 @@ class TestTraceKeyCollision:
         class IdentityProvider:
             async def list_models(self, api_key):
                 return [ModelInfo(id="mock", label="Mock")]
+
             async def complete_structured(self, **kwargs):
                 return {
                     "lines": [
@@ -273,25 +289,27 @@ class TestTraceKeyCollision:
                 }
 
         out_dir = output_dir(job_id)
-        asyncio.run(run_job(
-            job_id=job_id,
-            document_manifest=doc,
-            provider_name="openai",
-            api_key="fake-key",
-            model="mock",
-            output_dir=out_dir,
-            source_files={n: p for n, p in saved.items()},
-            provider=IdentityProvider(),
-        ))
+        asyncio.run(
+            run_job(
+                job_id=job_id,
+                document_manifest=doc,
+                provider_name="openai",
+                api_key="fake-key",
+                model="mock",
+                output_dir=out_dir,
+                source_files={n: p for n, p in saved.items()},
+                provider=IdentityProvider(),
+                job_store_override=store,
+            )
+        )
 
-        job = job_store.get_job(job_id)
+        job = store.get_job(job_id)
         traces = job.line_traces
 
         # Total traces should equal total lines across both pages (no collision)
         total_lines = sum(len(p.lines) for p in doc.pages)
         assert len(traces) == total_lines, (
-            f"Expected {total_lines} traces, got {len(traces)} "
-            f"(collision between pages?)"
+            f"Expected {total_lines} traces, got {len(traces)} (collision between pages?)"
         )
 
         # All traces should have 5 text states
@@ -304,8 +322,8 @@ class TestTraceKeyCollision:
 # Integration: line_acceptance in the real pipeline
 # ===========================================================================
 
-class TestLineAcceptanceIntegration:
 
+class TestLineAcceptanceIntegration:
     def test_migration_provider_triggers_fallback(self):
         """A provider that shifts line content triggers line_acceptance fallback."""
         if not SAMPLE_XML.exists():
@@ -320,6 +338,7 @@ class TestLineAcceptanceIntegration:
         class SwapProvider:
             async def list_models(self, api_key):
                 return [ModelInfo(id="mock", label="Mock")]
+
             async def complete_structured(self, **kwargs):
                 payload_lines = kwargs.get("user_payload", {}).get("lines", [])
                 out = []
@@ -336,25 +355,29 @@ class TestLineAcceptanceIntegration:
                         out.append({"line_id": lid, "corrected_text": l["ocr_text"]})
                 return {"lines": out}
 
-        job_id = job_store.create_job(Provider.OPENAI, "mock")
+        store = JobStore()
+        job_id = store.create_job(Provider.OPENAI, "mock")
         init_job_dirs(job_id)
         saved, _ = save_uploaded_files(job_id, [("sample.xml", SAMPLE_XML.read_bytes())])
         doc = build_document_manifest([(p, n) for n, p in saved.items()])
-        job_store.update_job(job_id, document_manifest=doc)
+        store.update_job(job_id, document_manifest=doc)
 
         out_dir = output_dir(job_id)
-        asyncio.run(run_job(
-            job_id=job_id,
-            document_manifest=doc,
-            provider_name="openai",
-            api_key="fake-key",
-            model="mock",
-            output_dir=out_dir,
-            source_files={n: p for n, p in saved.items()},
-            provider=SwapProvider(),
-        ))
+        asyncio.run(
+            run_job(
+                job_id=job_id,
+                document_manifest=doc,
+                provider_name="openai",
+                api_key="fake-key",
+                model="mock",
+                output_dir=out_dir,
+                source_files={n: p for n, p in saved.items()},
+                provider=SwapProvider(),
+                job_store_override=store,
+            )
+        )
 
-        job = job_store.get_job(job_id)
+        job = store.get_job(job_id)
         by_line = {t.line_id: t for t in job.line_traces.values()}
 
         # The swapped lines should have been caught and fallen back

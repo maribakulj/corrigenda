@@ -1,4 +1,7 @@
 -r requirements.txt
 pytest
 pytest-asyncio
+pytest-cov
 anyio[trio]
+ruff==0.15.14
+mypy==1.15.0

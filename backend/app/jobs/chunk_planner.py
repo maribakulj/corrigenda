@@ -1,8 +1,8 @@
 """Chunk planner: splits a page's lines into LLM-sized chunks."""
+
 from __future__ import annotations
 
 import uuid
-from typing import Optional
 
 from app.alto.hyphenation import should_stay_in_same_chunk
 from app.schemas import (
@@ -14,7 +14,6 @@ from app.schemas import (
     LineManifest,
     PageManifest,
 )
-
 
 # ---------------------------------------------------------------------------
 # Granularity downgrade
@@ -28,7 +27,7 @@ _CHAIN = [
 ]
 
 
-def downgrade_granularity(current: ChunkGranularity) -> Optional[ChunkGranularity]:
+def downgrade_granularity(current: ChunkGranularity) -> ChunkGranularity | None:
     """Return the next granularity level, or None if already at LINE."""
     idx = _CHAIN.index(current)
     if idx + 1 < len(_CHAIN):
@@ -40,6 +39,7 @@ def downgrade_granularity(current: ChunkGranularity) -> Optional[ChunkGranularit
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _total_chars(lines: list[LineManifest]) -> int:
     return sum(len(lm.ocr_text) for lm in lines)
 
@@ -49,7 +49,7 @@ def _make_chunk(
     page_id: str,
     granularity: ChunkGranularity,
     line_ids: list[str],
-    block_id: Optional[str] = None,
+    block_id: str | None = None,
 ) -> ChunkRequest:
     return ChunkRequest(
         chunk_id=str(uuid.uuid4()),
@@ -65,18 +65,21 @@ def _make_chunk(
 # PAGE granularity
 # ---------------------------------------------------------------------------
 
+
 def _try_page(
     page: PageManifest,
     document_id: str,
     config: ChunkPlannerConfig,
-) -> Optional[ChunkPlan]:
+) -> ChunkPlan | None:
     lines = page.lines
     if (
         _total_chars(lines) <= config.max_input_chars_per_request
         and len(lines) <= config.max_lines_per_request
     ):
         chunk = _make_chunk(
-            document_id, page.page_id, ChunkGranularity.PAGE,
+            document_id,
+            page.page_id,
+            ChunkGranularity.PAGE,
             [lm.line_id for lm in lines],
         )
         return ChunkPlan(
@@ -91,11 +94,12 @@ def _try_page(
 # BLOCK granularity
 # ---------------------------------------------------------------------------
 
+
 def _try_block(
     page: PageManifest,
     document_id: str,
     config: ChunkPlannerConfig,
-) -> Optional[ChunkPlan]:
+) -> ChunkPlan | None:
     line_by_id = {lm.line_id: lm for lm in page.lines}
 
     # Group lines by block in page.blocks order
@@ -181,6 +185,7 @@ def _try_block(
 # WINDOW granularity
 # ---------------------------------------------------------------------------
 
+
 def _try_window(
     page: PageManifest,
     document_id: str,
@@ -239,6 +244,7 @@ def _try_window(
 # LINE granularity
 # ---------------------------------------------------------------------------
 
+
 def _plan_line(
     page: PageManifest,
     document_id: str,
@@ -256,15 +262,13 @@ def _plan_line(
         while j < len(lines):
             cur = lines[j]
             forward_pair = (
-                cur.hyphen_pair_line_id if cur.hyphen_role == HyphenRole.PART1
-                else cur.hyphen_forward_pair_id if cur.hyphen_role == HyphenRole.BOTH
+                cur.hyphen_pair_line_id
+                if cur.hyphen_role == HyphenRole.PART1
+                else cur.hyphen_forward_pair_id
+                if cur.hyphen_role == HyphenRole.BOTH
                 else None
             )
-            if (
-                forward_pair
-                and j + 1 < len(lines)
-                and lines[j + 1].line_id == forward_pair
-            ):
+            if forward_pair and j + 1 < len(lines) and lines[j + 1].line_id == forward_pair:
                 chain_ids.append(lines[j + 1].line_id)
                 j += 1
             else:
@@ -291,11 +295,12 @@ def _plan_line(
 # Public entry point
 # ---------------------------------------------------------------------------
 
+
 def plan_page(
     page: PageManifest,
     document_id: str,
     config: ChunkPlannerConfig,
-    force_granularity: Optional[ChunkGranularity] = None,
+    force_granularity: ChunkGranularity | None = None,
 ) -> ChunkPlan:
     """
     Produce a ChunkPlan for a page.

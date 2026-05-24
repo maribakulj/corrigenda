@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import copy
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from lxml import etree
 
@@ -12,14 +11,15 @@ from app.alto._norm import clean_content, nfc
 from app.alto._ns import _detect_namespace, _tag
 from app.schemas import HyphenRole, LineManifest, PageManifest
 
-
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class RewriterMetrics:
     """Counts of lines per rewriter path."""
+
     untouched: int = 0
     subs_only: int = 0
     fast_path: int = 0
@@ -33,9 +33,11 @@ class RewriterMetrics:
     def total_lines(self) -> int:
         return self.untouched + self.subs_only + self.fast_path + self.slow_path
 
+
 # ---------------------------------------------------------------------------
 # Tokenisation
 # ---------------------------------------------------------------------------
+
 
 def _tokenize(text: str) -> list[str]:
     """Split text into alternating word/space tokens, dropping empty strings."""
@@ -45,6 +47,7 @@ def _tokenize(text: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # Geometry (slow-path only)
 # ---------------------------------------------------------------------------
+
 
 def _compute_geometry(
     hpos: int,
@@ -89,6 +92,7 @@ def _compute_geometry(
 # Element accessors (non-destructive)
 # ---------------------------------------------------------------------------
 
+
 def _get_string_children(el: etree._Element, ns: str) -> list[etree._Element]:
     tag = _tag("String", ns)
     return [c for c in el if c.tag == tag]
@@ -107,6 +111,7 @@ def _get_hyp_children(el: etree._Element, ns: str) -> list[etree._Element]:
 # ---------------------------------------------------------------------------
 # Text comparison
 # ---------------------------------------------------------------------------
+
 
 def _extract_text_from_line(el: etree._Element, ns: str) -> str:
     """Reconstruct text from a TextLine's children (String + SP + HYP).
@@ -145,9 +150,10 @@ def _line_text_unchanged(el: etree._Element, corrected: str, ns: str) -> bool:
 # SUBS attribute logic (centralized — the ONLY place SUBS is written)
 # ---------------------------------------------------------------------------
 
+
 def _desired_subs(
     manifest: LineManifest,
-) -> tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """Return (wanted_subs_type, wanted_subs_content) for the primary role.
 
     For PART1: backward subs on last String.
@@ -169,7 +175,7 @@ def _desired_subs(
 
 def _desired_forward_subs(
     manifest: LineManifest,
-) -> tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """Return (wanted_subs_type, wanted_subs_content) for the forward/PART1 role.
 
     Only applies to BOTH lines.
@@ -185,7 +191,7 @@ def _subs_target(
     el: etree._Element,
     manifest: LineManifest,
     ns: str,
-) -> Optional[etree._Element]:
+) -> etree._Element | None:
     """Return the String element that should carry backward SUBS attributes."""
     strings = _get_string_children(el, ns)
     if not strings:
@@ -231,8 +237,8 @@ def _subs_need_update(
 
 def _set_subs_on_element(
     target: etree._Element,
-    want_type: Optional[str],
-    want_content: Optional[str],
+    want_type: str | None,
+    want_content: str | None,
 ) -> None:
     """Set or remove SUBS_TYPE/SUBS_CONTENT on a single element."""
     if want_type and want_content:
@@ -269,6 +275,7 @@ def _apply_subs(
 # Fast path: in-place CONTENT update (word count unchanged)
 # ---------------------------------------------------------------------------
 
+
 def _update_content_in_place(
     el: etree._Element,
     corrected: str,
@@ -293,6 +300,7 @@ def _update_content_in_place(
 # Internal: clear existing String/SP/HYP children
 # ---------------------------------------------------------------------------
 
+
 def _clear_line(el: etree._Element, ns: str) -> None:
     """Remove String/SP/HYP children.  TextLine attributes are untouched."""
     tags = {_tag("String", ns), _tag("SP", ns), _tag("HYP", ns)}
@@ -303,6 +311,7 @@ def _clear_line(el: etree._Element, ns: str) -> None:
 # ---------------------------------------------------------------------------
 # Slow path: rebuild when word count changed
 # ---------------------------------------------------------------------------
+
 
 def _rebuild_normal_line(
     el: etree._Element,
@@ -507,6 +516,7 @@ def _rebuild_hyp_part2(
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 def rewrite_alto_file(
     xml_path: Path,

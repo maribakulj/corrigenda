@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import uuid
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
+
 
 class JobStatus(str, Enum):
     QUEUED = "queued"
@@ -42,14 +42,15 @@ class Provider(str, Enum):
 
 class HyphenRole(str, Enum):
     NONE = "none"
-    PART1 = "HypPart1"   # last line of pair: carries left fragment + hyphen
-    PART2 = "HypPart2"   # first line of pair: carries right fragment
-    BOTH = "HypBoth"     # PART2 of previous pair AND PART1 of next pair (chained)
+    PART1 = "HypPart1"  # last line of pair: carries left fragment + hyphen
+    PART2 = "HypPart2"  # first line of pair: carries right fragment
+    BOTH = "HypBoth"  # PART2 of previous pair AND PART1 of next pair (chained)
 
 
 # ---------------------------------------------------------------------------
 # Geometry
 # ---------------------------------------------------------------------------
+
 
 class Coords(BaseModel):
     hpos: int
@@ -62,6 +63,7 @@ class Coords(BaseModel):
 # Core line / block / page / document models
 # ---------------------------------------------------------------------------
 
+
 class LineManifest(BaseModel):
     line_id: str
     page_id: str
@@ -70,11 +72,11 @@ class LineManifest(BaseModel):
     line_order_in_block: int
     coords: Coords
     ocr_text: str
-    prev_line_id: Optional[str] = None
-    next_line_id: Optional[str] = None
+    prev_line_id: str | None = None
+    next_line_id: str | None = None
     expected: bool = True
     received: bool = False
-    corrected_text: Optional[str] = None
+    corrected_text: str | None = None
     status: LineStatus = LineStatus.PENDING
 
     # Hyphenation fields
@@ -87,14 +89,14 @@ class LineManifest(BaseModel):
     # (e.g. both call their first line "TL1"). When None, the partner is
     # presumed intra-page and the bare line_id lookup is authoritative.
     hyphen_role: HyphenRole = HyphenRole.NONE
-    hyphen_pair_line_id: Optional[str] = None
-    hyphen_pair_page_id: Optional[str] = None
-    hyphen_subs_content: Optional[str] = None
+    hyphen_pair_line_id: str | None = None
+    hyphen_pair_page_id: str | None = None
+    hyphen_subs_content: str | None = None
     hyphen_source_explicit: bool = False
     # Forward link fields — used only when role == BOTH (chained hyphenation)
-    hyphen_forward_pair_id: Optional[str] = None
-    hyphen_forward_pair_page_id: Optional[str] = None
-    hyphen_forward_subs_content: Optional[str] = None
+    hyphen_forward_pair_id: str | None = None
+    hyphen_forward_pair_page_id: str | None = None
+    hyphen_forward_subs_content: str | None = None
     hyphen_forward_explicit: bool = False
 
 
@@ -131,6 +133,7 @@ class DocumentManifest(BaseModel):
 # Chunk planning
 # ---------------------------------------------------------------------------
 
+
 class ChunkPlannerConfig(BaseModel):
     max_input_chars_per_request: int = 12000
     max_lines_per_request: int = 80
@@ -142,7 +145,7 @@ class ChunkRequest(BaseModel):
     chunk_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     document_id: str
     page_id: str
-    block_id: Optional[str] = None
+    block_id: str | None = None
     granularity: ChunkGranularity
     line_ids: list[str]
     attempt: int = 0
@@ -158,19 +161,20 @@ class ChunkPlan(BaseModel):
 # Job
 # ---------------------------------------------------------------------------
 
+
 class JobManifest(BaseModel):
     job_id: str
     provider: Provider
     model: str
     status: JobStatus = JobStatus.QUEUED
-    document_manifest: Optional[DocumentManifest] = None
+    document_manifest: DocumentManifest | None = None
     total_lines: int = 0
     lines_modified: int = 0
     chunks_total: int = 0
     retries: int = 0
     fallbacks: int = 0
-    duration_seconds: Optional[float] = None
-    error: Optional[str] = None
+    duration_seconds: float | None = None
+    error: str | None = None
     images: dict[str, str] = Field(default_factory=dict)
     # Line traces (Sprint 5bis) — keyed by line_id
     line_traces: dict[str, LineTrace] = Field(default_factory=dict)
@@ -180,18 +184,19 @@ class JobManifest(BaseModel):
 # LLM payload models
 # ---------------------------------------------------------------------------
 
+
 class LLMLineInput(BaseModel):
     line_id: str
-    prev_text: Optional[str] = None
+    prev_text: str | None = None
     ocr_text: str
-    next_text: Optional[str] = None
+    next_text: str | None = None
     # Hyphenation fields — absent when hyphen_role == NONE
-    hyphenation_role: Optional[str] = None
-    hyphen_candidate: Optional[bool] = None
-    hyphen_join_with_next: Optional[bool] = None
-    hyphen_join_with_prev: Optional[bool] = None
-    backward_join_candidate: Optional[str] = None
-    forward_join_candidate: Optional[str] = None
+    hyphenation_role: str | None = None
+    hyphen_candidate: bool | None = None
+    hyphen_join_with_next: bool | None = None
+    hyphen_join_with_prev: bool | None = None
+    backward_join_candidate: str | None = None
+    forward_join_candidate: str | None = None
 
 
 class LLMUserPayload(BaseModel):
@@ -199,7 +204,7 @@ class LLMUserPayload(BaseModel):
     granularity: ChunkGranularity
     document_id: str
     page_id: str
-    block_id: Optional[str] = None
+    block_id: str | None = None
     lines: list[LLMLineInput]
 
 
@@ -216,11 +221,12 @@ class LLMResponse(BaseModel):
 # Provider / model info
 # ---------------------------------------------------------------------------
 
+
 class ModelInfo(BaseModel):
     id: str
     label: str
     supports_structured_output: bool = True
-    context_window: Optional[int] = None
+    context_window: int | None = None
 
 
 class ListModelsRequest(BaseModel):
@@ -237,6 +243,7 @@ class ListModelsResponse(BaseModel):
 # API response models
 # ---------------------------------------------------------------------------
 
+
 class CreateJobResponse(BaseModel):
     job_id: str
 
@@ -249,13 +256,14 @@ class JobStatusResponse(BaseModel):
     chunks_total: int = 0
     retries: int = 0
     fallbacks: int = 0
-    duration_seconds: Optional[float] = None
-    error: Optional[str] = None
+    duration_seconds: float | None = None
+    error: str | None = None
 
 
 # ---------------------------------------------------------------------------
 # SSE
 # ---------------------------------------------------------------------------
+
 
 class SSEEvent(BaseModel):
     event: str
@@ -266,25 +274,28 @@ class SSEEvent(BaseModel):
 # Line trace (Sprint 5bis — observability)
 # ---------------------------------------------------------------------------
 
+
 class LineTrace(BaseModel):
     """Full text trace for a single line through the correction pipeline."""
+
     line_id: str
     page_id: str
     source_ocr_text: str
-    model_input_text: Optional[str] = None      # ocr_text sent to LLM
-    model_corrected_text: Optional[str] = None   # raw LLM output before any post-processing
-    projected_text: Optional[str] = None          # text retained after validation/reconciliation/fallback
-    output_alto_text: Optional[str] = None        # text re-extracted from the output ALTO XML
+    model_input_text: str | None = None  # ocr_text sent to LLM
+    model_corrected_text: str | None = None  # raw LLM output before any post-processing
+    projected_text: str | None = None  # text retained after validation/reconciliation/fallback
+    output_alto_text: str | None = None  # text re-extracted from the output ALTO XML
 
     # Diagnostic metadata
-    hyphen_role: Optional[str] = None
-    rewriter_path: Optional[str] = None           # untouched / subs_only / fast_path / slow_path
-    validation_status: Optional[str] = None       # corrected / fallback / failed
-    fallback_reason: Optional[str] = None
+    hyphen_role: str | None = None
+    rewriter_path: str | None = None  # untouched / subs_only / fast_path / slow_path
+    validation_status: str | None = None  # corrected / fallback / failed
+    fallback_reason: str | None = None
 
 
 class JobTrace(BaseModel):
     """Collection of line traces for a complete job."""
+
     job_id: str
     total_lines: int = 0
     lines: list[LineTrace] = Field(default_factory=list)
