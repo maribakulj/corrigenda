@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.alto.parser import build_document_manifest, parse_alto_file
 from app.jobs.orchestrator import run_job
-from app.jobs.store import job_store
+from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider
 from app.storage import (
     get_image_files,
@@ -75,21 +75,24 @@ def _run(coro):
 def _run_job_directly(
     source_bytes: dict[str, bytes],
     mock: MockProvider | None = None,
-) -> tuple[str, list[Path]]:
-    """
-    Create a job and run it synchronously.
+    store: JobStore | None = None,
+) -> tuple[str, list[Path], JobStore]:
+    """Create a job and run it synchronously.
 
-    Returns (job_id, list_of_output_paths).
+    Returns ``(job_id, output_paths, store)``. If `store` is not supplied,
+    a fresh one is created so tests don't accumulate state across runs.
     """
     if mock is None:
         mock = MockProvider()
+    if store is None:
+        store = JobStore()
 
-    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    job_id = store.create_job(Provider.OPENAI, "mock")
     init_job_dirs(job_id)
 
     saved, _ = save_uploaded_files(job_id, list(source_bytes.items()))
     doc = build_document_manifest([(p, n) for n, p in saved.items()])
-    job_store.update_job(job_id, document_manifest=doc)
+    store.update_job(job_id, document_manifest=doc)
 
     out_dir = output_dir(job_id)
     _run(run_job(
@@ -101,13 +104,22 @@ def _run_job_directly(
         output_dir=out_dir,
         source_files={n: p for n, p in saved.items()},
         provider=mock,
+        job_store_override=store,
     ))
 
-    return job_id, get_output_files(job_id)
+    return job_id, get_output_files(job_id), store
 
 
-def _make_client(mock: MockProvider | None = None) -> TestClient:
-    """Return a TestClient with the given (or default) MockProvider injected."""
+def _make_client(
+    mock: MockProvider | None = None,
+    store: JobStore | None = None,
+) -> TestClient:
+    """Return a TestClient with the given (or default) MockProvider injected.
+
+    If `store` is provided, it replaces the app's default JobStore so
+    callers can share state between direct `run_job` calls and HTTP
+    requests against the client.
+    """
     from app.main import create_app
     from app import providers as prov_module
 
@@ -119,6 +131,8 @@ def _make_client(mock: MockProvider | None = None) -> TestClient:
         prov_module._REGISTRY[k] = mock
 
     app = create_app()
+    if store is not None:
+        app.state.job_store = store
     client = TestClient(app, raise_server_exceptions=False)
     # stash for cleanup
     client._orig = orig          # type: ignore[attr-defined]
@@ -237,15 +251,16 @@ def test_sse_events_order():
     started → document_parsed → page_started → chunk_planned
     → chunk_started → chunk_completed → page_completed → completed
     """
-    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    store = JobStore()
+    job_id = store.create_job(Provider.OPENAI, "mock")
     init_job_dirs(job_id)
 
     saved, _ = save_uploaded_files(job_id, [(SAMPLE_XML.name, SAMPLE_XML.read_bytes())])
     doc = build_document_manifest([(p, n) for n, p in saved.items()])
-    job_store.update_job(job_id, document_manifest=doc)
+    store.update_job(job_id, document_manifest=doc)
 
     # Subscribe BEFORE running so every emitted event lands in the queue
-    queue = job_store.subscribe(job_id)
+    queue = store.subscribe(job_id)
 
     try:
         _run(run_job(
@@ -257,13 +272,14 @@ def test_sse_events_order():
             output_dir=output_dir(job_id),
             source_files={n: p for n, p in saved.items()},
             provider=MockProvider(),
+            job_store_override=store,
         ))
     finally:
         # Drain queue, then unsubscribe
         events = []
         while not queue.empty():
             events.append(queue.get_nowait())
-        job_store.unsubscribe(job_id, queue)
+        store.unsubscribe(job_id, queue)
 
     names = [e.event for e in events]
 
@@ -299,10 +315,10 @@ def test_sse_events_order():
 
 def test_download_single_xml():
     """Completed single-file job → GET download returns application/xml parseable by lxml."""
-    job_id, out_files = _run_job_directly({SAMPLE_XML.name: SAMPLE_XML.read_bytes()})
+    job_id, out_files, store = _run_job_directly({SAMPLE_XML.name: SAMPLE_XML.read_bytes()})
     assert len(out_files) == 1
 
-    client = _make_client()
+    client = _make_client(store=store)
     try:
         resp = client.get(f"/api/jobs/{job_id}/download")
         assert resp.status_code == 200
@@ -320,10 +336,10 @@ def test_download_single_xml():
 def test_download_multi_zip():
     """Completed 2-file job → GET download returns application/zip with 2 entries."""
     xml_data = SAMPLE_XML.read_bytes()
-    job_id, out_files = _run_job_directly({"page1.xml": xml_data, "page2.xml": xml_data})
+    job_id, out_files, store = _run_job_directly({"page1.xml": xml_data, "page2.xml": xml_data})
     assert len(out_files) == 2
 
-    client = _make_client()
+    client = _make_client(store=store)
     try:
         resp = client.get(f"/api/jobs/{job_id}/download")
         assert resp.status_code == 200
@@ -349,12 +365,12 @@ def test_fallback_on_invalid_json():
     mock = MockProvider(invalid_json_times=3)
 
     with patch("app.jobs.correction_pipeline.asyncio.sleep", new=AsyncMock(return_value=None)):
-        job_id, out_files = _run_job_directly(
+        job_id, out_files, store = _run_job_directly(
             {SAMPLE_XML.name: SAMPLE_XML.read_bytes()},
             mock=mock,
         )
 
-    job = job_store.get_job(job_id)
+    job = store.get_job(job_id)
     assert job is not None
     assert job.status.value == "completed"
     assert job.fallbacks > 0, "Expected at least one fallback to OCR source"
@@ -373,7 +389,7 @@ def test_output_preserves_textline_ids():
     src_pages, _ = parse_alto_file(SAMPLE_XML, SAMPLE_XML.name)
     src_ids = [lm.line_id for p in src_pages for lm in p.lines]
 
-    _, out_files = _run_job_directly({SAMPLE_XML.name: SAMPLE_XML.read_bytes()})
+    _, out_files, _ = _run_job_directly({SAMPLE_XML.name: SAMPLE_XML.read_bytes()})
     assert len(out_files) == 1
 
     out_pages, _ = parse_alto_file(out_files[0], out_files[0].name)
@@ -397,7 +413,7 @@ def test_output_preserves_textline_coords():
         for lm in p.lines
     }
 
-    _, out_files = _run_job_directly({SAMPLE_XML.name: SAMPLE_XML.read_bytes()})
+    _, out_files, _ = _run_job_directly({SAMPLE_XML.name: SAMPLE_XML.read_bytes()})
     out_pages, _ = parse_alto_file(out_files[0], out_files[0].name)
     out_coords = {
         lm.line_id: (lm.coords.hpos, lm.coords.vpos, lm.coords.width, lm.coords.height)
@@ -423,7 +439,7 @@ def test_hyphen_pairs_in_output():
     - TL5 first String has SUBS_TYPE="HypPart2"
     - Both carry matching non-empty SUBS_CONTENT
     """
-    _, out_files = _run_job_directly({SAMPLE_XML.name: SAMPLE_XML.read_bytes()})
+    _, out_files, _ = _run_job_directly({SAMPLE_XML.name: SAMPLE_XML.read_bytes()})
     assert len(out_files) == 1
 
     tree = etree.parse(str(out_files[0]))
@@ -464,7 +480,7 @@ def test_heuristic_hyphen_no_subs_content():
     Heuristic hyphen pair TL6/TL7 (no SUBS_TYPE in source, detected by trailing dash)
     must not have any invented SUBS_CONTENT in the output.
     """
-    _, out_files = _run_job_directly({SAMPLE_XML.name: SAMPLE_XML.read_bytes()})
+    _, out_files, _ = _run_job_directly({SAMPLE_XML.name: SAMPLE_XML.read_bytes()})
     assert len(out_files) == 1
 
     tree = etree.parse(str(out_files[0]))
@@ -535,7 +551,7 @@ def test_zip_with_images():
 
 def test_link_alto_to_images_by_filename():
     """link_alto_to_images matches by lowercase stem of the ALTO source file."""
-    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    job_id = JobStore().create_job(Provider.OPENAI, "mock")
     init_job_dirs(job_id)
 
     xml_data = SAMPLE_XML.read_bytes()
@@ -573,7 +589,7 @@ def test_link_alto_to_images_by_filename():
 
 def test_link_alto_to_images_no_match():
     """link_alto_to_images returns empty dict when no stem matches."""
-    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    job_id = JobStore().create_job(Provider.OPENAI, "mock")
     init_job_dirs(job_id)
 
     xml_data = SAMPLE_XML.read_bytes()
@@ -616,7 +632,7 @@ def _make_macos_zip(xml_bytes: bytes, xml_name: str) -> bytes:
 
 def test_macos_zip_skips_appledouble_xml():
     """._<name>.xml AppleDouble files must never reach the XML parser."""
-    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    job_id = JobStore().create_job(Provider.OPENAI, "mock")
     init_job_dirs(job_id)
 
     xml_bytes = SAMPLE_XML.read_bytes()
@@ -636,7 +652,7 @@ def test_macos_zip_skips_appledouble_xml():
 
 def test_macos_zip_parses_without_error():
     """A macOS ZIP must parse cleanly (no 'Document is empty' error)."""
-    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    job_id = JobStore().create_job(Provider.OPENAI, "mock")
     init_job_dirs(job_id)
 
     xml_bytes = SAMPLE_XML.read_bytes()
@@ -663,7 +679,7 @@ def test_zip_rejected_when_too_many_members():
         for i in range(20):
             zf.writestr(f"f{i:03d}.xml", b"<x/>")
 
-    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    job_id = JobStore().create_job(Provider.OPENAI, "mock")
     init_job_dirs(job_id)
 
     with patch.object(storage_mod, "_MAX_ZIP_MEMBERS", 10):
@@ -680,7 +696,7 @@ def test_zip_rejected_when_declared_size_exceeds_limit():
         # 10 KB of XML — patch the limit below this to trigger rejection
         zf.writestr("big.xml", b"<x/>" * 2500)
 
-    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    job_id = JobStore().create_job(Provider.OPENAI, "mock")
     init_job_dirs(job_id)
 
     with patch.object(storage_mod, "_MAX_ZIP_EXTRACTED_BYTES", 1024):

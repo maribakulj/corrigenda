@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.jobs import router as jobs_router
 from app.api.providers import router as providers_router
-from app.jobs.store import job_store
+from app.jobs.store import JobStore
 
 # Resolved once at import time — same process for the lifetime of the container
 _STATIC_DIR = Path(__file__).parent.parent / "static"
@@ -42,8 +42,8 @@ def create_app() -> FastAPI:
 
     # Bind infrastructure to app.state for dependency injection.
     # Endpoints reach this through `Depends(get_job_store)` rather than
-    # importing the module-level singleton — see app/api/deps.py.
-    app.state.job_store = job_store
+    # importing a module-level singleton — see app/api/deps.py.
+    app.state.job_store = JobStore()
 
     # ------------------------------------------------------------------
     # CORS

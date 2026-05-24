@@ -82,26 +82,20 @@ async def _run(
     output_dir: Path,
     store: JobStore,
 ) -> None:
-    """Run the orchestrator with the given store injected."""
-    import app.jobs.orchestrator as orch_module
-    # Temporarily replace the singleton
-    orig_store = orch_module.job_store
-    orch_module.job_store = store
-    try:
-        pages, _ = parse_alto_file(SAMPLE_XML, SAMPLE_XML.name)
-        doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-        await run_job(
-            job_id=job_id,
-            document_manifest=doc,
-            provider_name="openai",
-            api_key="fake-key",
-            model="mock",
-            output_dir=output_dir,
-            source_files={SAMPLE_XML.name: SAMPLE_XML},
-            provider=provider,
-        )
-    finally:
-        orch_module.job_store = orig_store
+    """Run the orchestrator with the given store injected explicitly."""
+    pages, _ = parse_alto_file(SAMPLE_XML, SAMPLE_XML.name)
+    doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
+    await run_job(
+        job_id=job_id,
+        document_manifest=doc,
+        provider_name="openai",
+        api_key="fake-key",
+        model="mock",
+        output_dir=output_dir,
+        source_files={SAMPLE_XML.name: SAMPLE_XML},
+        provider=provider,
+        job_store_override=store,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -335,22 +329,17 @@ async def test_cross_page_hyphen_reconciled_through_colliding_ids(tmp_path: Path
     store = JobStore()
     job_id = store.create_job(Provider.OPENAI, "mock")
 
-    import app.jobs.orchestrator as orch_module
-    orig_store = orch_module.job_store
-    orch_module.job_store = store
-    try:
-        await run_job(
-            job_id=job_id,
-            document_manifest=doc,
-            provider_name="openai",
-            api_key="fake-key",
-            model="mock",
-            output_dir=tmp_path,
-            source_files={"fileA.xml": file_a, "fileB.xml": file_b},
-            provider=MockProvider(),
-        )
-    finally:
-        orch_module.job_store = orig_store
+    await run_job(
+        job_id=job_id,
+        document_manifest=doc,
+        provider_name="openai",
+        api_key="fake-key",
+        model="mock",
+        output_dir=tmp_path,
+        source_files={"fileA.xml": file_a, "fileB.xml": file_b},
+        provider=MockProvider(),
+        job_store_override=store,
+    )
 
     job = store.get_job(job_id)
     assert job is not None
@@ -400,9 +389,7 @@ async def test_job_timeout_marks_failure(tmp_path: Path):
 
     store, job_id = _make_store_and_job()
     orig_timeout = orch_module._JOB_TIMEOUT_SECONDS
-    orig_store = orch_module.job_store
     orch_module._JOB_TIMEOUT_SECONDS = 1  # 1-second budget — provider sleeps 5s
-    orch_module.job_store = store
     try:
         pages, _ = parse_alto_file(SAMPLE_XML, SAMPLE_XML.name)
         doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
@@ -415,10 +402,10 @@ async def test_job_timeout_marks_failure(tmp_path: Path):
             output_dir=tmp_path,
             source_files={SAMPLE_XML.name: SAMPLE_XML},
             provider=_SlowProvider(),
+            job_store_override=store,
         )
     finally:
         orch_module._JOB_TIMEOUT_SECONDS = orig_timeout
-        orch_module.job_store = orig_store
 
     job = store.get_job(job_id)
     assert job is not None
@@ -445,27 +432,23 @@ async def test_run_job_general_exception_marks_failed(
     from app.jobs.correction_pipeline import CorrectionPipeline
 
     store, job_id = _make_store_and_job()
-    orig_store = orch_module.job_store
-    orch_module.job_store = store
 
     async def _boom(self, **kwargs):
         raise RuntimeError("simulated failure carrying sk-secret-token-12345")
 
     monkeypatch.setattr(CorrectionPipeline, "run", _boom)
-    try:
-        doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-        await run_job(
-            job_id=job_id,
-            document_manifest=doc,
-            provider_name="openai",
-            api_key="sk-secret-token-12345",
-            model="mock",
-            output_dir=tmp_path,
-            source_files={SAMPLE_XML.name: SAMPLE_XML},
-            provider=MockProvider(),
-        )
-    finally:
-        orch_module.job_store = orig_store
+    doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
+    await run_job(
+        job_id=job_id,
+        document_manifest=doc,
+        provider_name="openai",
+        api_key="sk-secret-token-12345",
+        model="mock",
+        output_dir=tmp_path,
+        source_files={SAMPLE_XML.name: SAMPLE_XML},
+        provider=MockProvider(),
+        job_store_override=store,
+    )
 
     job = store.get_job(job_id)
     assert job is not None
@@ -492,22 +475,18 @@ async def test_run_job_resolves_provider_from_registry_when_none(
     monkeypatch.setattr(prov_module, "get_provider", lambda p: mock)
 
     store, job_id = _make_store_and_job()
-    orig_store = orch_module.job_store
-    orch_module.job_store = store
-    try:
-        doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-        await run_job(
-            job_id=job_id,
-            document_manifest=doc,
-            provider_name="openai",
-            api_key="fake-key",
-            model="mock",
-            output_dir=tmp_path,
-            source_files={SAMPLE_XML.name: SAMPLE_XML},
-            # Note: provider arg omitted → registry lookup path
-        )
-    finally:
-        orch_module.job_store = orig_store
+    doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
+    await run_job(
+        job_id=job_id,
+        document_manifest=doc,
+        provider_name="openai",
+        api_key="fake-key",
+        model="mock",
+        output_dir=tmp_path,
+        source_files={SAMPLE_XML.name: SAMPLE_XML},
+        # Note: provider arg omitted → registry lookup path
+        job_store_override=store,
+    )
 
     job = store.get_job(job_id)
     assert job is not None

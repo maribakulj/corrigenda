@@ -1,12 +1,13 @@
-"""Backward-compatible entry point for the correction pipeline.
+"""Backward-compatible `run_job` entry point.
 
-The real work lives in `app.jobs.runner.JobRunner`, which is what the
-API layer should be calling once `JobStore` injection is complete
-(Phase 1.4). This module exists to:
-  - keep the `run_job(...)` function available for existing callers
-    and tests that haven't migrated yet
-  - expose `job_store` and `_JOB_TIMEOUT_SECONDS` at module scope so
-    legacy tests substituting them continue to work
+The real work lives in `app.jobs.runner.JobRunner`. This module exists
+to keep the original `run_job(...)` callable available for existing
+callers and tests that haven't migrated to instantiating a `JobRunner`
+directly. The function now requires `job_store` to be passed
+explicitly — there is no longer a module-level singleton to fall back on.
+
+`_JOB_TIMEOUT_SECONDS` is kept at module scope so that tests can
+monkey-patch it to shorten the budget.
 """
 from __future__ import annotations
 
@@ -17,7 +18,6 @@ from pathlib import Path
 from typing import Optional
 
 from app.jobs.runner import JobRunner
-from app.jobs.store import job_store  # noqa: F401  (re-exported for test compat)
 from app.protocols import BaseProvider, JobStore
 from app.schemas import DocumentManifest
 
@@ -48,17 +48,20 @@ async def run_job(
 ) -> None:
     """Compat wrapper around `JobRunner.run`.
 
-    `job_store_override` lets callers inject the store explicitly (for
-    example, the API layer hands over the one resolved via FastAPI
-    Depends). When `None`, the module-level `job_store` is used — this
-    preserves the substitution pattern used by existing tests
-    (`orch_module.job_store = store`).
+    `job_store_override` is required — there is no longer a module-level
+    singleton to default to. New code should instantiate `JobRunner`
+    directly; this wrapper exists for callers that haven't migrated yet.
 
-    `_JOB_TIMEOUT_SECONDS` is also looked up at the module scope so test
+    `_JOB_TIMEOUT_SECONDS` is looked up at the module scope so test
     patches keep working.
     """
-    store = job_store_override if job_store_override is not None else job_store
-    runner = JobRunner(job_store=store)
+    if job_store_override is None:
+        raise ValueError(
+            "run_job requires `job_store_override`. The module-level "
+            "job_store singleton has been removed; pass a JobStore "
+            "instance explicitly, or call JobRunner directly."
+        )
+    runner = JobRunner(job_store=job_store_override)
     await runner.run(
         job_id=job_id,
         document_manifest=document_manifest,

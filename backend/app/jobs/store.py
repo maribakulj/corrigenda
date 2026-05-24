@@ -143,10 +143,3 @@ class JobStore:
             cleanup_job(job_id)
         except Exception:
             logger.debug("Failed to clean up disk for job %s", job_id, exc_info=True)
-
-
-# ---------------------------------------------------------------------------
-# Singleton
-# ---------------------------------------------------------------------------
-
-job_store = JobStore()

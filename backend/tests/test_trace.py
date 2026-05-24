@@ -12,7 +12,7 @@ from lxml import etree
 from app.alto.parser import build_document_manifest, parse_alto_file
 from app.alto.rewriter import extract_output_texts, rewrite_alto_file
 from app.jobs.orchestrator import run_job
-from app.jobs.store import job_store
+from app.jobs.store import JobStore
 from app.schemas import (
     HyphenRole,
     JobTrace,
@@ -117,12 +117,13 @@ def _run_job_with_traces(
     if provider is None:
         provider = IdentityProvider()
 
-    job_id = job_store.create_job(Provider.OPENAI, "mock")
+    store = JobStore()
+    job_id = store.create_job(Provider.OPENAI, "mock")
     init_job_dirs(job_id)
 
     saved, _ = save_uploaded_files(job_id, list(source_bytes.items()))
     doc = build_document_manifest([(p, n) for n, p in saved.items()])
-    job_store.update_job(job_id, document_manifest=doc)
+    store.update_job(job_id, document_manifest=doc)
 
     out_dir = output_dir(job_id)
     _run(run_job(
@@ -134,9 +135,10 @@ def _run_job_with_traces(
         output_dir=out_dir,
         source_files={n: p for n, p in saved.items()},
         provider=provider,
+        job_store_override=store,
     ))
 
-    job = job_store.get_job(job_id)
+    job = store.get_job(job_id)
     # Build a line_id-keyed view (traces use composite page_id:line_id keys internally)
     by_line_id = {t.line_id: t for t in job.line_traces.values()}
     return job_id, by_line_id

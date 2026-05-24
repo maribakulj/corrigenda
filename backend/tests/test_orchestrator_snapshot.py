@@ -60,45 +60,39 @@ class _IdentityProvider:
 
 def _run_and_capture(xml_path: Path) -> dict[str, Any]:
     """Run the orchestrator and return a snapshot of observable outputs."""
-    import app.jobs.orchestrator as orch_module
-
     store = JobStore()
     job_id = store.create_job(Provider.OPENAI, "mock")
-    orig_store = orch_module.job_store
-    orch_module.job_store = store
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            out_dir = Path(td)
-            doc = build_document_manifest([(xml_path, xml_path.name)])
-            asyncio.run(run_job(
-                job_id=job_id,
-                document_manifest=doc,
-                provider_name="openai",
-                api_key="fake-key",
-                model="mock",
-                output_dir=out_dir,
-                source_files={xml_path.name: xml_path},
-                provider=_IdentityProvider(),
-            ))
-            job = store.get_job(job_id)
-            assert job is not None
+    with tempfile.TemporaryDirectory() as td:
+        out_dir = Path(td)
+        doc = build_document_manifest([(xml_path, xml_path.name)])
+        asyncio.run(run_job(
+            job_id=job_id,
+            document_manifest=doc,
+            provider_name="openai",
+            api_key="fake-key",
+            model="mock",
+            output_dir=out_dir,
+            source_files={xml_path.name: xml_path},
+            provider=_IdentityProvider(),
+            job_store_override=store,
+        ))
+        job = store.get_job(job_id)
+        assert job is not None
 
-            out_xml = next(out_dir.glob("*_corrected.xml"))
-            xml_bytes = out_xml.read_bytes()
+        out_xml = next(out_dir.glob("*_corrected.xml"))
+        xml_bytes = out_xml.read_bytes()
 
-            return {
-                "xml_sha256": hashlib.sha256(xml_bytes).hexdigest(),
-                "xml_size": len(xml_bytes),
-                "status": job.status.value,
-                "total_lines": job.total_lines,
-                "lines_modified": job.lines_modified,
-                "chunks_total": job.chunks_total,
-                "retries": job.retries,
-                "fallbacks": job.fallbacks,
-                "trace_count": len(job.line_traces),
-            }
-    finally:
-        orch_module.job_store = orig_store
+        return {
+            "xml_sha256": hashlib.sha256(xml_bytes).hexdigest(),
+            "xml_size": len(xml_bytes),
+            "status": job.status.value,
+            "total_lines": job.total_lines,
+            "lines_modified": job.lines_modified,
+            "chunks_total": job.chunks_total,
+            "retries": job.retries,
+            "fallbacks": job.fallbacks,
+            "trace_count": len(job.line_traces),
+        }
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ from app.jobs.line_acceptance import (
 )
 from app.alto.parser import parse_alto_file
 from app.jobs.orchestrator import run_job
-from app.jobs.store import job_store
+from app.jobs.store import JobStore
 from app.schemas import LineTrace, ModelInfo, Provider
 from app.storage import init_job_dirs, output_dir, save_uploaded_files
 from app.alto.parser import build_document_manifest
@@ -243,7 +243,8 @@ class TestTraceKeyCollision:
         # Build two copies of the same XML as separate "pages"
         xml_bytes = SAMPLE_XML.read_bytes()
 
-        job_id = job_store.create_job(Provider.OPENAI, "mock")
+        store = JobStore()
+        job_id = store.create_job(Provider.OPENAI, "mock")
         init_job_dirs(job_id)
 
         saved, _ = save_uploaded_files(
@@ -251,7 +252,7 @@ class TestTraceKeyCollision:
             [("page1.xml", xml_bytes), ("page2.xml", xml_bytes)],
         )
         doc = build_document_manifest([(p, n) for n, p in saved.items()])
-        job_store.update_job(job_id, document_manifest=doc)
+        store.update_job(job_id, document_manifest=doc)
 
         # Must have pages from both files with overlapping line_ids
         assert len(doc.pages) >= 2
@@ -282,9 +283,10 @@ class TestTraceKeyCollision:
             output_dir=out_dir,
             source_files={n: p for n, p in saved.items()},
             provider=IdentityProvider(),
+            job_store_override=store,
         ))
 
-        job = job_store.get_job(job_id)
+        job = store.get_job(job_id)
         traces = job.line_traces
 
         # Total traces should equal total lines across both pages (no collision)
@@ -336,11 +338,12 @@ class TestLineAcceptanceIntegration:
                         out.append({"line_id": lid, "corrected_text": l["ocr_text"]})
                 return {"lines": out}
 
-        job_id = job_store.create_job(Provider.OPENAI, "mock")
+        store = JobStore()
+        job_id = store.create_job(Provider.OPENAI, "mock")
         init_job_dirs(job_id)
         saved, _ = save_uploaded_files(job_id, [("sample.xml", SAMPLE_XML.read_bytes())])
         doc = build_document_manifest([(p, n) for n, p in saved.items()])
-        job_store.update_job(job_id, document_manifest=doc)
+        store.update_job(job_id, document_manifest=doc)
 
         out_dir = output_dir(job_id)
         asyncio.run(run_job(
@@ -352,9 +355,10 @@ class TestLineAcceptanceIntegration:
             output_dir=out_dir,
             source_files={n: p for n, p in saved.items()},
             provider=SwapProvider(),
+            job_store_override=store,
         ))
 
-        job = job_store.get_job(job_id)
+        job = store.get_job(job_id)
         by_line = {t.line_id: t for t in job.line_traces.values()}
 
         # The swapped lines should have been caught and fallen back
