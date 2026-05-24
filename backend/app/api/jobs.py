@@ -14,8 +14,9 @@ from fastapi.responses import Response, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 
 from app.alto.parser import build_document_manifest
+from app.api.deps import get_job_store
 from app.jobs.orchestrator import run_job
-from app.jobs.store import job_store
+from app.protocols import JobStore
 from app.schemas import (
     CreateJobResponse,
     HyphenRole,
@@ -42,9 +43,12 @@ _ALLOWED_UPLOAD_EXTENSIONS = {".xml", ".alto", ".zip"}
 # Shared dependency for endpoints that require a completed job with a manifest
 # ---------------------------------------------------------------------------
 
-def get_completed_job(job_id: str) -> JobManifest:
+def get_completed_job(
+    job_id: str,
+    store: JobStore = Depends(get_job_store),
+) -> JobManifest:
     """FastAPI dependency: resolve job_id → JobManifest or raise 4xx."""
-    job = job_store.get_job(job_id)
+    job = store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
     if job.status != JobStatus.COMPLETED:
@@ -67,6 +71,7 @@ async def create_job(
     provider: str = Form(...),
     api_key: str = Form(...),
     model: str = Form(...),
+    store: JobStore = Depends(get_job_store),
 ) -> CreateJobResponse:
     """Upload ALTO files and start a correction job."""
     # Validate upload extensions
@@ -92,7 +97,7 @@ async def create_job(
         file_tuples.append((f.filename or "upload.xml", content))
 
     # Create job and dirs
-    job_id = job_store.create_job(provider_enum, model)
+    job_id = store.create_job(provider_enum, model)
     init_job_dirs(job_id)
 
     # Save and extract files (also extracts images from ZIPs)
@@ -119,7 +124,7 @@ async def create_job(
 
     pages_info = [(p.page_id, p.source_file) for p in doc_manifest.pages]
     images_map = link_alto_to_images(pages_info, saved, image_files)
-    job_store.update_job(job_id, document_manifest=doc_manifest, images=images_map)
+    store.update_job(job_id, document_manifest=doc_manifest, images=images_map)
 
     # Resolve provider instance
     from app.providers import get_provider as _get_provider
@@ -157,9 +162,12 @@ async def create_job(
 # ---------------------------------------------------------------------------
 
 @router.get("/{job_id}", response_model=JobStatusResponse)
-async def get_job(job_id: str) -> JobStatusResponse:
+async def get_job(
+    job_id: str,
+    store: JobStore = Depends(get_job_store),
+) -> JobStatusResponse:
     """Poll the status of a correction job."""
-    job = job_store.get_job(job_id)
+    job = store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
 
@@ -181,13 +189,16 @@ async def get_job(job_id: str) -> JobStatusResponse:
 # ---------------------------------------------------------------------------
 
 @router.get("/{job_id}/events")
-async def job_events(job_id: str) -> EventSourceResponse:
+async def job_events(
+    job_id: str,
+    store: JobStore = Depends(get_job_store),
+) -> EventSourceResponse:
     """SSE stream of correction job events."""
-    if job_store.get_job(job_id) is None:
+    if store.get_job(job_id) is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
 
     async def generator() -> AsyncGenerator[dict, None]:
-        async for sse_event in job_store.stream_events(job_id):
+        async for sse_event in store.stream_events(job_id):
             yield {
                 "event": sse_event.event,
                 "data": json.dumps(sse_event.data),
@@ -201,9 +212,12 @@ async def job_events(job_id: str) -> EventSourceResponse:
 # ---------------------------------------------------------------------------
 
 @router.get("/{job_id}/download")
-async def download_job(job_id: str) -> Response:
+async def download_job(
+    job_id: str,
+    store: JobStore = Depends(get_job_store),
+) -> Response:
     """Download corrected XML file(s)."""
-    if job_store.get_job(job_id) is None:
+    if store.get_job(job_id) is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
 
     out_files = get_output_files(job_id)
@@ -384,9 +398,13 @@ _IMAGE_MIME: dict[str, str] = {
 
 
 @router.get("/{job_id}/images/{image_name}")
-async def get_job_image(job_id: str, image_name: str) -> Response:
+async def get_job_image(
+    job_id: str,
+    image_name: str,
+    store: JobStore = Depends(get_job_store),
+) -> Response:
     """Serve a source scan image for a job."""
-    if job_store.get_job(job_id) is None:
+    if store.get_job(job_id) is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
 
     # Sanitise: only allow plain filenames (no path traversal)
