@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.jobs import router as jobs_router
 from app.api.providers import router as providers_router
 from app.jobs.store import JobStore
+from app.observability.logging_config import setup_json_logging
 
 # Resolved once at import time — same process for the lifetime of the container
 _STATIC_DIR = Path(__file__).parent.parent / "static"
@@ -36,6 +37,12 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    # Configure root logging first so every subsequent log line (FastAPI's
+    # startup, our endpoints, alto-core's emitted events via LoggingObserver)
+    # goes through the JSON formatter. Idempotent — safe to call on every
+    # create_app (tests instantiate the app many times).
+    setup_json_logging()
+
     app = FastAPI(
         title="ALTO LLM Corrector",
         description="Post-OCR text correction of ALTO XML files using LLM providers.",
