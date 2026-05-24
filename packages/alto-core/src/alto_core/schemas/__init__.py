@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from enum import Enum
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -229,45 +228,10 @@ class ModelInfo(BaseModel):
     context_window: int | None = None
 
 
-class ListModelsRequest(BaseModel):
-    provider: Provider
-    api_key: str
-
-
-class ListModelsResponse(BaseModel):
-    provider: Provider
-    models: list[ModelInfo]
-
-
-# ---------------------------------------------------------------------------
-# API response models
-# ---------------------------------------------------------------------------
-
-
-class CreateJobResponse(BaseModel):
-    job_id: str
-
-
-class JobStatusResponse(BaseModel):
-    job_id: str
-    status: JobStatus
-    total_lines: int = 0
-    lines_modified: int = 0
-    chunks_total: int = 0
-    retries: int = 0
-    fallbacks: int = 0
-    duration_seconds: float | None = None
-    error: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# SSE
-# ---------------------------------------------------------------------------
-
-
-class SSEEvent(BaseModel):
-    event: str
-    data: dict[str, Any] = Field(default_factory=dict)
+# HTTP DTOs (ListModelsRequest/Response, CreateJobResponse,
+# JobStatusResponse, SSEEvent) live in the consumer package — see
+# `app.schemas.http` in the backend. ARCHITECTURE.md §3.2 keeps the
+# server-layer payloads out of alto-core.
 
 
 # ---------------------------------------------------------------------------

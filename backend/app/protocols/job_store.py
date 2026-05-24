@@ -16,10 +16,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
 
-from alto_core.schemas import JobManifest, Provider, SSEEvent
+from alto_core.schemas import JobManifest, Provider
 
-# SSEEvent will move out of alto-core in commit 1.B (HTTP DTOs split);
-# import target will switch to app.schemas.http then.
+from app.schemas.http import SSEEvent
 
 
 @runtime_checkable
