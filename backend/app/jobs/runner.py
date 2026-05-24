@@ -17,9 +17,8 @@ from typing import Any
 
 from app.jobs.correction_pipeline import CorrectionPipeline, sanitize_error
 from app.jobs.observers import CompositeObserver, LoggingObserver
-from app.protocols import BaseProvider, JobStore
+from app.protocols import BaseProvider, JobStore, OutputWriter
 from app.schemas import DocumentManifest, JobStatus
-from app.storage.output_writer import FilesystemOutputWriter
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +48,16 @@ class JobRunner:
         provider_name: str,
         api_key: str,
         model: str,
-        output_dir: Path,
+        output_writer: OutputWriter,
         source_files: dict[str, Path],
         provider: BaseProvider | None = None,
         timeout_seconds: int = 1800,
     ) -> None:
         """Run a job end-to-end. Updates the JobStore as side effect.
 
+        `output_writer`: injected sink for the corrected ALTO + trace.
+        The caller chooses the implementation (filesystem, S3, in-memory
+        for tests, ...) — the runner stays oblivious of where outputs land.
         `source_files`: mapping of source_name → xml_path on disk.
         `provider`: injected provider (for testing); if None, resolved
         from the global registry via `app.providers.get_provider`.
@@ -67,7 +69,6 @@ class JobRunner:
 
             provider = get_provider(Provider(provider_name))
 
-        output_writer = FilesystemOutputWriter(output_dir)
         start_time = time.monotonic()
 
         try:
@@ -157,7 +158,7 @@ class JobRunner:
         api_key: str,
         model: str,
         provider_name: str,
-        output_writer: FilesystemOutputWriter,
+        output_writer: OutputWriter,
         source_files: dict[str, Path],
     ) -> tuple[int, int]:
         """Drive the pure pipeline and persist its counters back."""
