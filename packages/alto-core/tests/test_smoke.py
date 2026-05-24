@@ -43,6 +43,62 @@ def test_subpackages_importable():
     assert alto_core.schemas.DocumentManifest
 
 
+def test_top_level_public_api_is_importable():
+    """The README and ARCHITECTURE.md promise a single import surface.
+    If a future refactor drops one of these re-exports, this test trips."""
+    from alto_core import (
+        OUTPUT_JSON_SCHEMA,
+        SYSTEM_PROMPT,
+        BaseProvider,
+        BlockManifest,
+        ChunkGranularity,
+        CorrectionPipeline,
+        CorrectionResult,
+        DocumentManifest,
+        HyphenRole,
+        JobManifest,
+        JobStatus,
+        LineManifest,
+        ModelInfo,
+        OutputWriter,
+        PageManifest,
+        PipelineObserver,
+        Provider,
+        build_document_manifest,
+        extract_output_texts,
+        parse_alto_file,
+        rewrite_alto_file,
+    )
+
+    # Just touch each one so flake/mypy can't optimise the import away.
+    assert all(
+        x is not None
+        for x in (
+            BaseProvider,
+            PipelineObserver,
+            OutputWriter,
+            CorrectionPipeline,
+            CorrectionResult,
+            build_document_manifest,
+            parse_alto_file,
+            rewrite_alto_file,
+            extract_output_texts,
+            OUTPUT_JSON_SCHEMA,
+            SYSTEM_PROMPT,
+            DocumentManifest,
+            PageManifest,
+            BlockManifest,
+            LineManifest,
+            HyphenRole,
+            JobManifest,
+            JobStatus,
+            ChunkGranularity,
+            Provider,
+            ModelInfo,
+        )
+    )
+
+
 def test_correction_pipeline_construction_does_not_touch_infrastructure():
     """A bare ``CorrectionPipeline`` should instantiate from mock ports —
     no filesystem, no HTTP, no global state."""

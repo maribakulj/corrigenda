@@ -3,7 +3,7 @@ name = "alto-core"
 version = "0.1.0a1"
 description = "Pure ALTO XML correction pipeline core — parser, rewriter, hyphenation reconciler, chunk planner."
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 authors = [
     { name = "alto-llm-corrector contributors" },
@@ -11,7 +11,7 @@ authors = [
 keywords = ["alto", "ocr", "xml", "llm", "digital-heritage"]
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Text Processing :: Markup :: XML",

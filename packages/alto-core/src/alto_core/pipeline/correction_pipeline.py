@@ -1,19 +1,20 @@
 """Pure correction pipeline.
 
-The pipeline takes a parsed `DocumentManifest`, drives the chunk planner,
-calls the LLM provider, validates responses, reconciles hyphen pairs,
-and writes outputs via the injected `OutputWriter`. It depends only on
-the three Protocols in `app.protocols` — no `job_store`, no FastAPI,
-no filesystem path manipulation beyond reading source files.
+The pipeline takes a parsed :class:`DocumentManifest`, drives the chunk
+planner, calls the LLM provider, validates responses, reconciles hyphen
+pairs, and writes outputs via the injected :class:`OutputWriter`. It
+depends only on the three Protocols in :mod:`alto_core.protocols` — no
+job store, no FastAPI, no filesystem path manipulation beyond reading
+source files.
 
 Side effects:
-  - LLM HTTP calls via `BaseProvider`
-  - Event notifications via `PipelineObserver`
-  - Persistence via `OutputWriter`
+  - LLM HTTP calls via :class:`BaseProvider`
+  - Event notifications via :class:`PipelineObserver`
+  - Persistence via :class:`OutputWriter`
 
 Statistics (retry count, fallback count, total chunks, hyphen pairs
-reconciled) are returned in `CorrectionResult` so the caller can update
-its job state.
+reconciled) are returned in :class:`CorrectionResult` so the caller can
+update its job state.
 """
 
 from __future__ import annotations
