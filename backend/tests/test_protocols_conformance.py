@@ -7,12 +7,15 @@ deep inside the pipeline.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.jobs.store import JobStore as JobStoreImpl
-from app.protocols import BaseProvider, JobStore, PipelineObserver
+from app.protocols import BaseProvider, JobStore, OutputWriter, PipelineObserver
 from app.providers.anthropic_provider import AnthropicProvider
 from app.providers.google_provider import GoogleProvider
 from app.providers.mistral_provider import MistralProvider
 from app.providers.openai_provider import OpenAIProvider
+from app.storage.output_writer import FilesystemOutputWriter
 
 
 def test_concrete_providers_implement_base_provider():
@@ -45,3 +48,19 @@ def test_pipeline_observer_rejects_missing_method():
         pass
 
     assert not isinstance(_Empty(), PipelineObserver)
+
+
+def test_filesystem_output_writer_implements_output_writer_protocol(tmp_path: Path):
+    """FilesystemOutputWriter must satisfy the OutputWriter Protocol."""
+    assert isinstance(FilesystemOutputWriter(tmp_path), OutputWriter)
+
+
+def test_filesystem_output_writer_persists_corrected_and_trace(tmp_path: Path):
+    """Writer round-trip: bytes/strings handed in are read back identically."""
+    writer = FilesystemOutputWriter(tmp_path)
+
+    writer.write_corrected(source_stem="doc1", xml_bytes=b"<xml>corrected</xml>")
+    writer.write_trace(traces_payload='{"job_id":"j1","lines":[]}')
+
+    assert (tmp_path / "doc1_corrected.xml").read_bytes() == b"<xml>corrected</xml>"
+    assert (tmp_path / "trace.json").read_text(encoding="utf-8") == '{"job_id":"j1","lines":[]}'

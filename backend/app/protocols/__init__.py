@@ -44,25 +44,14 @@ class PipelineObserver(Protocol):
 class OutputWriter(Protocol):
     """Persists corrected ALTO XML and the job trace.
 
-    `write_corrected` is called once per source ALTO file with the
-    rewritten bytes and per-line rewriter metadata so the writer can
-    update traces or compute its own observability data.
-
-    `write_trace` is called once at the end of the pipeline with the
-    full job trace (line-by-line text through every stage).
+    Pure I/O: the writer takes pre-computed bytes/strings and persists
+    them. Computing what to write (rewriting, trace assembly) is the
+    pipeline's responsibility.
     """
 
-    def write_corrected(
-        self,
-        *,
-        source_name: str,
-        xml_bytes: bytes,
-        rewriter_paths: dict[str, str],
-        output_alto_text: dict[str, str],
-        file_line_ids: set[str],
-    ) -> None: ...
+    def write_corrected(self, *, source_stem: str, xml_bytes: bytes) -> None: ...
 
-    def write_trace(self, *, job_id: str, traces_payload: str) -> None: ...
+    def write_trace(self, *, traces_payload: str) -> None: ...
 
 
 @runtime_checkable

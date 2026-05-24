@@ -15,7 +15,9 @@ from app.jobs.chunk_planner import plan_page
 from app.jobs.line_acceptance import AcceptanceResult, check_adjacent_duplicates, check_line
 from app.jobs.store import job_store
 from app.jobs.validator import validate_llm_response
+from app.protocols import OutputWriter
 from app.providers.base import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT, BaseProvider
+from app.storage.output_writer import FilesystemOutputWriter
 from app.schemas import (
     ChunkPlannerConfig,
     ChunkRequest,
@@ -545,13 +547,13 @@ async def _process_page(
 def _write_outputs(
     document_manifest: DocumentManifest,
     source_files: dict[str, Path],
-    out_dir: Path,
+    output_writer: OutputWriter,
     provider_name: str,
     model: str,
     traces: dict[str, LineTrace],
     job_id: str,
 ) -> None:
-    """Rewrite corrected ALTO files and build trace data."""
+    """Rewrite corrected ALTO files, update traces, and persist via the writer."""
     for source_name, xml_path in source_files.items():
         pages_for_file = [
             p for p in document_manifest.pages
@@ -563,8 +565,7 @@ def _write_outputs(
         xml_bytes, _metrics, rewriter_paths = rewrite_alto_file(
             xml_path, pages_for_file, provider_name, model,
         )
-        out_path = out_dir / f"{xml_path.stem}_corrected.xml"
-        out_path.write_bytes(xml_bytes)
+        output_writer.write_corrected(source_stem=xml_path.stem, xml_bytes=xml_bytes)
 
         # Build line_id → trace_key mapping for this file's pages
         lid_to_tkey: dict[str, str] = {}
@@ -588,17 +589,13 @@ def _write_outputs(
                 if t is not None:
                     t.output_alto_text = otxt
 
-    # Write trace.json
+    # Trace JSON
     job_trace = JobTrace(
         job_id=job_id,
         total_lines=len(traces),
         lines=list(traces.values()),
     )
-    trace_path = out_dir / "trace.json"
-    trace_path.write_text(
-        job_trace.model_dump_json(indent=2),
-        encoding="utf-8",
-    )
+    output_writer.write_trace(traces_payload=job_trace.model_dump_json(indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -612,7 +609,7 @@ async def _run_pipeline(
     api_key: str,
     model: str,
     provider_name: str,
-    output_dir: Path,
+    output_writer: OutputWriter,
     source_files: dict[str, Path],
 ) -> tuple[int, int]:
     """Run the correction pipeline. Returns (total_chunks, total_reconciled)."""
@@ -691,7 +688,7 @@ async def _run_pipeline(
         total_reconciled += page_reconciled
 
     _write_outputs(
-        document_manifest, source_files, output_dir,
+        document_manifest, source_files, output_writer,
         provider_name, model, traces, job_id,
     )
     job_store.update_job(job_id, line_traces=traces)
@@ -724,6 +721,7 @@ async def run_job(
         from app.schemas import Provider
         provider = get_provider(Provider(provider_name))
 
+    output_writer = FilesystemOutputWriter(output_dir)
     start_time = time.monotonic()
 
     try:
@@ -731,7 +729,7 @@ async def run_job(
         total_chunks, total_reconciled = await asyncio.wait_for(
             _run_pipeline(
                 job_id, document_manifest, provider, api_key, model,
-                provider_name, output_dir, source_files,
+                provider_name, output_writer, source_files,
             ),
             timeout=timeout,
         )
