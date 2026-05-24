@@ -23,7 +23,7 @@ from app.storage.output_writer import FilesystemOutputWriter
 logger = logging.getLogger(__name__)
 
 
-class _JobStoreObserver:
+class JobStoreObserver:
     """Adapt a JobStore to the PipelineObserver Protocol for a single job."""
 
     def __init__(self, job_store: JobStore, job_id: str) -> None:
@@ -172,7 +172,7 @@ class JobRunner:
 
         pipeline = CorrectionPipeline(
             provider=provider,
-            observer=_JobStoreObserver(self.job_store, job_id),
+            observer=JobStoreObserver(self.job_store, job_id),
             output_writer=output_writer,
         )
         result = await pipeline.run(
