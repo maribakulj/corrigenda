@@ -115,3 +115,65 @@ def test_handles_unicode():
     out = _sanitize_error(msg)
     assert "sk-AAAAéàçabc" not in out
     assert "Erreur" in out
+
+
+# ---------------------------------------------------------------------------
+# Extended secret patterns (Stage 4.E / R5)
+# ---------------------------------------------------------------------------
+
+
+def test_strips_basic_auth_header():
+    """`Authorization: Basic <b64>` is base64-encoded credentials —
+    valuable to attackers, must be redacted."""
+    msg = "401: header Authorization: Basic dXNlcjpwYXNzd29yZA=="
+    out = _sanitize_error(msg)
+    assert "dXNlcjpwYXNzd29yZA==" not in out
+    assert "Basic ****" in out
+
+
+def test_strips_api_key_query_param():
+    """`?api_key=…` in a URL or form body — masks the value, keeps the key name."""
+    msg = "Request failed: GET /v1/models?api_key=my-secret-token-123 returned 401"
+    out = _sanitize_error(msg)
+    assert "my-secret-token-123" not in out
+    assert "api_key=****" in out
+
+
+def test_strips_password_field():
+    msg = "Connection refused: password=hunter2 invalid"
+    out = _sanitize_error(msg)
+    assert "hunter2" not in out
+    assert "password=****" in out
+
+
+def test_strips_token_field_json_style():
+    """JSON-style `"token": "..."` redacted, quotes preserved."""
+    msg = 'Body was {"token": "abc-123-def-456", "model": "gpt-4o"}'
+    out = _sanitize_error(msg)
+    assert "abc-123-def-456" not in out
+    assert "model" in out  # non-secret field intact
+
+
+def test_strips_x_api_key_header():
+    msg = "Request failed: x-api-key: secret-value-here returned 403"
+    out = _sanitize_error(msg)
+    assert "secret-value-here" not in out
+    assert "x-api-key: ****" in out
+
+
+def test_strips_secret_field_case_insensitive():
+    msg = "OAuth refresh failed, SECRET=top-secret-data"
+    out = _sanitize_error(msg)
+    assert "top-secret-data" not in out
+
+
+def test_apikey_no_separator_underscore_variant():
+    msg = "Got error: ApiKey=zzz999 from server"
+    out = _sanitize_error(msg)
+    assert "zzz999" not in out
+
+
+def test_non_secret_fields_left_alone():
+    """A plain message with no secret-shaped substrings must round-trip."""
+    msg = "Job j-abc-123 completed in 4.2s, lines_modified=12"
+    assert _sanitize_error(msg) == msg

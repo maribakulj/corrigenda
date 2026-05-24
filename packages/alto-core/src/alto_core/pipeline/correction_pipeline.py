@@ -47,22 +47,57 @@ from alto_core.schemas import (
     PageManifest,
 )
 
-# Pattern to redact Bearer tokens, API keys, and common key formats
-_SECRET_RE = re.compile(
-    r"(Bearer\s+)\S+|"  # Authorization: Bearer <key>
-    r"(sk-[A-Za-z0-9]{4})\S+|"  # OpenAI-style sk-...
-    r"(key-[A-Za-z0-9]{4})\S+",  # Mistral-style key-...
-    re.IGNORECASE,
+# Patterns to redact common secret formats in error messages.
+# Each pattern captures a prefix in the first group so the redacted
+# output keeps human-readable context (e.g. "Bearer ****" instead of
+# just "****"). Patterns are applied in order; first match wins.
+_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # HTTP Authorization headers — both schemes
+    (re.compile(r"(Bearer\s+)\S+", re.IGNORECASE), r"\1****"),
+    (re.compile(r"(Basic\s+)[A-Za-z0-9+/=]+", re.IGNORECASE), r"\1****"),
+    # Vendor-prefixed keys (OpenAI sk-, Mistral key-, Anthropic sk-ant-, ...).
+    # Hint = 4 chars after the prefix (sk-AAAA****) — stable test contract.
+    (re.compile(r"(sk-[A-Za-z0-9_-]{4})\S+"), r"\1****"),
+    (re.compile(r"(key-[A-Za-z0-9_-]{4})\S+"), r"\1****"),
+    # Generic key=value patterns in query strings / form bodies / JSON.
+    # Matches `api_key`, `api-key`, `apikey`, `password`, `secret`, `token`
+    # then an optional closing quote (JSON-style "token":), then the
+    # separator, then the value. Stops at the next quote/space/delimiter.
+    (
+        re.compile(
+            r"((?:api[_-]?key|password|passwd|secret|token)"
+            r"[\"']?\s*[=:]\s*[\"']?)[^\s\"'&,}\]]+",
+            re.IGNORECASE,
+        ),
+        r"\1****",
+    ),
+    # Custom HTTP headers: x-api-key, x-auth-token, ...
+    (
+        re.compile(
+            r"(x-(?:api-key|auth-token|access-token)\s*[:=]\s*)\S+",
+            re.IGNORECASE,
+        ),
+        r"\1****",
+    ),
 )
 
 
 def sanitize_error(msg: str, api_key: str | None = None) -> str:
-    """Strip API keys and secrets from error messages."""
+    """Strip API keys and common secret patterns from an error message.
+
+    The caller can supply the exact ``api_key`` for first-pass redaction;
+    any remaining secret-shaped substrings are then masked by the
+    pattern set above. Patterns cover:
+      - HTTP ``Authorization: Bearer …`` and ``Basic …`` headers
+      - Vendor-prefixed keys (``sk-…``, ``key-…``)
+      - Generic ``api_key=…``, ``password=…``, ``token=…`` pairs
+      - Custom headers (``X-Api-Key:``, ``X-Auth-Token:``, …)
+    """
     if api_key and len(api_key) > 8 and api_key in msg:
         msg = msg.replace(api_key, api_key[:4] + "****")
-    return _SECRET_RE.sub(
-        lambda m: (m.group(1) or m.group(2) or m.group(3) or "") + "****", msg
-    )
+    for pattern, replacement in _SECRET_PATTERNS:
+        msg = pattern.sub(replacement, msg)
+    return msg
 
 
 def _trace_key(lm: LineManifest) -> str:
