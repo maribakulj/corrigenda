@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import zipfile
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _BASE_DIR = Path(os.environ.get("JOB_STORAGE_DIR", "/tmp/app-jobs"))
 
@@ -222,7 +225,14 @@ def link_alto_to_images(
                     image_key = Path(fname).stem.lower()
                     break
         except Exception:
-            pass
+            # Falls back to the ALTO stem below. Logging the parse
+            # failure helps diagnose why an image link is missing for
+            # a given source file.
+            logger.debug(
+                "ALTO image-link parse failed for %s; falling back to filename stem",
+                alto_path,
+                exc_info=True,
+            )
 
         # Strategy 2: fallback to ALTO filename stem
         if not image_key or image_key not in saved_images:

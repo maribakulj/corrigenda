@@ -36,7 +36,6 @@ ignore = [
     "UP042",  # replace-str-enum — `class X(str, Enum)` is fine; StrEnum changes serialisation
     "RUF002", # ambiguous-unicode-character-docstring — false positives on French
     "RUF003", # ambiguous-unicode-character-comment — idem
-    "B904",   # raise-without-from — chain origin not always useful in our handlers
     "B905",   # zip-without-explicit-strict — adds noise without catching real bugs here
     "E402",   # module-import-not-at-top — used intentionally for late imports
     "SIM105", # suppressible-exception — `try/except: pass` is sometimes clearer

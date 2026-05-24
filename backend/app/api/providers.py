@@ -15,8 +15,8 @@ async def list_models(body: ListModelsRequest) -> ListModelsResponse:
     """List available models for a given provider and API key."""
     try:
         provider = get_provider(body.provider)
-    except KeyError:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {body.provider}")
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {body.provider}") from exc
 
     try:
         models = await provider.list_models(body.api_key)
@@ -24,6 +24,6 @@ async def list_models(body: ListModelsRequest) -> ListModelsResponse:
         raise HTTPException(
             status_code=400,
             detail=f"Provider error ({body.provider}): {exc}",
-        )
+        ) from exc
 
     return ListModelsResponse(provider=body.provider, models=models)

@@ -90,8 +90,8 @@ async def create_job(
     # Validate provider
     try:
         provider_enum = Provider(provider)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider!r}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider!r}") from exc
 
     # Read all file bytes
     file_tuples: list[tuple[str, bytes]] = []
@@ -117,7 +117,7 @@ async def create_job(
     try:
         doc_manifest = build_document_manifest(file_pairs)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to parse files: {exc}")
+        raise HTTPException(status_code=400, detail=f"Failed to parse files: {exc}") from exc
 
     if doc_manifest.total_lines == 0:
         raise HTTPException(
@@ -291,7 +291,12 @@ async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
     modified_lines = 0
     hyphen_pairs = 0
 
-    assert job.document_manifest is not None  # guaranteed by get_completed_job
+    # get_completed_job already 404s if document_manifest is None, but
+    # an `assert` here would disappear under `python -O` (bandit B101).
+    # Keep a real runtime guard instead so the contract holds in any
+    # interpreter mode.
+    if job.document_manifest is None:
+        raise HTTPException(status_code=500, detail="Job has no document_manifest.")
     for page in job.document_manifest.pages:
         lines_out = []
         for lm in page.lines:
@@ -341,7 +346,8 @@ async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
 async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
     """Return structural layout data (blocks + lines with ALTO coordinates)."""
     pages_out = []
-    assert job.document_manifest is not None  # guaranteed by get_completed_job
+    if job.document_manifest is None:
+        raise HTTPException(status_code=500, detail="Job has no document_manifest.")
     for page in job.document_manifest.pages:
         line_by_id = {lm.line_id: lm for lm in page.lines}
 

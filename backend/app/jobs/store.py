@@ -72,7 +72,14 @@ class JobStore:
             try:
                 q.put_nowait(sse)
             except asyncio.QueueFull:
-                pass  # slow consumer — drop
+                # Slow consumer — drop the event. Logged at debug so an
+                # operator inspecting why a client missed updates can see
+                # the back-pressure rather than diagnose it blindly.
+                logger.debug(
+                    "SSE subscriber queue full for job %s; dropping event %r",
+                    job_id,
+                    event,
+                )
 
     def subscribe(self, job_id: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=500)
