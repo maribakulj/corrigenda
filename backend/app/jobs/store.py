@@ -1,9 +1,21 @@
-"""In-memory job store with SSE fan-out and TTL eviction."""
+"""In-memory job store with SSE fan-out and TTL eviction.
+
+All state-mutating methods are guarded by an internal re-entrant lock.
+The Python-asyncio threading model means simple dict/list ops are
+already atomic within a single coroutine, but ``_evict_stale`` and
+``_remove_job`` straddle several mutations, and a future move to
+threading or to multiprocessing (with shared state) would expose the
+fragility. ``threading.RLock`` is the cheap defensive choice — sync
+callers see no API change, async callers don't have to ``await`` the
+lock, and re-entrancy avoids self-deadlocks when (for example)
+``create_job`` calls ``_evict_stale``.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -24,42 +36,47 @@ class JobStore:
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
         self._completed_at: dict[str, float] = {}  # job_id → monotonic timestamp
         self._ttl_seconds = ttl_seconds
+        self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
 
     def create_job(self, provider: Provider, model: str) -> str:
-        self._evict_stale()
-        job_id = str(uuid.uuid4())
-        self._jobs[job_id] = JobManifest(
-            job_id=job_id,
-            provider=provider,
-            model=model,
-        )
-        self._subscribers[job_id] = []
-        return job_id
+        with self._lock:
+            self._evict_stale()
+            job_id = str(uuid.uuid4())
+            self._jobs[job_id] = JobManifest(
+                job_id=job_id,
+                provider=provider,
+                model=model,
+            )
+            self._subscribers[job_id] = []
+            return job_id
 
     def get_job(self, job_id: str) -> JobManifest | None:
+        # Single dict.get is atomic in CPython; no lock needed.
         return self._jobs.get(job_id)
 
     def update_job(self, job_id: str, **kwargs: Any) -> None:
-        job = self._jobs.get(job_id)
-        if job is None:
-            return
-        for k, v in kwargs.items():
-            setattr(job, k, v)
-        # Track when a job reaches terminal state for eviction
-        if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
-            self._completed_at.setdefault(job_id, time.monotonic())
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            for k, v in kwargs.items():
+                setattr(job, k, v)
+            # Track when a job reaches terminal state for eviction
+            if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+                self._completed_at.setdefault(job_id, time.monotonic())
 
     def increment_counter(self, job_id: str, field: str, delta: int = 1) -> None:
         """Atomically read-increment-write a numeric counter on a job."""
-        job = self._jobs.get(job_id)
-        if job is None:
-            return
-        current = getattr(job, field, 0) or 0
-        setattr(job, field, current + delta)
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            current = getattr(job, field, 0) or 0
+            setattr(job, field, current + delta)
 
     # ------------------------------------------------------------------
     # SSE
@@ -68,7 +85,11 @@ class JobStore:
     def emit(self, job_id: str, event: str, data: dict[str, Any]) -> None:
         """Push an SSEEvent to all subscriber queues."""
         sse = SSEEvent(event=event, data=data)
-        for q in self._subscribers.get(job_id, []):
+        # Snapshot the subscriber list under the lock so we don't iterate
+        # a list that a concurrent subscribe/unsubscribe is mutating.
+        with self._lock:
+            queues = list(self._subscribers.get(job_id, []))
+        for q in queues:
             try:
                 q.put_nowait(sse)
             except asyncio.QueueFull:
@@ -83,15 +104,17 @@ class JobStore:
 
     def subscribe(self, job_id: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=500)
-        self._subscribers.setdefault(job_id, []).append(q)
+        with self._lock:
+            self._subscribers.setdefault(job_id, []).append(q)
         return q
 
     def unsubscribe(self, job_id: str, queue: asyncio.Queue) -> None:
-        subs = self._subscribers.get(job_id, [])
-        try:
-            subs.remove(queue)
-        except ValueError:
-            pass
+        with self._lock:
+            subs = self._subscribers.get(job_id, [])
+            try:
+                subs.remove(queue)
+            except ValueError:
+                pass
 
     async def stream_events(self, job_id: str) -> AsyncGenerator[SSEEvent, None]:
         """
@@ -126,7 +149,12 @@ class JobStore:
     # ------------------------------------------------------------------
 
     def _evict_stale(self) -> None:
-        """Remove completed/failed jobs older than TTL or exceeding cap."""
+        """Remove completed/failed jobs older than TTL or exceeding cap.
+
+        Caller must hold ``self._lock`` — currently invoked only from
+        ``create_job`` which acquires it. The RLock is re-entrant so the
+        nested ``_remove_job`` calls below don't deadlock.
+        """
         now = time.monotonic()
         expired = [jid for jid, ts in self._completed_at.items() if now - ts > self._ttl_seconds]
         for jid in expired:
@@ -140,10 +168,17 @@ class JobStore:
                 self._remove_job(jid)
 
     def _remove_job(self, job_id: str) -> None:
-        self._jobs.pop(job_id, None)
-        self._subscribers.pop(job_id, None)
-        self._completed_at.pop(job_id, None)
-        # Clean up disk storage for evicted jobs
+        """Pop a job + its subscribers + its completion timestamp.
+
+        Caller must hold ``self._lock``. The filesystem cleanup is done
+        outside the critical section — it only touches disk and never
+        re-enters the store.
+        """
+        with self._lock:
+            self._jobs.pop(job_id, None)
+            self._subscribers.pop(job_id, None)
+            self._completed_at.pop(job_id, None)
+        # Clean up disk storage for evicted jobs (best-effort, no lock).
         try:
             from app.storage import cleanup_job
 
