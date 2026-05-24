@@ -18,7 +18,7 @@ from typing import Optional
 
 from app.jobs.runner import JobRunner
 from app.jobs.store import job_store  # noqa: F401  (re-exported for test compat)
-from app.protocols import BaseProvider
+from app.protocols import BaseProvider, JobStore
 from app.schemas import DocumentManifest
 
 logger = logging.getLogger(__name__)
@@ -44,12 +44,21 @@ async def run_job(
     output_dir: Path,
     source_files: dict[str, Path],
     provider: Optional[BaseProvider] = None,
+    job_store_override: Optional[JobStore] = None,
 ) -> None:
-    """Compat wrapper around `JobRunner.run` — uses the module-level
-    `job_store` (so test substitution still applies) and the module-level
-    `_JOB_TIMEOUT_SECONDS` (so test patches still apply).
+    """Compat wrapper around `JobRunner.run`.
+
+    `job_store_override` lets callers inject the store explicitly (for
+    example, the API layer hands over the one resolved via FastAPI
+    Depends). When `None`, the module-level `job_store` is used — this
+    preserves the substitution pattern used by existing tests
+    (`orch_module.job_store = store`).
+
+    `_JOB_TIMEOUT_SECONDS` is also looked up at the module scope so test
+    patches keep working.
     """
-    runner = JobRunner(job_store=job_store)
+    store = job_store_override if job_store_override is not None else job_store
+    runner = JobRunner(job_store=store)
     await runner.run(
         job_id=job_id,
         document_manifest=document_manifest,

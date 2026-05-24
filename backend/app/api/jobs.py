@@ -150,6 +150,7 @@ async def create_job(
             output_dir=out_dir,
             source_files={name: path for name, path in saved.items()},
             provider=provider_instance,
+            job_store_override=store,
         )
     )
     task.add_done_callback(_on_task_done)
