@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.correction_pipeline import CorrectionPipeline, sanitize_error
+from app.jobs.observers import CompositeObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore
 from app.schemas import DocumentManifest, JobStatus
 from app.storage.output_writer import FilesystemOutputWriter
@@ -170,9 +171,14 @@ class JobRunner:
             total_lines=document_manifest.total_lines,
         )
 
+        # Fan events out to the job store (for SSE clients) and to the
+        # standard logger (for operators). ADR-006: alto-core never
+        # logs by itself — adapters here own the routing.
         pipeline = CorrectionPipeline(
             provider=provider,
-            observer=JobStoreObserver(self.job_store, job_id),
+            observer=CompositeObserver(
+                [JobStoreObserver(self.job_store, job_id), LoggingObserver()]
+            ),
             output_writer=output_writer,
         )
         result = await pipeline.run(

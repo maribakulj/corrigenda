@@ -20,7 +20,6 @@ update its job state.
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,8 +44,6 @@ from alto_core.schemas import (
     LLMUserPayload,
     PageManifest,
 )
-
-logger = logging.getLogger(__name__)
 
 # Pattern to redact Bearer tokens, API keys, and common key formats
 _SECRET_RE = re.compile(
@@ -363,12 +360,14 @@ class CorrectionPipeline:
                 )
                 page_reconciled += n
             except Exception as exc:
-                logger.exception("Chunk %s raised unexpectedly", chunk.chunk_id)
+                # ADR-006: pipeline does not log directly; emit an
+                # event the host application can log/trace.
                 self.observer.on_event(
-                    "warning",
+                    "chunk_error",
                     {
                         "chunk_id": chunk.chunk_id,
                         "message": str(exc)[:200],
+                        "exception_type": type(exc).__name__,
                     },
                 )
 
@@ -533,11 +532,8 @@ class CorrectionPipeline:
                     self._retry_count += 1
                     continue
 
-                # All attempts exhausted → fallback
-                logger.warning(
-                    "Chunk %s: all attempts failed, falling back to OCR source",
-                    chunk.chunk_id,
-                )
+                # All attempts exhausted → fallback (ADR-006: no log here,
+                # the warning event carries the same information for hosts).
                 self.observer.on_event(
                     "warning",
                     {
@@ -576,11 +572,14 @@ class CorrectionPipeline:
                     cross_page_partners=cross_page_partners,
                 )
                 if part2 is None:
-                    logger.warning(
-                        "Hyphen pair partner %s not found for PART1 %s "
-                        "(likely cross-page pair — skipping reconciliation)",
-                        lm.hyphen_pair_line_id,
-                        lm.line_id,
+                    self.observer.on_event(
+                        "hyphen_partner_missing",
+                        {
+                            "chunk_id": chunk.chunk_id,
+                            "line_id": lm.line_id,
+                            "missing_partner_id": lm.hyphen_pair_line_id,
+                            "direction": "backward",
+                        },
                     )
                     continue
                 part2_key = (part2.page_id, part2.line_id)
@@ -601,11 +600,14 @@ class CorrectionPipeline:
                     cross_page_partners=cross_page_partners,
                 )
                 if part2 is None:
-                    logger.warning(
-                        "Hyphen forward partner %s not found for BOTH %s "
-                        "(likely cross-page pair — skipping reconciliation)",
-                        lm.hyphen_forward_pair_id,
-                        lm.line_id,
+                    self.observer.on_event(
+                        "hyphen_partner_missing",
+                        {
+                            "chunk_id": chunk.chunk_id,
+                            "line_id": lm.line_id,
+                            "missing_partner_id": lm.hyphen_forward_pair_id,
+                            "direction": "forward",
+                        },
                     )
                     continue
                 part2_key = (part2.page_id, part2.line_id)
