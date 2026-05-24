@@ -115,18 +115,19 @@ jobs:
     # there would surface as confusing mypy errors here.
     needs: [alto-core-tests]
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install dependencies (pulls in editable alto-core via -e ../packages/alto-core)
+      - name: Install alto-core (editable, sibling package)
+        run: pip install -e packages/alto-core
+      - name: Install backend dependencies
+        working-directory: backend
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: mypy
+        working-directory: backend
         run: mypy --explicit-package-bases app
 
   backend-tests:
@@ -134,20 +135,21 @@ jobs:
     # broken core package.
     needs: [alto-core-tests]
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     env:
-      PYTHONPATH: .
+      PYTHONPATH: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install dependencies (pulls in editable alto-core via -e ../packages/alto-core)
+      - name: Install alto-core (editable, sibling package)
+        run: pip install -e packages/alto-core
+      - name: Install backend dependencies
+        working-directory: backend
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: pytest + coverage gate (80%)
+        working-directory: backend
         run: pytest --cov=app --cov-report=term --cov-report=xml
       - name: Upload coverage
         if: always()
@@ -159,23 +161,22 @@ jobs:
 
   backend-security:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install dependencies + security tools
-        # Install backend deps first so the env reflects what we ship,
-        # then audit the resolved environment (pip-audit -r doesn't
-        # understand `-e` lines in requirements.txt).
+      - name: Install alto-core + backend deps + security tools
+        # alto-core lives next door; install editable so backend imports
+        # resolve. Audit the resolved environment after install
+        # (pip-audit -r doesn't understand editable lines).
         run: |
-          pip install -r requirements.txt
+          pip install -e packages/alto-core
+          pip install -r backend/requirements.txt
           pip install bandit[toml]==1.9.4 pip-audit==2.10.0
       - name: bandit (static analysis)
+        working-directory: backend
         run: bandit -r app -c pyproject.toml
       - name: pip-audit (dependency CVEs in resolved env)
         run: pip-audit --strict

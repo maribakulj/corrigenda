@@ -1,18 +1,17 @@
 # Stand-alone backend image used by docker-compose.
 #
-# Build context: repository root (see docker-compose.yml). Layout:
-#   /app/packages/alto-core (editable install of the sibling package)
-#   /app/backend             (this image's home)
-# The requirements file declares `-e ../packages/alto-core`, so we cd
-# into backend/ before `pip install`.
+# Build context: repository root (see docker-compose.yml). Two-step
+# Python install: alto-core editable from the sibling path, then the
+# backend's own requirements.txt (which no longer references alto-core
+# — see Stage 6 of the audit remediation).
 FROM python:3.11-slim
 WORKDIR /app
 
 COPY packages/alto-core /app/packages/alto-core
+RUN pip install --no-cache-dir -e /app/packages/alto-core
+
 COPY backend/requirements.txt /app/backend/requirements.txt
-WORKDIR /app/backend
-RUN pip install --no-cache-dir -r requirements.txt
-WORKDIR /app
+RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
 COPY backend/app/ /app/backend/app/
 

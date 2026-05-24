@@ -10,15 +10,17 @@ RUN npm run build
 FROM python:3.11-slim
 WORKDIR /app
 
-# Layout: /app/packages/alto-core (editable install) and /app/backend
-# (the FastAPI app). The requirements file lives in backend/ and
-# declares `-e ../packages/alto-core`, so the WORKDIR must be backend/
-# during `pip install` for the relative path to resolve.
+# Two-step Python install:
+#   1. alto-core (sibling package) — editable, absolute path so cwd
+#      doesn't matter.
+#   2. backend requirements.txt — alto-core no longer lives in there
+#      since Stage 6 of the audit remediation (decoupled to avoid the
+#      cwd-relative `-e ../packages/alto-core` failure mode).
 COPY packages/alto-core /app/packages/alto-core
+RUN pip install --no-cache-dir -e /app/packages/alto-core
+
 COPY backend/requirements.txt /app/backend/requirements.txt
-WORKDIR /app/backend
-RUN pip install --no-cache-dir -r requirements.txt
-WORKDIR /app
+RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
 COPY backend/app/ /app/backend/app/
 COPY --from=frontend-builder /frontend/dist /app/static/
