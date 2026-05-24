@@ -64,3 +64,28 @@ def test_filesystem_output_writer_persists_corrected_and_trace(tmp_path: Path):
 
     assert (tmp_path / "doc1_corrected.xml").read_bytes() == b"<xml>corrected</xml>"
     assert (tmp_path / "trace.json").read_text(encoding="utf-8") == '{"job_id":"j1","lines":[]}'
+
+
+def test_jobstore_observer_adapter_implements_pipeline_observer():
+    """The runner's internal JobStore→Observer adapter must satisfy the Protocol."""
+    from app.jobs.runner import _JobStoreObserver
+
+    observer = _JobStoreObserver(JobStoreImpl(), job_id="j1")
+    assert isinstance(observer, PipelineObserver)
+
+
+def test_jobstore_observer_forwards_events_to_store():
+    """Events on the observer must surface on the wrapped store."""
+    from app.jobs.runner import _JobStoreObserver
+    from app.schemas import Provider as ProviderEnum
+
+    store = JobStoreImpl()
+    job_id = store.create_job(ProviderEnum.OPENAI, "mock")
+    queue = store.subscribe(job_id)
+
+    observer = _JobStoreObserver(store, job_id)
+    observer.on_event("custom_event", {"k": "v"})
+
+    event = queue.get_nowait()
+    assert event.event == "custom_event"
+    assert event.data == {"k": "v"}
