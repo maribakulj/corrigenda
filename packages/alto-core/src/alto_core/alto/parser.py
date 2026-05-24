@@ -445,3 +445,10 @@ def build_document_manifest(
         total_blocks=total_blocks,
         total_lines=total_lines,
     )
+
+
+# --- __all__ (Stage 3 audit remediation) ---
+__all__ = [
+    "parse_alto_file",
+    "build_document_manifest",
+]

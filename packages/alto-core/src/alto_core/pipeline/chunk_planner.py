@@ -339,3 +339,10 @@ def plan_page(
         return result
 
     return _try_window(page, document_id, config)
+
+
+# --- __all__ (Stage 3 audit remediation) ---
+__all__ = [
+    "downgrade_granularity",
+    "plan_page",
+]

@@ -377,7 +377,11 @@ def test_fallback_on_invalid_json():
     # invalid_json_times must be >= max_attempts (3) to exhaust all retries
     mock = MockProvider(invalid_json_times=3)
 
-    with patch("app.jobs.correction_pipeline.asyncio.sleep", new=AsyncMock(return_value=None)):
+    # Patch alto-core directly: the backend shim no longer re-exports
+    # the `asyncio` module attribute (Stage 3 audit remediation).
+    with patch(
+        "alto_core.pipeline.correction_pipeline.asyncio.sleep", new=AsyncMock(return_value=None)
+    ):
         job_id, out_files, store = _run_job_directly(
             {SAMPLE_XML.name: SAMPLE_XML.read_bytes()},
             mock=mock,

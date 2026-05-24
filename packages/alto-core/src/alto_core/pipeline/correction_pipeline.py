@@ -754,3 +754,11 @@ class CorrectionPipeline:
         self.output_writer.write_trace(
             traces_payload=job_trace.model_dump_json(indent=2),
         )
+
+
+# --- __all__ (Stage 3 audit remediation) ---
+__all__ = [
+    "sanitize_error",
+    "CorrectionResult",
+    "CorrectionPipeline",
+]

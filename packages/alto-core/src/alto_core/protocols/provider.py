@@ -97,3 +97,11 @@ class BaseProvider(Protocol):
         json_schema: dict[str, Any],
         temperature: float = 0.0,
     ) -> dict[str, Any]: ...
+
+
+# --- __all__ (Stage 3 audit remediation) ---
+__all__ = [
+    "BaseProvider",
+    "OUTPUT_JSON_SCHEMA",
+    "SYSTEM_PROMPT",
+]

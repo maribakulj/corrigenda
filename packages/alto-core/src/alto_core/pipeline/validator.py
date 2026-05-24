@@ -197,3 +197,9 @@ def _check_pair_drift(
             f"hyphen_integrity_violation: PART2 line {id_b!r} shrank from "
             f"{ocr_b_wc} to {cor_b_wc} words (text migration suspected)"
         )
+
+
+# --- __all__ (Stage 3 audit remediation) ---
+__all__ = [
+    "validate_llm_response",
+]

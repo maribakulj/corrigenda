@@ -265,3 +265,29 @@ class JobTrace(BaseModel):
     job_id: str
     total_lines: int = 0
     lines: list[LineTrace] = Field(default_factory=list)
+
+
+# --- __all__ (Stage 3 audit remediation) ---
+__all__ = [
+    "JobStatus",
+    "LineStatus",
+    "ChunkGranularity",
+    "Provider",
+    "HyphenRole",
+    "Coords",
+    "LineManifest",
+    "BlockManifest",
+    "PageManifest",
+    "DocumentManifest",
+    "ChunkPlannerConfig",
+    "ChunkRequest",
+    "ChunkPlan",
+    "JobManifest",
+    "LLMLineInput",
+    "LLMUserPayload",
+    "LLMLineOutput",
+    "LLMResponse",
+    "ModelInfo",
+    "LineTrace",
+    "JobTrace",
+]

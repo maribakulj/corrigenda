@@ -1,14 +1,14 @@
 """Backward-compat shim. Implementation lives in :mod:`alto_core.alto._norm`.
 
-New code should import from `alto_core.alto._norm` directly. This module exists
-so that the existing `from app.alto._norm import X` imports keep
-working during the Phase 2 / Phase 3 extraction. Once consumers
-migrate, this shim can be deleted.
+New code should import from `alto_core.alto._norm` directly. The shim now
+re-exports only what alto-core declares in `__all__` — private
+helpers (`_*`) and stdlib leaks (Path, asyncio, logging, ...)
+are NOT visible here. Pull those directly from alto-core if a
+test legitimately needs them.
 """
 
 from alto_core.alto._norm import (  # noqa: F401  re-export
     clean_content,
     ncfold,
     nfc,
-    unicodedata,
 )

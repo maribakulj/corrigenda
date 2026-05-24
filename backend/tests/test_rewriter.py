@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# Private rewriter helpers — pulled from alto-core directly since the
+# backend re-export shim no longer surfaces privates.
+from alto_core.alto.rewriter import _compute_geometry, _tokenize
 from lxml import etree
 
 from app.alto.parser import parse_alto_file
-from app.alto.rewriter import (
-    _compute_geometry,
-    _tokenize,
-    rewrite_alto_file,
-)
+from app.alto.rewriter import rewrite_alto_file
 from app.schemas import BlockManifest, Coords, HyphenRole, LineManifest, PageManifest
 
 # ---------------------------------------------------------------------------

@@ -34,3 +34,11 @@ def clean_content(s: str) -> str:
     so we normalize it to the empty string here rather than in each call site.
     """
     return s.replace("­", "")
+
+
+# --- __all__ (Stage 3 audit remediation) ---
+__all__ = [
+    "nfc",
+    "ncfold",
+    "clean_content",
+]

@@ -641,3 +641,11 @@ def _add_processing_entry(
         "description",
         f"Post-OCR correction via {provider}/{model} (alto-llm-corrector)",
     )
+
+
+# --- __all__ (Stage 3 audit remediation) ---
+__all__ = [
+    "RewriterMetrics",
+    "rewrite_alto_file",
+    "extract_output_texts",
+]

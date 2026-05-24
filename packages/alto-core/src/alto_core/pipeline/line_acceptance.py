@@ -205,3 +205,11 @@ def check_adjacent_duplicates(
         revert[id_b] = "adjacent_duplicate_detected"
 
     return revert
+
+
+# --- __all__ (Stage 3 audit remediation) ---
+__all__ = [
+    "AcceptanceResult",
+    "check_line",
+    "check_adjacent_duplicates",
+]

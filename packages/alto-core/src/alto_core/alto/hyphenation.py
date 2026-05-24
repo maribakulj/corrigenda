@@ -348,3 +348,13 @@ def should_stay_in_same_chunk(
     ):
         return True
     return False
+
+
+# --- __all__ (Stage 3 audit remediation) ---
+__all__ = [
+    "ReconcileMetrics",
+    "enrich_chunk_lines",
+    "reconcile_hyphen_pair",
+    "classify_reconcile_outcome",
+    "should_stay_in_same_chunk",
+]

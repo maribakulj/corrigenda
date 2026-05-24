@@ -23,3 +23,7 @@ def _detect_namespace(root: etree._Element) -> str:
 
 def _tag(local: str, ns: str) -> str:
     return f"{{{ns}}}{local}" if ns else local
+
+
+# --- __all__ (Stage 3 audit remediation) ---
+__all__: list[str] = []
