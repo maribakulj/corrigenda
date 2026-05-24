@@ -1,25 +1,13 @@
-"""Shared ALTO XML namespace helpers.
+"""Backward-compat shim. Implementation lives in :mod:`alto_core.alto._ns`.
 
-Both parser.py and rewriter.py need identical _detect_namespace / _tag
-logic. Centralising here prevents the two copies drifting apart.
+New code should import from `alto_core.alto._ns` directly. This module exists
+so that the existing `from app.alto._ns import X` imports keep
+working during the Phase 2 / Phase 3 extraction. Once consumers
+migrate, this shim can be deleted.
 """
 
-from __future__ import annotations
-
-from lxml import etree
-
-
-def _detect_namespace(root: etree._Element) -> str:
-    """Return the namespace URI from the root tag, or '' if none.
-
-    Defensive against malformed tags that start with '{' but lack '}'
-    (would otherwise raise ValueError in the callers).
-    """
-    tag: str = root.tag
-    if tag.startswith("{") and "}" in tag:
-        return tag[1 : tag.index("}")]
-    return ""
-
-
-def _tag(local: str, ns: str) -> str:
-    return f"{{{ns}}}{local}" if ns else local
+from alto_core.alto._ns import (  # noqa: F401  re-export
+    _detect_namespace,
+    _tag,
+    etree,
+)

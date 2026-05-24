@@ -10,16 +10,21 @@ RUN npm run build
 FROM python:3.11-slim
 WORKDIR /app
 
-# Install Python dependencies.
-# The comment line in requirements.txt includes a date so that any change
-# (e.g. adding/updating a package) invalidates this Docker layer cache.
-COPY backend/requirements.txt .
+# Layout: /app/packages/alto-core (editable install) and /app/backend
+# (the FastAPI app). The requirements file lives in backend/ and
+# declares `-e ../packages/alto-core`, so the WORKDIR must be backend/
+# during `pip install` for the relative path to resolve.
+COPY packages/alto-core /app/packages/alto-core
+COPY backend/requirements.txt /app/backend/requirements.txt
+WORKDIR /app/backend
 RUN pip install --no-cache-dir -r requirements.txt
+WORKDIR /app
 
-COPY backend/app/ ./app/
-COPY --from=frontend-builder /frontend/dist ./static/
+COPY backend/app/ /app/backend/app/
+COPY --from=frontend-builder /frontend/dist /app/static/
 
 ENV JOB_STORAGE_DIR=/tmp/app-jobs
+ENV PYTHONPATH=/app/backend
 
 # Create non-root user and ensure storage dir is writable
 RUN useradd --create-home appuser && mkdir -p /tmp/app-jobs && chown appuser /tmp/app-jobs

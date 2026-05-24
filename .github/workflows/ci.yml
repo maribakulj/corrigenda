@@ -7,6 +7,42 @@ on:
     branches: [main]
 
 jobs:
+  alto-core-lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/alto-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install ruff
+        run: pip install ruff==0.15.14
+      - name: ruff check
+        run: ruff check src/
+      - name: ruff format --check
+        run: ruff format --check src/
+
+  alto-core-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/alto-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install alto-core (editable) + pytest
+        run: |
+          pip install -e .
+          pip install pytest
+      - name: pytest
+        run: pytest tests/
+
   backend-lint:
     runs-on: ubuntu-latest
     defaults:
@@ -36,10 +72,8 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt -r requirements-dev.txt
-          pip install mypy==1.15.0
+      - name: Install dependencies (pulls in editable alto-core via -e ../packages/alto-core)
+        run: pip install -r requirements.txt -r requirements-dev.txt
       - name: mypy
         run: mypy --explicit-package-bases app
 
@@ -56,7 +90,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install dependencies
+      - name: Install dependencies (pulls in editable alto-core via -e ../packages/alto-core)
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: pytest + coverage gate (80%)
         run: pytest --cov=app --cov-report=term --cov-report=xml
@@ -79,12 +113,17 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install security tools
-        run: pip install bandit[toml]==1.9.4 pip-audit==2.10.0
+      - name: Install dependencies + security tools
+        # Install backend deps first so the env reflects what we ship,
+        # then audit the resolved environment (pip-audit -r doesn't
+        # understand `-e` lines in requirements.txt).
+        run: |
+          pip install -r requirements.txt
+          pip install bandit[toml]==1.9.4 pip-audit==2.10.0
       - name: bandit (static analysis)
         run: bandit -r app -c pyproject.toml
-      - name: pip-audit (dependency CVEs)
-        run: pip-audit -r requirements.txt --strict
+      - name: pip-audit (dependency CVEs in resolved env)
+        run: pip-audit --strict
 
   frontend:
     runs-on: ubuntu-latest

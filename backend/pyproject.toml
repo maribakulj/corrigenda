@@ -82,13 +82,15 @@ warn_return_any = false
 no_implicit_optional = true
 check_untyped_defs = false
 ignore_missing_imports = true
-# Pure-domain modules: keep them strictly typed
+# `app.alto`, `app.jobs.chunk_planner/validator/line_acceptance/correction_pipeline`,
+# `app.protocols`, and `app.schemas` are re-export shims forwarding to
+# alto-core. mypy needs implicit_reexport=true to chase `from X import *`
+# through them without requiring an `__all__` in the alto-core modules.
+implicit_reexport = true
+# Pure-domain modules now live in alto-core; the shims point there.
 [[tool.mypy.overrides]]
 module = [
-    "app.alto.*",
-    "app.jobs.correction_pipeline",
     "app.jobs.runner",
-    "app.protocols.*",
     "app.storage.output_writer",
 ]
 disallow_untyped_defs = false  # promote to true once existing gaps are closed
@@ -115,7 +117,10 @@ filterwarnings = [
 # ---------------------------------------------------------------------------
 
 [tool.coverage.run]
-source = ["app"]
+# Measure both packages: app.* (HTTP + adapters living in backend) and
+# alto_core.* (pure pipeline now extracted). Restricting to `app` alone
+# would only see the re-export shims and undercount real coverage.
+source = ["app", "alto_core"]
 branch = true
 omit = [
     "tests/*",

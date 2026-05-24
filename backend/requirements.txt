@@ -1,4 +1,9 @@
 # Pinned 2026-04-14 — reproducible builds
+# alto-core is sibling-packaged in this monorepo. Install editable so
+# in-tree edits land immediately; the path is resolved relative to the
+# directory where `pip install -r` runs (cd into backend/ before installing,
+# or use the matching WORKDIR in Dockerfile).
+-e ../packages/alto-core
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.32,<1.0
 pydantic>=2.0,<3.0
