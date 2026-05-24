@@ -435,20 +435,23 @@ async def test_job_timeout_marks_failure(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_run_job_general_exception_marks_failed(tmp_path: Path):
-    """A non-timeout exception escaping _run_pipeline should mark the job
-    as FAILED with a sanitized error (no api_key leak, traceback elided)."""
+async def test_run_job_general_exception_marks_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A non-timeout exception escaping the pipeline must mark the job
+    as FAILED with a sanitized error (no api_key leak)."""
     import app.jobs.orchestrator as orch_module
+    from app.jobs.correction_pipeline import CorrectionPipeline
 
     store, job_id = _make_store_and_job()
     orig_store = orch_module.job_store
     orch_module.job_store = store
 
-    async def _boom(*args, **kwargs):
+    async def _boom(self, **kwargs):
         raise RuntimeError("simulated failure carrying sk-secret-token-12345")
 
-    orig_pipeline = orch_module._run_pipeline
-    orch_module._run_pipeline = _boom
+    monkeypatch.setattr(CorrectionPipeline, "run", _boom)
     try:
         doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
         await run_job(
@@ -462,7 +465,6 @@ async def test_run_job_general_exception_marks_failed(tmp_path: Path):
             provider=MockProvider(),
         )
     finally:
-        orch_module._run_pipeline = orig_pipeline
         orch_module.job_store = orig_store
 
     job = store.get_job(job_id)

@@ -348,7 +348,7 @@ def test_fallback_on_invalid_json():
     # invalid_json_times must be >= max_attempts (3) to exhaust all retries
     mock = MockProvider(invalid_json_times=3)
 
-    with patch("app.jobs.orchestrator.asyncio.sleep", new=AsyncMock(return_value=None)):
+    with patch("app.jobs.correction_pipeline.asyncio.sleep", new=AsyncMock(return_value=None)):
         job_id, out_files = _run_job_directly(
             {SAMPLE_XML.name: SAMPLE_XML.read_bytes()},
             mock=mock,
