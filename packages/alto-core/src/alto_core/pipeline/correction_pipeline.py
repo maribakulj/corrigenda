@@ -20,6 +20,7 @@ update its job state.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import uuid
 from dataclasses import dataclass
@@ -506,20 +507,42 @@ class CorrectionPipeline:
 
             except Exception as exc:
                 msg = sanitize_error(str(exc), api_key)
-                is_http_error = not isinstance(exc, ValueError)
+                # Classify the exception to pick the right policy.
+                # alto-core stays http-library-agnostic — we duck-type
+                # on class name rather than importing httpx. A future
+                # cleanup would define ProviderTransientError in
+                # alto_core.protocols.provider for providers to raise.
+                exc_class = type(exc).__name__
                 is_hyphen_violation = isinstance(
                     exc, ValueError
                 ) and "hyphen_integrity_violation" in str(exc)
+                is_transient_http = exc_class in {
+                    "HTTPStatusError",
+                    "TimeoutException",
+                    "NetworkError",
+                    "ConnectError",
+                    "RemoteProtocolError",
+                    "ReadTimeout",
+                }
+                # LLM returned malformed JSON or failed schema validation —
+                # likely transient (next attempt may produce clean output).
+                is_llm_output_error = (
+                    isinstance(exc, (ValueError, json.JSONDecodeError))
+                    and not is_hyphen_violation
+                )
+                is_retryable = (
+                    is_hyphen_violation or is_transient_http or is_llm_output_error
+                )
 
-                if attempt < max_attempts:
+                if attempt < max_attempts and is_retryable:
                     if is_hyphen_violation and not hyphen_violation:
                         hyphen_violation = True
                         backoff = 0
                         error_tag: str = "hyphen_integrity_violation"
-                    elif is_http_error:
+                    elif is_transient_http:
                         backoff = attempt * 2
                         error_tag = msg[:120]
-                    else:
+                    else:  # is_llm_output_error
                         backoff = attempt
                         error_tag = msg[:120]
 
