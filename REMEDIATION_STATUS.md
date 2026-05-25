@@ -1,10 +1,13 @@
 # Remediation status — alto-llm-corrector
 
-Last updated: 2026-05-25 (session L8)
+Last updated: 2026-05-25 (post-L8 corrective wave)
 Branch: `claude/vibrant-pascal-STfnR`
 
 Roadmap reference: voir conversation (sections 5 et 6 du plan validé).
 Convention : 1 session = 1 lot, même identifiant (L1 → L8).
+A final audit (`option (c)`) ran after L8 and surfaced 8 P0/P1/P2 items
+introduced by the L1→L8 commits themselves. They are documented in
+section **Corrective wave (post-L8 audit)** below.
 
 ## Progress
 
@@ -137,5 +140,50 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 
 - A4: garder ou supprimer le legacy `/health` endpoint ? (revue en L8)
 - A6: déplacer les 6 tests backend qui importent privés alto-core vers `packages/alto-core/tests/`, ou promouvoir les privés ? (revue en L8)
-- L8: faire ou reporter ?
-- NB1: créer un lot L9 dédié ou folder dans L8 ?
+- NB1: créer un lot L9 dédié pour `vite`/`postcss` devDeps bumps ?
+
+## Corrective wave (post-L8 audit)
+
+After L8 a final audit ("option (c)") surfaced 8 issues introduced by
+the L1→L8 commits themselves. The wave applied each fix in its own
+commit so it can be reverted independently.
+
+| Priority | Commit       | Issue       | Title |
+|----------|--------------|-------------|-------|
+| P0       | `baeb2a1`    | B-NEW-1     | fix(api): look up `_JOB_TIMEOUT_SECONDS` dynamically (L6 regression) |
+| P0       | `49b2249`    | B-NEW-2     | fix(release): version regex tolerates type-annotated `__version__` |
+| P0       | `4dbd33c`    | B-NEW-4     | test(api): cover rate-limit wiring on POST /api/jobs |
+| P1       | `b0c7b4d`    | B-NEW-3     | fix(deploy): drop redundant uvicorn `--proxy-headers` flag |
+| P1       | `16742aa`    | T-FLAKY-1   | test(observers): use presence checks instead of strict counts |
+| P2       | `c6a361a`    | S1          | test(store): pin the `_remove_job` locking contract |
+| P2       | `618be08`    | S6          | chore(alto): remove unused private shims `_norm.py` and `_ns.py` |
+| P2       | `b601b8a`    | S7          | ci: matrix alto-core CI across Python 3.11/3.12/3.13 |
+
+### Items closed
+
+- **B-NEW-1** — `app/api/jobs.py` line 18 was `from app.jobs.orchestrator import _JOB_TIMEOUT_SECONDS`. That snapshots the value at module import, so a test (or future env-driven hot-tune) that patches `app.jobs.orchestrator._JOB_TIMEOUT_SECONDS` had no effect on the actual timeout used by JobRunner. Switched to `from app.jobs import orchestrator as _orch` + `timeout_seconds=_orch._JOB_TIMEOUT_SECONDS` at the call site. Regression test `test_create_job_resolves_timeout_seconds_dynamically` patches the sentinel to `4242` and asserts the value reaches `JobRunner.run` via the POST /api/jobs route. Confirmed: against the pre-fix code the test captures `1800` instead of `4242` and fails as designed.
+- **B-NEW-2** — The version-extraction regex `r"__version__\s*=\s*..."` used by `ci.yml`, `publish-alto-core.yml`, and `scripts/release-alto-core.sh` returned `None` on a perfectly legitimate type-annotated declaration like `__version__: Final[str] = "X.Y.Z"`, silently aborting the release pipeline. Added an optional `(?::\s*[^=]+)?` clause to all three regexes. Backed by `backend/tests/test_release_tooling.py` with 4 tests (canonical pattern against 5 variants + a `(?::` sentinel grep on each of the three tooling files so removal of the clause trips the test immediately).
+- **B-NEW-3** — Both Dockerfiles passed `--proxy-headers --forwarded-allow-ips=*` to uvicorn in addition to the Python `ProxyHeadersMiddleware` installed in `create_app()`. The uvicorn flag hardcodes `*` and bypasses the configurable `TRUSTED_PROXIES` env var, so its presence effectively neutralised the deliberate trust filter. Removed the uvicorn flag from both `Dockerfile` and `backend/Dockerfile`. The Python middleware remains as the single source of truth. Refreshed the stale comment in `backend/app/api/rate_limit.py` that still attributed the rewrite to uvicorn.
+- **B-NEW-4** — L4's deletion of `test_create_job_endpoint_has_rate_limit_attached` left `POST /api/jobs` rate-limit wiring untested. The deletion note claimed coverage was inherited from `test_providers_models_rate_limit_blocks_after_threshold`, but that test exercises a different endpoint (`@limiter.limit("10/minute")` on `/api/providers/models`) — slowapi counters are per-route, so removing the `@limiter.limit("20/minute")` decorator from `/api/jobs` would not have broken any test. Added `test_create_job_endpoint_is_rate_limited` which sends 21 POSTs with an invalid file extension (cheap 400 from the route body) and asserts the 21st returns 429. The `client` fixture now also resets the slowapi limiter on teardown so this test doesn't poison `test_integration`'s apps with an exhausted counter.
+- **T-FLAKY-1** — The two `LoggingObserver` level-mapping tests added in L8 asserted strict counts (`len(records) == 3` / `== 6`) against the unfiltered `caplog.records`. A future change adding a same-level log call in any other module would flip the count and trip the assertion despite the contract under test (the `_WARNING_EVENTS` mapping) being intact. Replaced with a `r.name == "alto_core.pipeline"` filter + per-event-type substring check on the formatted message.
+- **S1** — Pinned the `_remove_job` locking contract documented in L6 with a new test (`test_remove_job_is_invoked_under_lock_during_eviction`) that spies on `_remove_job` and records `store._lock._is_owned()` at each call. A future refactor adding a new caller outside the lock would trip this test rather than introduce a subtle race in the three dict mutations + filesystem cleanup that `_remove_job` performs. Private-API call kept inside test code; production stays clean.
+- **S6** — `backend/app/alto/_norm.py` and `backend/app/alto/_ns.py` had zero external consumers (verified with repo-wide grep). Both are private modules by name (leading underscore), so removal is non-breaking. The `app.alto.__init__` docstring now points future callers at `alto_core.alto._norm` / `alto_core.alto._ns` directly.
+- **S7** — `alto-core-tests` and `alto-core-build` now run under a matrix of Python 3.11/3.12/3.13, matching the package's `requires-python` and Trove classifiers. Pre-S7 the 3.12 and 3.13 classifiers in `pyproject.toml` were unverified promises; now CI enforces them. `fail-fast: false` so one broken version doesn't mask others. Linting, types, security, backend and frontend stay on 3.11 — they're not the public API surface.
+
+### Tests count evolution (post-L8)
+
+- Avant la vague corrective : 343 backend + 6 alto-core + 12 frontend = 361 total.
+- Après la vague (8 commits) : 350 backend + 6 alto-core + 12 frontend = 368 total (+7 backend).
+- Breakdown des +7 :
+  - +1 `test_create_job_resolves_timeout_seconds_dynamically` (B-NEW-1).
+  - +4 dans `test_release_tooling.py` (B-NEW-2, paramétrés par fichier de tooling).
+  - +1 `test_create_job_endpoint_is_rate_limited` (B-NEW-4).
+  - +1 `test_remove_job_is_invoked_under_lock_during_eviction` (S1).
+  - 0 net pour T-FLAKY-1 (2 tests réécrits, pas ajoutés).
+  - 0 net pour S6 (suppression de fichiers, pas de tests).
+  - 0 net pour S7 (CI seulement, pas de tests).
+
+### Files removed (post-L8)
+
+- `backend/app/alto/_norm.py` (S6).
+- `backend/app/alto/_ns.py` (S6).
