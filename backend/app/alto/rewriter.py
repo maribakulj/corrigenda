@@ -290,16 +290,117 @@ def _clear_line(el: etree._Element, ns: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _rebuild_normal_line(
+def _emit_sp(
+    el: etree._Element,
+    ns: str,
+    orig_sp_attribs: list[dict[str, str]],
+    sp_n: int,
+    tok_hpos: int,
+    tok_width: int,
+    vpos: int,
+) -> None:
+    """Append a fresh SP child, reusing the nth original SP attribs when present."""
+    sp = etree.SubElement(el, _tag("SP", ns))
+    if sp_n < len(orig_sp_attribs):
+        for k, v in orig_sp_attribs[sp_n].items():
+            sp.set(k, v)
+    else:
+        sp.set("WIDTH", str(tok_width))
+        sp.set("HPOS", str(tok_hpos))
+        sp.set("VPOS", str(vpos))
+
+
+def _emit_string(
+    el: etree._Element,
+    ns: str,
+    orig_string_attribs: list[dict[str, str]],
+    str_n: int,
+    line_id: str,
+    token: str,
+    tok_hpos: int,
+    tok_width: int,
+    vpos: int,
+    height: int,
+) -> None:
+    """Append a fresh String child, reusing the nth original String attribs
+    when present (except SUBS_* which are written separately by _apply_subs)."""
+    s = etree.SubElement(el, _tag("String", ns))
+    if str_n < len(orig_string_attribs):
+        for k, v in orig_string_attribs[str_n].items():
+            if k not in ("SUBS_TYPE", "SUBS_CONTENT"):
+                s.set(k, v)
+        s.set("CONTENT", clean_content(token))
+        s.set("HPOS", str(tok_hpos))
+        s.set("WIDTH", str(tok_width))
+    else:
+        s.set("ID", f"{line_id}_STR_{str_n:04d}")
+        s.set("CONTENT", clean_content(token))
+        s.set("HPOS", str(tok_hpos))
+        s.set("VPOS", str(vpos))
+        s.set("WIDTH", str(tok_width))
+        s.set("HEIGHT", str(height))
+
+
+def _append_trailing_hyp(
+    el: etree._Element,
+    ns: str,
+    orig_hyp_attribs: dict[str, str],
+    default_hpos: int,
+    default_vpos: int,
+    default_width: int,
+    default_height: int,
+) -> None:
+    """Append a HYP child to a PART1-like TextLine.
+
+    Preserves all original attributes if a HYP was present before the
+    rebuild; otherwise synthesises one with a default ``-`` content and
+    the supplied geometry.
+    """
+    hyp = etree.SubElement(el, _tag("HYP", ns))
+    if orig_hyp_attribs:
+        for k, v in orig_hyp_attribs.items():
+            hyp.set(k, v)
+    else:
+        hyp.set("CONTENT", "-")
+        hyp.set("HPOS", str(default_hpos))
+        hyp.set("VPOS", str(default_vpos))
+        hyp.set("WIDTH", str(default_width))
+        hyp.set("HEIGHT", str(default_height))
+
+
+def _rebuild_line(
     el: etree._Element,
     corrected: str,
     manifest: LineManifest,
     ns: str,
 ) -> None:
-    """Slow-path rebuild for a normal (non-hyphenated) TextLine."""
+    """Slow-path rebuild for any TextLine (normal, PART1, BOTH, PART2).
+
+    Behaviour by role:
+      - PART1 / BOTH: reserve 4% of total width for a trailing HYP
+        element, rebuilt with the original HYP attributes when present
+        or synthesised at end-of-text otherwise.
+      - PART2: full text width; never carries a trailing HYP.
+      - NONE: full text width; any stray HYPs are deep-copied and
+        restored verbatim after the rebuild (defensive — production
+        ALTO rarely has HYPs on non-hyphenated lines).
+    """
+    is_part1_like = manifest.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
+    is_normal = manifest.hyphen_role == HyphenRole.NONE
+
     orig_string_attribs = [dict(s.attrib) for s in _get_string_children(el, ns)]
     orig_sp_attribs = [dict(s.attrib) for s in _get_sp_children(el, ns)]
-    saved_hyp = [copy.deepcopy(c) for c in el if c.tag == _tag("HYP", ns)]
+
+    if is_part1_like:
+        orig_hyps = _get_hyp_children(el, ns)
+        orig_hyp_attribs: dict[str, str] = dict(orig_hyps[0].attrib) if orig_hyps else {}
+        saved_hyp: list[etree._Element] = []
+    elif is_normal:
+        orig_hyp_attribs = {}
+        saved_hyp = [copy.deepcopy(c) for c in el if c.tag == _tag("HYP", ns)]
+    else:  # PART2
+        orig_hyp_attribs = {}
+        saved_hyp = []
 
     _clear_line(el, ns)
 
@@ -308,82 +409,28 @@ def _rebuild_normal_line(
     width = int(el.get("WIDTH", 0))
     height = int(el.get("HEIGHT", 0))
 
-    tokens = _tokenize(corrected)
-    if not tokens:
-        for h in saved_hyp:
-            el.append(h)
-        return
-
-    geo = _compute_geometry(hpos, width, tokens)
-    str_n = sp_n = 0
-
-    for token, tok_hpos, tok_width in geo:
-        if token.strip() == "":
-            sp = etree.SubElement(el, _tag("SP", ns))
-            if sp_n < len(orig_sp_attribs):
-                for k, v in orig_sp_attribs[sp_n].items():
-                    sp.set(k, v)
-            else:
-                sp.set("WIDTH", str(tok_width))
-                sp.set("HPOS", str(tok_hpos))
-                sp.set("VPOS", str(vpos))
-            sp_n += 1
-        else:
-            s = etree.SubElement(el, _tag("String", ns))
-            if str_n < len(orig_string_attribs):
-                for k, v in orig_string_attribs[str_n].items():
-                    if k not in ("SUBS_TYPE", "SUBS_CONTENT"):
-                        s.set(k, v)
-                s.set("CONTENT", clean_content(token))
-                s.set("HPOS", str(tok_hpos))
-                s.set("WIDTH", str(tok_width))
-            else:
-                s.set("ID", f"{manifest.line_id}_STR_{str_n:04d}")
-                s.set("CONTENT", clean_content(token))
-                s.set("HPOS", str(tok_hpos))
-                s.set("VPOS", str(vpos))
-                s.set("WIDTH", str(tok_width))
-                s.set("HEIGHT", str(height))
-            str_n += 1
-
-    for h in saved_hyp:
-        el.append(h)
-
-
-def _rebuild_hyp_part1(
-    el: etree._Element,
-    corrected: str,
-    manifest: LineManifest,
-    ns: str,
-) -> None:
-    """Slow-path rebuild for a PART1 (hyphen-left) TextLine."""
-    orig_string_attribs = [dict(s.attrib) for s in _get_string_children(el, ns)]
-    orig_sp_attribs = [dict(s.attrib) for s in _get_sp_children(el, ns)]
-    orig_hyps = _get_hyp_children(el, ns)
-    orig_hyp_attribs = dict(orig_hyps[0].attrib) if orig_hyps else {}
-
-    _clear_line(el, ns)
-
-    hpos = int(el.get("HPOS", 0))
-    vpos = int(el.get("VPOS", 0))
-    width = int(el.get("WIDTH", 0))
-    height = int(el.get("HEIGHT", 0))
-
-    hyp_width = max(1, round(width * 0.04))
-    text_width = max(1, width - hyp_width)
+    if is_part1_like:
+        hyp_width = max(1, round(width * 0.04))
+        text_width = max(1, width - hyp_width)
+    else:
+        hyp_width = 0
+        text_width = width
 
     tokens = _tokenize(corrected)
     if not tokens:
-        hyp = etree.SubElement(el, _tag("HYP", ns))
-        if orig_hyp_attribs:
-            for k, v in orig_hyp_attribs.items():
-                hyp.set(k, v)
+        if is_part1_like:
+            _append_trailing_hyp(
+                el,
+                ns,
+                orig_hyp_attribs,
+                default_hpos=hpos + text_width,
+                default_vpos=vpos,
+                default_width=hyp_width,
+                default_height=height,
+            )
         else:
-            hyp.set("CONTENT", "-")
-            hyp.set("HPOS", str(hpos + text_width))
-            hyp.set("VPOS", str(vpos))
-            hyp.set("WIDTH", str(hyp_width))
-            hyp.set("HEIGHT", str(height))
+            for h in saved_hyp:
+                el.append(h)
         return
 
     geo = _compute_geometry(hpos, text_width, tokens)
@@ -393,101 +440,38 @@ def _rebuild_hyp_part1(
 
     for token, tok_hpos, tok_width in geo:
         if token.strip() == "":
-            sp = etree.SubElement(el, _tag("SP", ns))
-            if sp_n < len(orig_sp_attribs):
-                for k, v in orig_sp_attribs[sp_n].items():
-                    sp.set(k, v)
-            else:
-                sp.set("WIDTH", str(tok_width))
-                sp.set("HPOS", str(tok_hpos))
-                sp.set("VPOS", str(vpos))
+            _emit_sp(el, ns, orig_sp_attribs, sp_n, tok_hpos, tok_width, vpos)
             sp_n += 1
         else:
-            s = etree.SubElement(el, _tag("String", ns))
-            if str_n < len(orig_string_attribs):
-                for k, v in orig_string_attribs[str_n].items():
-                    if k not in ("SUBS_TYPE", "SUBS_CONTENT"):
-                        s.set(k, v)
-                s.set("CONTENT", clean_content(token))
-                s.set("HPOS", str(tok_hpos))
-                s.set("WIDTH", str(tok_width))
-            else:
-                s.set("ID", f"{manifest.line_id}_STR_{str_n:04d}")
-                s.set("CONTENT", clean_content(token))
-                s.set("HPOS", str(tok_hpos))
-                s.set("VPOS", str(vpos))
-                s.set("WIDTH", str(tok_width))
-                s.set("HEIGHT", str(height))
-
+            _emit_string(
+                el,
+                ns,
+                orig_string_attribs,
+                str_n,
+                manifest.line_id,
+                token,
+                tok_hpos,
+                tok_width,
+                vpos,
+                height,
+            )
             last_word_hpos = tok_hpos
             last_word_width = tok_width
             str_n += 1
 
-    # Append HYP element preserving all original attributes
-    hyp = etree.SubElement(el, _tag("HYP", ns))
-    if orig_hyp_attribs:
-        for k, v in orig_hyp_attribs.items():
-            hyp.set(k, v)
+    if is_part1_like:
+        _append_trailing_hyp(
+            el,
+            ns,
+            orig_hyp_attribs,
+            default_hpos=last_word_hpos + last_word_width,
+            default_vpos=vpos,
+            default_width=hyp_width,
+            default_height=height,
+        )
     else:
-        hyp.set("CONTENT", "-")
-        hyp.set("HPOS", str(last_word_hpos + last_word_width))
-        hyp.set("VPOS", str(vpos))
-        hyp.set("WIDTH", str(hyp_width))
-        hyp.set("HEIGHT", str(height))
-
-
-def _rebuild_hyp_part2(
-    el: etree._Element,
-    corrected: str,
-    manifest: LineManifest,
-    ns: str,
-) -> None:
-    """Slow-path rebuild for a PART2 (hyphen-right) TextLine."""
-    orig_string_attribs = [dict(s.attrib) for s in _get_string_children(el, ns)]
-    orig_sp_attribs = [dict(s.attrib) for s in _get_sp_children(el, ns)]
-
-    _clear_line(el, ns)
-
-    hpos = int(el.get("HPOS", 0))
-    vpos = int(el.get("VPOS", 0))
-    width = int(el.get("WIDTH", 0))
-    height = int(el.get("HEIGHT", 0))
-
-    tokens = _tokenize(corrected)
-    if not tokens:
-        return
-
-    geo = _compute_geometry(hpos, width, tokens)
-    str_n = sp_n = 0
-
-    for token, tok_hpos, tok_width in geo:
-        if token.strip() == "":
-            sp = etree.SubElement(el, _tag("SP", ns))
-            if sp_n < len(orig_sp_attribs):
-                for k, v in orig_sp_attribs[sp_n].items():
-                    sp.set(k, v)
-            else:
-                sp.set("WIDTH", str(tok_width))
-                sp.set("HPOS", str(tok_hpos))
-                sp.set("VPOS", str(vpos))
-            sp_n += 1
-        else:
-            s = etree.SubElement(el, _tag("String", ns))
-            if str_n < len(orig_string_attribs):
-                for k, v in orig_string_attribs[str_n].items():
-                    if k not in ("SUBS_TYPE", "SUBS_CONTENT"):
-                        s.set(k, v)
-                s.set("CONTENT", clean_content(token))
-                s.set("HPOS", str(tok_hpos))
-                s.set("WIDTH", str(tok_width))
-            else:
-                s.set("ID", f"{manifest.line_id}_STR_{str_n:04d}")
-                s.set("CONTENT", clean_content(token))
-                s.set("HPOS", str(tok_hpos))
-                s.set("VPOS", str(vpos))
-                s.set("WIDTH", str(tok_width))
-                s.set("HEIGHT", str(height))
-            str_n += 1
+        for h in saved_hyp:
+            el.append(h)
 
 
 # ---------------------------------------------------------------------------
@@ -556,12 +540,7 @@ def rewrite_alto_file(
             continue
 
         # --- Path 4: SLOW PATH (word count changed) ---
-        if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH):
-            _rebuild_hyp_part1(tl_el, corrected, lm, ns)
-        elif lm.hyphen_role == HyphenRole.PART2:
-            _rebuild_hyp_part2(tl_el, corrected, lm, ns)
-        else:
-            _rebuild_normal_line(tl_el, corrected, lm, ns)
+        _rebuild_line(tl_el, corrected, lm, ns)
         _apply_subs(tl_el, lm, ns)
         metrics.slow_path += 1
         line_paths[line_id] = "slow_path"
