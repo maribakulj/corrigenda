@@ -38,11 +38,46 @@ jobs:
       url: ${{ inputs.target == 'pypi' && 'https://pypi.org/project/alto-core/' || 'https://test.pypi.org/project/alto-core/' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Roadmap L7 / P6 — we verify HEAD is on a release tag below,
+          # which needs the tag refs in the local clone. Default depth=1
+          # would strip them and the check would always pass vacuously.
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
+
+      - name: Verify HEAD is on an alto-core release tag
+        # Roadmap L7 / P6 — a release is a deliberate act anchored on a
+        # git tag. The workflow_dispatch trigger lets anyone with write
+        # access pick any branch SHA; without this guard, a maintainer
+        # could accidentally publish whatever the default branch points
+        # at. We require an `alto-core-vX.Y.Z` tag pointing at HEAD,
+        # where X.Y.Z matches `alto_core.__version__` exactly.
+        run: |
+          VERSION=$(python -c "
+          import re, pathlib
+          init = pathlib.Path('src/alto_core/__init__.py').read_text()
+          m = re.search(r\"__version__\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]\", init)
+          if not m:
+              raise SystemExit('__version__ not found in src/alto_core/__init__.py')
+          print(m.group(1))
+          ")
+          EXPECTED_TAG="alto-core-v${VERSION}"
+          if ! git rev-parse --verify "refs/tags/${EXPECTED_TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag '${EXPECTED_TAG}' does not exist in this clone. Create and push it with: git tag ${EXPECTED_TAG} && git push origin ${EXPECTED_TAG}"
+            exit 1
+          fi
+          HEAD_SHA=$(git rev-parse HEAD)
+          TAG_SHA=$(git rev-parse "${EXPECTED_TAG}^{commit}")
+          if [[ "${HEAD_SHA}" != "${TAG_SHA}" ]]; then
+            echo "::error::HEAD (${HEAD_SHA}) is not at tag '${EXPECTED_TAG}' (${TAG_SHA}). Move the tag to the commit being published, or re-run the workflow on the tagged commit."
+            exit 1
+          fi
+          echo "Release tag ${EXPECTED_TAG} confirmed at HEAD."
 
       - name: Install build tooling
         run: pip install build

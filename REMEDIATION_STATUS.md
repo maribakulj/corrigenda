@@ -1,6 +1,6 @@
 # Remediation status — alto-llm-corrector
 
-Last updated: 2026-05-25 (session L6)
+Last updated: 2026-05-25 (session L7)
 Branch: `claude/vibrant-pascal-STfnR`
 
 Roadmap reference: voir conversation (sections 5 et 6 du plan validé).
@@ -15,9 +15,9 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 | L3          | done         | `6218dd4`   | ProxyHeadersMiddleware + R2 decision documented |
 | L4          | done         | `610ccce`   | pipeline retry classification + event payload tests (+9 tests net) |
 | L5          | done         | `5412560`   | alto-core release readiness — docstrings, smoke unified, CHANGELOG clarified |
-| L6          | done         | (this push) | architecture cleanup — 0 prod consumer of legacy run_job; double-lock removed |
-| L7          | not started  | —           | release pipeline (P5, P6, P7) |
-| L8          | not started  | —           | backlog (T1a-d, R3, R4, R5, A4, A6) — optional |
+| L6          | done         | `f1af8e4`   | architecture cleanup — 0 prod consumer of legacy run_job; double-lock removed |
+| L7          | done         | (this push) | release pipeline hardening — version coherence, tag gating, anti-double-upload |
+| L8          | not started  | —           | backlog (T1a-d, R3, R4, R5, A4, A6, NB2) — optional |
 
 ## Done
 
@@ -47,6 +47,9 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 - **A2** — `app/jobs/runner.py` imports `CorrectionPipeline` and `sanitize_error` directly from `alto_core` (top-level re-export) instead of going through the local `app.jobs.correction_pipeline` shim — backend native code no longer self-uses its own compat layer (L6).
 - **A3** — `JobStore._remove_job` no longer re-acquires `self._lock` (L6). The caller (`_evict_stale` invoked from `create_job` under the lock) already holds it; the redundant `with self._lock:` violated the documented contract. Docstring tightened to reflect the invariant. RLock support for re-entrance preserved an invisible bug behind correct behaviour; removing it makes the contract enforceable by reading the code.
 - **A9** — Reframed during L6: `app/jobs/correction_pipeline.py` is the only shim with an explicit `__all__`, so its `noqa: F401` was *redundant* — ruff's RUF100 rule removed it on commit. The audit had the asymmetry backwards: the *other 7 shims* are the ones that drift (they use `# noqa: F401` because they lack an explicit `__all__`). Promoting them to `__all__` would be the consistent fix, but it's a refactor outside L6's "correction minimale" scope. Closing A9 with the observation that no change is needed on `correction_pipeline.py` (it already uses the better pattern). A new follow-up `NB2` is logged below.
+- **P5** — `ci.yml` job `alto-core-lint` gains a `Version coherence` step (L7). Reads `__version__` from `src/alto_core/__init__.py` via Python regex and grep's the CHANGELOG for a matching `## [X.Y.Z]` heading. CI blocks the merge if they diverge. Pre-L7 the check only fired at release-script time (`scripts/release-alto-core.sh:55-59`); now caught at every push.
+- **P6** — `publish-alto-core.yml` gains a `Verify HEAD is on an alto-core release tag` step before build (L7). Requires an `alto-core-vX.Y.Z` tag pointing at HEAD where X.Y.Z matches `__version__`. Without it, a maintainer could accidentally workflow_dispatch on any default-branch SHA and publish whatever's there. `actions/checkout@v4` now uses `fetch-depth: 0 + fetch-tags: true` so the tag refs are in the local clone.
+- **P7** — `scripts/release-alto-core.sh` gains an index-side guard before `twine upload` (L7). Hits `https://{,test.}pypi.org/pypi/alto-core/json`, lists existing versions, aborts with a clear message if `${VERSION}` is already there. Branches cleanly on 200 (duplicate check), 404 (first release), and network failure (warning, proceed). Pre-L7 a duplicate upload surfaced as an opaque twine 403 after the full build.
 
 ## In progress
 
@@ -58,7 +61,7 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 
 ## Remaining
 
-- P5, P6, P7, T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6.
+- T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6, NB2 (all backlog/optional — L8).
 
 ## New bugs discovered
 
