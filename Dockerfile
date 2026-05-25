@@ -27,6 +27,11 @@ COPY --from=frontend-builder /frontend/dist /app/static/
 
 ENV JOB_STORAGE_DIR=/tmp/app-jobs
 ENV PYTHONPATH=/app/backend
+# HF Spaces sits behind an edge proxy that rewrites X-Forwarded-For;
+# tell the app to trust it so per-IP rate-limit keys on the real
+# caller IP, not the single proxy IP every request reaches us through.
+# See backend/app/main.py (ProxyHeadersMiddleware wiring).
+ENV TRUSTED_PROXIES=*
 
 # Create non-root user and ensure storage dir is writable
 RUN useradd --create-home appuser && mkdir -p /tmp/app-jobs && chown appuser /tmp/app-jobs
@@ -49,9 +54,16 @@ EXPOSE 7860
 # LLM call doesn't accumulate connections indefinitely; surplus
 # requests return 503 quickly. `--timeout-keep-alive` matches the SSE
 # keepalive interval used by stream_events.
+#
+# `--proxy-headers --forwarded-allow-ips=*` is defense-in-depth: uvicorn
+# also installs its own ProxyHeadersMiddleware on top of the one
+# create_app() configures. Both layers are idempotent — they both
+# rewrite request.client.host from X-Forwarded-For exactly once.
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "7860", \
      "--workers", "1", \
      "--limit-concurrency", "100", \
-     "--timeout-keep-alive", "60"]
+     "--timeout-keep-alive", "60", \
+     "--proxy-headers", \
+     "--forwarded-allow-ips=*"]

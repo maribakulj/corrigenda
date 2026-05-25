@@ -16,6 +16,9 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY backend/app/ /app/backend/app/
 
 ENV PYTHONPATH=/app/backend
+# Trust X-Forwarded-For from any upstream when this image runs behind
+# the docker-compose reverse proxy. See root Dockerfile + backend/app/main.py.
+ENV TRUSTED_PROXIES=*
 RUN useradd --create-home appuser && mkdir -p /tmp/app-jobs && chown appuser /tmp/app-jobs
 USER appuser
 
@@ -23,9 +26,12 @@ EXPOSE 8000
 # Single worker — JobStore is in-process state (see root Dockerfile).
 # Concurrency cap protects against slow LLM calls accumulating
 # connections; surplus requests return 503 quickly.
+# `--proxy-headers --forwarded-allow-ips=*`: see root Dockerfile.
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
      "--workers", "1", \
      "--limit-concurrency", "100", \
-     "--timeout-keep-alive", "60"]
+     "--timeout-keep-alive", "60", \
+     "--proxy-headers", \
+     "--forwarded-allow-ips=*"]

@@ -117,6 +117,45 @@ def test_providers_models_rate_limit_blocks_after_threshold(client: TestClient):
     assert "rate limit" in resp.json()["detail"].lower()
 
 
+def test_rate_limit_uses_x_forwarded_for(monkeypatch: pytest.MonkeyPatch):
+    """Roadmap L3 (R1) — slowapi keys on the real client IP, not the proxy's.
+
+    Under HF Spaces (and any reverse-proxy deployment) every request
+    reaches the app from the same upstream IP. Without
+    ``ProxyHeadersMiddleware``, ``slowapi.util.get_remote_address``
+    returns that single upstream IP for everyone — the per-IP budget
+    becomes a global budget and any one bursty user starves everybody
+    else.
+
+    Here we send 11 requests with 11 distinct ``X-Forwarded-For``
+    values: with the middleware in place, slowapi sees 11 different
+    IPs and lets all of them through. Without it, the 11th would
+    be rate-limited (the existing
+    ``test_providers_models_rate_limit_blocks_after_threshold``
+    proves the 10/min cap is enforced).
+    """
+    # TRUSTED_PROXIES must be set BEFORE create_app() so the proxy
+    # middleware reads the right value at app construction time.
+    monkeypatch.setenv("TRUSTED_PROXIES", "*")
+    app = create_app()
+    app.state.limiter.reset()
+
+    body = {"provider": "openai", "api_key": "fake"}
+    with TestClient(app) as c:
+        for i in range(11):
+            ip = f"192.0.2.{i + 1}"  # 192.0.2.0/24 is TEST-NET-1, safe to use
+            resp = c.post(
+                "/api/providers/models",
+                json=body,
+                headers={"X-Forwarded-For": ip},
+            )
+            assert resp.status_code != 429, (
+                f"request #{i + 1} from {ip!r} was rate-limited even though "
+                f"each request claims a distinct X-Forwarded-For — proxy "
+                f"headers are not being honoured"
+            )
+
+
 def test_create_job_endpoint_has_rate_limit_attached():
     """The @limiter.limit decorator on POST /api/jobs is registered.
 

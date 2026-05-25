@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
@@ -82,19 +83,48 @@ def create_app() -> FastAPI:
     # shutdown by the lifespan handler above.
     app.state.tasks = BackgroundTaskRegistry()
 
-    # Rate limiter (per remote IP) — slowapi reads `app.state.limiter`
-    # via SlowAPIMiddleware to enforce `@limiter.limit(...)` decorators
-    # on individual routes.
+    # ------------------------------------------------------------------
+    # Middleware stack (Starlette applies LIFO, so the LAST middleware
+    # added wraps the OUTSIDE of the request flow). Target request flow:
+    #
+    #     incoming → CORS → ProxyHeaders → SlowAPI → endpoint
+    #
+    # so we add them in reverse:
+    #   1. SlowAPI (innermost) — sees the real client IP set by step 2.
+    #   2. ProxyHeaders (middle) — rewrites request.client.host from
+    #      X-Forwarded-For when the upstream is in TRUSTED_PROXIES.
+    #   3. CORS (outermost) — answers OPTIONS preflights directly,
+    #      short-circuiting the rest of the stack.
+    #
+    # Note (R2): keeping CORS *outside* SlowAPI means OPTIONS preflights
+    # bypass the rate limiter. This is deliberate: rate-limiting
+    # preflights would surface as opaque CORS errors in the browser
+    # the moment a user clicks faster than the cap. Preflights are
+    # cheap (no body, no DB, no LLM call), so the cost of not
+    # counting them is negligible compared to the UX cost of doing so.
+    # ------------------------------------------------------------------
+
+    # 1. SlowAPI (innermost) — per-IP rate limiting.
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
     app.add_middleware(SlowAPIMiddleware)
 
-    # ------------------------------------------------------------------
-    # CORS
-    # Origins are configurable via CORS_ORIGINS env var (comma-separated).
-    # Default: wildcard. No credentials — NEVER combine allow_credentials
-    # with allow_origins=["*"] (Starlette raises ValueError).
-    # ------------------------------------------------------------------
+    # 2. ProxyHeaders (middle) — translate X-Forwarded-For into
+    # request.client.host so slowapi keys on the real caller IP.
+    # TRUSTED_PROXIES (comma-separated host list, "*" = trust any
+    # upstream) must be set to the proxy IP in production deployments;
+    # default 127.0.0.1 keeps a dev-safe stance (no spoofing from
+    # outside the loopback). HF Spaces / k8s Dockerfiles override it
+    # to "*" because the platform's edge proxy strips and re-emits
+    # X-Forwarded-For — apps behind it can trust the header.
+    trusted_proxies_raw = os.environ.get("TRUSTED_PROXIES", "127.0.0.1")
+    trusted_proxies = [h.strip() for h in trusted_proxies_raw.split(",") if h.strip()]
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_proxies)
+
+    # 3. CORS (outermost) — origins configurable via CORS_ORIGINS env
+    # var (comma-separated). Default: wildcard. No credentials —
+    # NEVER combine allow_credentials with allow_origins=["*"]
+    # (Starlette raises ValueError).
     cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,

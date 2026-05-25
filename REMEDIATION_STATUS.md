@@ -1,6 +1,6 @@
 # Remediation status — alto-llm-corrector
 
-Last updated: 2026-05-25 (session L2)
+Last updated: 2026-05-25 (session L3)
 Branch: `claude/vibrant-pascal-STfnR`
 
 Roadmap reference: voir conversation (sections 5 et 6 du plan validé).
@@ -11,8 +11,8 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 | Lot/Session | Statut       | Commits     | Notes |
 |-------------|--------------|-------------|-------|
 | L1          | done         | `f0270ed`   | size-limit + preset-app added |
-| L2          | done         | (this push) | health/ready observation-only + off-loop |
-| L3          | not started  | —           | proxy headers + middleware (R1, R2) |
+| L2          | done         | `2148bcd`   | health/ready observation-only + off-loop |
+| L3          | done         | (this push) | ProxyHeadersMiddleware + R2 decision documented |
 | L4          | not started  | —           | pipeline tests P0 (B4, T0a-d) |
 | L5          | not started  | —           | alto-core release readiness (B5, A5, B6, P3, P8) |
 | L6          | not started  | —           | architecture cleanup (A1, A2, A3, A9) |
@@ -25,6 +25,8 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 - **B2** — `/health/ready` no longer mutates the filesystem (L2). Replaced `mkdir + write_bytes + unlink` with `path.is_dir() and os.access(path, os.W_OK)`. New test `test_health_ready_does_not_create_storage_dir` characterises the contract (failed against old code, passes against new).
 - **B3** — `/health/ready` storage check runs off the event loop via `asyncio.to_thread` (L2). Even an `os.access` syscall can stall asyncio for tens of ms on NFS/overlay FS, freezing concurrent SSE streams. Wrapping in `to_thread` prevents that.
 - Bonus coverage: new test `test_health_ready_returns_503_when_storage_not_writable` exercises the degraded branch end-to-end (uses a file-not-dir as `JOB_STORAGE_DIR` for deterministic failure regardless of test-runner user).
+- **R1** — `ProxyHeadersMiddleware` added to `create_app()`, gated by env var `TRUSTED_PROXIES` (default `127.0.0.1` = dev-safe, both Dockerfiles override to `*`). Defence in depth: uvicorn keeps its own `--proxy-headers --forwarded-allow-ips=*` flags so the rewrite happens even if the Python middleware is mis-configured (both layers are idempotent). New test `test_rate_limit_uses_x_forwarded_for` proves slowapi now keys on the real caller IP (11 requests with 11 distinct `X-Forwarded-For` values all succeed — without the fix the 11th was 429).
+- **R2** — middleware order documented as deliberate. Final stack: `CORS (outermost) → ProxyHeaders → SlowAPI → endpoint`. CORS stays outside SlowAPI on purpose: rate-limiting OPTIONS preflights would surface as opaque CORS errors in the browser the moment a user clicks faster than the cap. Preflights are cheap (no body, no DB, no LLM call), so the cost of not counting them is negligible compared to the UX hit. Documented in `backend/app/main.py` middleware block.
 
 ## In progress
 
@@ -36,7 +38,7 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 
 ## Remaining
 
-- R1, R2, B4, A5, B5, B6, P3, P8, T0a, T0b, T0c, T0d, A1, A2, A3, A9, P5, P6, P7, T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6.
+- B4, A5, B5, B6, P3, P8, T0a, T0b, T0c, T0d, A1, A2, A3, A9, P5, P6, P7, T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6.
 
 ## New bugs discovered
 
@@ -51,12 +53,15 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 - L2:
   - `test_health_ready_does_not_create_storage_dir` (B2 characterisation — failed against old code).
   - `test_health_ready_returns_503_when_storage_not_writable` (degraded-branch end-to-end coverage, previously missing).
+- L3:
+  - `test_rate_limit_uses_x_forwarded_for` (R1 characterisation — failed against old code: 11th request from a distinct IP was rate-limited because slowapi saw `testclient` for all 11).
 
 ## Tests count evolution
 
 - Baseline (avant L1): 329 backend + 4 alto-core + 12 frontend = 345 total.
 - Après L1: unchanged (345). L1 ne touche pas de tests.
 - Après L2: 331 backend + 4 alto-core + 12 frontend = 347 total (+2).
+- Après L3: 332 backend + 4 alto-core + 12 frontend = 348 total (+1).
 
 ## Coverage evolution
 
