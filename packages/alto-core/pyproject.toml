@@ -1,6 +1,8 @@
 [project]
 name = "alto-core"
-version = "0.1.0a1"
+# Single source of truth for the version: src/alto_core/__init__.py
+# `__version__`. Bump it there + add a CHANGELOG.md entry to release.
+dynamic = ["version"]
 description = "Pure ALTO XML correction pipeline core — parser, rewriter, hyphenation reconciler, chunk planner."
 readme = "README.md"
 # License declared via classifier only — both `license = "Apache-2.0"`
@@ -34,6 +36,11 @@ Issues = "https://github.com/maribakulj/alto-llm-corrector/issues"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+# Read __version__ from the package — keeps pyproject.toml and the
+# importable `alto_core.__version__` in lockstep.
+path = "src/alto_core/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/alto_core"]
 
@@ -41,5 +48,6 @@ packages = ["src/alto_core"]
 include = [
     "src/alto_core",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
 ]
