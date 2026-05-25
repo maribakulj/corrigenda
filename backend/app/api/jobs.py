@@ -40,6 +40,15 @@ router = APIRouter()
 
 _ALLOWED_UPLOAD_EXTENSIONS = {".xml", ".alto", ".zip"}
 
+# L10/B5 — per-file upload cap (inclusive). `await UploadFile.read()`
+# loads the full body into memory; without a cap a 100 GB upload would
+# OOM the single-worker process before any decoding. 100 MB is generous
+# for ALTO files (single-page is typically <1 MB; ZIPs with embedded
+# page scans can reach tens of MB) while bounding worst-case allocation.
+# Looked up dynamically inside `create_job` so tests can monkey-patch
+# the constant without re-importing the module.
+_MAX_UPLOAD_FILE_BYTES = 100 * 1024 * 1024  # 100 MiB
+
 
 # ---------------------------------------------------------------------------
 # Shared dependency for endpoints that require a completed job with a manifest
@@ -98,10 +107,22 @@ async def create_job(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider!r}") from exc
 
-    # Read all file bytes
+    # Read all file bytes. Bounded by `_MAX_UPLOAD_FILE_BYTES` per file
+    # so a 100 GB upload yields a fast 413 instead of OOMing the
+    # process. We read `cap + 1` bytes and reject if the result is
+    # longer than `cap` (i.e. there was at least one more byte to read).
+    cap = _MAX_UPLOAD_FILE_BYTES
     file_tuples: list[tuple[str, bytes]] = []
     for f in files:
-        content = await f.read()
+        content = await f.read(cap + 1)
+        if len(content) > cap:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Uploaded file {f.filename!r} exceeds the per-file "
+                    f"limit ({cap} bytes). Split the upload or reduce its size."
+                ),
+            )
         file_tuples.append((f.filename or "upload.xml", content))
 
     # Create job and dirs

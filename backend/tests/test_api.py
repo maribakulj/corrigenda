@@ -246,6 +246,63 @@ def test_create_job_invalid_extension(client: TestClient):
     assert "Unsupported" in resp.json()["detail"]
 
 
+def test_create_job_rejects_file_exceeding_upload_cap(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """L10/B5 — `POST /api/jobs` previously did `await f.read()` with
+    no size cap, loading the entire upload into memory before any
+    decoding. A 100 GB raw XML upload could OOM the single-worker
+    server.
+
+    After the fix the route bounds each file at `_MAX_UPLOAD_FILE_BYTES`
+    bytes and returns 413 (Payload Too Large) immediately, without
+    reading more than the cap into memory. Test monkey-patches the
+    cap down to 100 bytes and sends a 200-byte file.
+    """
+    from app.api import jobs as jobs_api
+
+    monkeypatch.setattr(jobs_api, "_MAX_UPLOAD_FILE_BYTES", 100)
+
+    big_payload = b"<?xml version='1.0'?>" + b"x" * 200
+    resp = client.post(
+        "/api/jobs",
+        data=_form_fields(),
+        files=[("files", ("big.xml", big_payload, "application/xml"))],
+    )
+    assert resp.status_code == 413, (
+        f"upload exceeding the cap must yield 413, got {resp.status_code}: {resp.text}"
+    )
+    detail = resp.json().get("detail", "")
+    assert "too large" in detail.lower() or "exceeds" in detail.lower(), (
+        f"413 response should mention the cap; got detail={detail!r}"
+    )
+
+
+def test_create_job_accepts_file_at_upload_cap_boundary(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Symmetric to the rejection test — exactly-cap-sized files must
+    still be accepted (rejection should only kick in past the
+    threshold, not at exactly the limit)."""
+    from app.api import jobs as jobs_api
+
+    monkeypatch.setattr(jobs_api, "_MAX_UPLOAD_FILE_BYTES", 100)
+
+    # 100 bytes exactly — must NOT be rejected for size. May still
+    # fail later (no ALTO content found) but that's a different 400.
+    payload = b"x" * 100
+    resp = client.post(
+        "/api/jobs",
+        data=_form_fields(),
+        files=[("files", ("small.xml", payload, "application/xml"))],
+    )
+    # Whatever the status code, it must NOT be 413.
+    assert resp.status_code != 413, (
+        f"file at exactly the cap was rejected with 413, but the cap "
+        f"is inclusive: got {resp.status_code}, {resp.text}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # test_create_job_valid_xml
 # ---------------------------------------------------------------------------
