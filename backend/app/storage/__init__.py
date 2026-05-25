@@ -257,3 +257,20 @@ def cleanup_job(job_id: str) -> None:
     d = job_dir(job_id)
     if d.exists():
         shutil.rmtree(d)
+
+
+# Public surface declared explicitly so `from app.storage import *` and
+# static analysers don't expose the helper imports (Path, etree, zipfile,
+# logging, ...) sitting at module top-level.
+__all__ = [
+    "cleanup_job",
+    "get_image_files",
+    "get_output_files",
+    "images_dir",
+    "init_job_dirs",
+    "input_dir",
+    "job_dir",
+    "link_alto_to_images",
+    "output_dir",
+    "save_uploaded_files",
+]

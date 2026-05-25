@@ -8,7 +8,7 @@ This module re-exports both groups so existing
 ``from app.schemas import X`` call sites keep working.
 """
 
-from alto_core.schemas import (  # noqa: F401  re-export — domain
+from alto_core.schemas import (
     BlockManifest,
     ChunkGranularity,
     ChunkPlan,
@@ -32,10 +32,41 @@ from alto_core.schemas import (  # noqa: F401  re-export — domain
     Provider,
 )
 
-from app.schemas.http import (  # noqa: F401  re-export — HTTP DTOs
+from app.schemas.http import (
     CreateJobResponse,
     JobStatusResponse,
     ListModelsRequest,
     ListModelsResponse,
     SSEEvent,
 )
+
+__all__ = [
+    # Domain (alto-core)
+    "BlockManifest",
+    "ChunkGranularity",
+    "ChunkPlan",
+    "ChunkPlannerConfig",
+    "ChunkRequest",
+    "Coords",
+    # HTTP DTOs (backend-local)
+    "CreateJobResponse",
+    "DocumentManifest",
+    "HyphenRole",
+    "JobManifest",
+    "JobStatus",
+    "JobStatusResponse",
+    "JobTrace",
+    "LLMLineInput",
+    "LLMLineOutput",
+    "LLMResponse",
+    "LLMUserPayload",
+    "LineManifest",
+    "LineStatus",
+    "LineTrace",
+    "ListModelsRequest",
+    "ListModelsResponse",
+    "ModelInfo",
+    "PageManifest",
+    "Provider",
+    "SSEEvent",
+]

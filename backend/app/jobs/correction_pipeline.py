@@ -7,8 +7,10 @@ are NOT visible here. Pull those directly from alto-core if a
 test legitimately needs them.
 """
 
-from alto_core.pipeline.correction_pipeline import (  # noqa: F401  re-export
+from alto_core.pipeline.correction_pipeline import (
     CorrectionPipeline,
     CorrectionResult,
     sanitize_error,
 )
+
+__all__ = ["CorrectionPipeline", "CorrectionResult", "sanitize_error"]
