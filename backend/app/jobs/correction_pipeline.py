@@ -68,6 +68,25 @@ def _trace_key(lm: LineManifest) -> str:
     return f"{lm.page_id}:{lm.line_order_global}:{lm.line_id}"
 
 
+def _set_trace(
+    traces: dict[str, LineTrace] | None,
+    lm: LineManifest,
+    **fields: object,
+) -> None:
+    """Assign trace fields on the LineTrace keyed by `lm`, if traces are tracked.
+
+    Centralises the `if traces is not None: t = traces.get(...); if t is not None: ...`
+    pattern that was repeated six times throughout `_run_chunk`.
+    """
+    if traces is None:
+        return
+    trace = traces.get(_trace_key(lm))
+    if trace is None:
+        return
+    for name, value in fields.items():
+        setattr(trace, name, value)
+
+
 def _build_hyphen_pairs(lines: list[LineManifest]) -> dict[str, str]:
     """Return PART1↔PART2 mapping (bidirectional) for lines in the chunk."""
     pairs: dict[str, str] = {}
@@ -431,14 +450,11 @@ class CorrectionPipeline:
 
             enriched = enrich_chunk_lines(chunk_lines, all_lines_by_id)
 
-            if traces is not None:
-                enriched_by_id = {e.line_id: e for e in enriched}
-                for lm in chunk_lines:
-                    t = traces.get(_trace_key(lm))
-                    if t is not None:
-                        ei = enriched_by_id.get(lm.line_id)
-                        if ei is not None:
-                            t.model_input_text = ei.ocr_text
+            enriched_by_id = {e.line_id: e for e in enriched}
+            for lm in chunk_lines:
+                ei = enriched_by_id.get(lm.line_id)
+                if ei is not None:
+                    _set_trace(traces, lm, model_input_text=ei.ocr_text)
 
             payload = LLMUserPayload(
                 granularity=chunk.granularity,
@@ -459,17 +475,14 @@ class CorrectionPipeline:
                     temperature=temperature,
                 )
 
-                if traces is not None:
-                    lid_to_tkey = {lm.line_id: _trace_key(lm) for lm in chunk_lines}
-                    raw_lines = raw.get("lines", []) if isinstance(raw, dict) else []
-                    for rl in raw_lines:
-                        lid = rl.get("line_id", "") if isinstance(rl, dict) else ""
-                        rt = rl.get("corrected_text", "") if isinstance(rl, dict) else ""
-                        tkey = lid_to_tkey.get(lid)
-                        if tkey:
-                            t = traces.get(tkey)
-                            if t is not None:
-                                t.model_corrected_text = rt
+                lm_by_id = {lm.line_id: lm for lm in chunk_lines}
+                raw_lines = raw.get("lines", []) if isinstance(raw, dict) else []
+                for rl in raw_lines:
+                    if not isinstance(rl, dict):
+                        continue
+                    lm = lm_by_id.get(rl.get("line_id", ""))
+                    if lm is not None:
+                        _set_trace(traces, lm, model_corrected_text=rl.get("corrected_text", ""))
 
                 hyphen_subs: dict[str, str] = {}
                 for lm in chunk_lines:
@@ -532,12 +545,13 @@ class CorrectionPipeline:
                 for lm in chunk_lines:
                     lm.corrected_text = lm.ocr_text
                     lm.status = LineStatus.FALLBACK
-                    if traces is not None:
-                        t = traces.get(_trace_key(lm))
-                        if t is not None:
-                            t.projected_text = lm.ocr_text
-                            t.validation_status = "fallback"
-                            t.fallback_reason = f"all_attempts_exhausted: {msg[:120]}"
+                    _set_trace(
+                        traces,
+                        lm,
+                        projected_text=lm.ocr_text,
+                        validation_status="fallback",
+                        fallback_reason=f"all_attempts_exhausted: {msg[:120]}",
+                    )
                 self._fallback_count += 1
                 return 0
 
@@ -609,10 +623,7 @@ class CorrectionPipeline:
                         ):
                             lm.corrected_text = lm.ocr_text
                             lm.status = LineStatus.FALLBACK
-                            if traces is not None:
-                                t = traces.get(_trace_key(lm))
-                                if t is not None:
-                                    t.fallback_reason = "orphan_hyphen_completed"
+                            _set_trace(traces, lm, fallback_reason="orphan_hyphen_completed")
                             continue
 
                         prev_ocr = (
@@ -631,10 +642,7 @@ class CorrectionPipeline:
                             lm.status = LineStatus.CORRECTED
                         else:
                             lm.status = LineStatus.FALLBACK
-                            if traces is not None:
-                                t = traces.get(_trace_key(lm))
-                                if t is not None:
-                                    t.fallback_reason = result.reason
+                            _set_trace(traces, lm, fallback_reason=result.reason)
 
             # Adjacent duplicate detection (post-acceptance pass)
             accepted_lines = [
@@ -647,17 +655,21 @@ class CorrectionPipeline:
                     lm.status = LineStatus.FALLBACK
 
             # Trace: projected_text + validation_status
-            if traces is not None:
-                for lm in chunk_lines:
-                    t = traces.get(_trace_key(lm))
-                    if t is None:
-                        continue
-                    t.projected_text = (
+            for lm in chunk_lines:
+                _set_trace(
+                    traces,
+                    lm,
+                    projected_text=(
                         lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
-                    )
-                    t.validation_status = lm.status.value
-                    if lm.line_id in dup_reverts and not t.fallback_reason:
-                        t.fallback_reason = dup_reverts[lm.line_id]
+                    ),
+                    validation_status=lm.status.value,
+                )
+                # Only set fallback_reason for adjacent-duplicate reverts when
+                # an earlier reason hasn't already pinned the cause.
+                if traces is not None and lm.line_id in dup_reverts:
+                    trace = traces.get(_trace_key(lm))
+                    if trace is not None and not trace.fallback_reason:
+                        trace.fallback_reason = dup_reverts[lm.line_id]
 
             self.observer.on_event(
                 "chunk_completed",
