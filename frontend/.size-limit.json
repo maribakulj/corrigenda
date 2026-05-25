@@ -1,0 +1,12 @@
+[
+  {
+    "name": "JavaScript bundle (gzipped)",
+    "path": "dist/assets/index-*.js",
+    "limit": "75 KB"
+  },
+  {
+    "name": "CSS bundle (gzipped)",
+    "path": "dist/assets/index-*.css",
+    "limit": "10 KB"
+  }
+]

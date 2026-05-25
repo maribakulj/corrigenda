@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "generate:api-types": "../scripts/generate-frontend-api-types.sh"
+    "generate:api-types": "../scripts/generate-frontend-api-types.sh",
+    "size": "npm run build && size-limit"
   },
   "dependencies": {
     "react": "^18.3.1",
