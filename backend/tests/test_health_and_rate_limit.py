@@ -156,20 +156,17 @@ def test_rate_limit_uses_x_forwarded_for(monkeypatch: pytest.MonkeyPatch):
             )
 
 
-def test_create_job_endpoint_has_rate_limit_attached():
-    """The @limiter.limit decorator on POST /api/jobs is registered.
-
-    A full end-to-end check (21st request → 429) would require 20
-    valid multipart uploads to exhaust the bucket — slowapi's
-    decorator only counts after FastAPI body validation passes. We
-    sanity-check the decorator's presence instead; the providers/models
-    test above proves the limiter+middleware wiring works end-to-end.
-    """
-    from app.api.jobs import create_job
-
-    # slowapi tags decorated routes with this attribute.
-    assert (
-        hasattr(create_job, "__wrapped__")
-        or any("limit" in str(d) for d in getattr(create_job, "__slowapi_limits__", []))
-        or "limit" in str(create_job)
-    )
+# Note (roadmap L4 — B4): the previous
+# `test_create_job_endpoint_has_rate_limit_attached` was deleted on
+# purpose. Its three `or` conditions were each broad enough to pass on
+# any decorated function — `__wrapped__` is set by every FastAPI route
+# decorator, `__slowapi_limits__` defaults to [] when missing, and
+# `"limit" in str(create_job)` was simply tautological for a function
+# whose repr never contains the word. The test reported green without
+# ever proving the rate limiter was wired to `POST /api/jobs`.
+#
+# The end-to-end wiring proof now lives in
+# `test_providers_models_rate_limit_blocks_after_threshold` and
+# `test_rate_limit_uses_x_forwarded_for` above (different endpoint,
+# same Limiter + SlowAPIMiddleware stack — a regression in the wiring
+# trips at least one of them).

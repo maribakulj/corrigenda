@@ -1,6 +1,6 @@
 # Remediation status — alto-llm-corrector
 
-Last updated: 2026-05-25 (session L3)
+Last updated: 2026-05-25 (session L4)
 Branch: `claude/vibrant-pascal-STfnR`
 
 Roadmap reference: voir conversation (sections 5 et 6 du plan validé).
@@ -12,8 +12,8 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 |-------------|--------------|-------------|-------|
 | L1          | done         | `f0270ed`   | size-limit + preset-app added |
 | L2          | done         | `2148bcd`   | health/ready observation-only + off-loop |
-| L3          | done         | (this push) | ProxyHeadersMiddleware + R2 decision documented |
-| L4          | not started  | —           | pipeline tests P0 (B4, T0a-d) |
+| L3          | done         | `6218dd4`   | ProxyHeadersMiddleware + R2 decision documented |
+| L4          | done         | (this push) | pipeline retry classification + event payload tests (+9 tests net) |
 | L5          | not started  | —           | alto-core release readiness (B5, A5, B6, P3, P8) |
 | L6          | not started  | —           | architecture cleanup (A1, A2, A3, A9) |
 | L7          | not started  | —           | release pipeline (P5, P6, P7) |
@@ -27,6 +27,17 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 - Bonus coverage: new test `test_health_ready_returns_503_when_storage_not_writable` exercises the degraded branch end-to-end (uses a file-not-dir as `JOB_STORAGE_DIR` for deterministic failure regardless of test-runner user).
 - **R1** — `ProxyHeadersMiddleware` added to `create_app()`, gated by env var `TRUSTED_PROXIES` (default `127.0.0.1` = dev-safe, both Dockerfiles override to `*`). Defence in depth: uvicorn keeps its own `--proxy-headers --forwarded-allow-ips=*` flags so the rewrite happens even if the Python middleware is mis-configured (both layers are idempotent). New test `test_rate_limit_uses_x_forwarded_for` proves slowapi now keys on the real caller IP (11 requests with 11 distinct `X-Forwarded-For` values all succeed — without the fix the 11th was 429).
 - **R2** — middleware order documented as deliberate. Final stack: `CORS (outermost) → ProxyHeaders → SlowAPI → endpoint`. CORS stays outside SlowAPI on purpose: rate-limiting OPTIONS preflights would surface as opaque CORS errors in the browser the moment a user clicks faster than the cap. Preflights are cheap (no body, no DB, no LLM call), so the cost of not counting them is negligible compared to the UX hit. Documented in `backend/app/main.py` middleware block.
+- **B4** — bidon test `test_create_job_endpoint_has_rate_limit_attached` deleted in L4. Three `or` conditions were each broad enough to pass on any decorated function. Wiring proof is now exclusively the two end-to-end tests `test_providers_models_rate_limit_blocks_after_threshold` + `test_rate_limit_uses_x_forwarded_for` (different endpoint but same Limiter + SlowAPIMiddleware stack — a regression in the wiring trips at least one).
+- **T0a** — pipeline exception classification (3 branches) now covered (L4):
+  - `test_pipeline_classifies_hyphen_violation_with_zero_backoff` proves `ValueError("hyphen_integrity_violation: …")` retries instantly the first time (backoff=0) and emits a retry event tagged with the fixed sentinel.
+  - `test_pipeline_classifies_transient_http_with_exponential_backoff` proves duck-typed HTTPStatusError-like exceptions use backoff = attempt * 2.
+  - `test_pipeline_classifies_llm_output_error_with_linear_backoff` proves generic `ValueError` / `JSONDecodeError` use backoff = attempt.
+- **T0b** — event payload shape now covered (L4):
+  - `test_chunk_error_event_payload_shape` (forced `_run_chunk` crash) verifies `chunk_id`, `message[:200]`, `exception_type` keys.
+  - `test_hyphen_partner_missing_event_emitted_with_direction` (forced `_resolve_partner → None`) verifies `chunk_id`, `line_id`, `missing_partner_id`, `direction ∈ {backward, forward}`.
+  - `test_retry_event_payload_shape` verifies `chunk_id`, `attempt: int >= 1`, `error: str` with `len <= 120`.
+- **T0c** — `CompositeObserver` exception isolation now covered (L4): `test_composite_observer_isolates_failing_observer` + helpers for empty-list noop + registration-order verification (3 tests).
+- **T0d** — multi-chunk persistent fallback now covered (L4): `test_persistent_failure_across_all_chunks_falls_back` proves status=COMPLETED + fallbacks ≥ 1 + every line's `corrected_text == ocr_text`.
 
 ## In progress
 
@@ -38,7 +49,7 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 
 ## Remaining
 
-- B4, A5, B5, B6, P3, P8, T0a, T0b, T0c, T0d, A1, A2, A3, A9, P5, P6, P7, T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6.
+- A5, B5, B6, P3, P8, A1, A2, A3, A9, P5, P6, P7, T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6.
 
 ## New bugs discovered
 
@@ -55,6 +66,18 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
   - `test_health_ready_returns_503_when_storage_not_writable` (degraded-branch end-to-end coverage, previously missing).
 - L3:
   - `test_rate_limit_uses_x_forwarded_for` (R1 characterisation — failed against old code: 11th request from a distinct IP was rate-limited because slowapi saw `testclient` for all 11).
+- L4 (+10 added, -1 removed = +9 net):
+  - `test_pipeline_classifies_hyphen_violation_with_zero_backoff` (T0a, branch 1/3).
+  - `test_pipeline_classifies_transient_http_with_exponential_backoff` (T0a, branch 2/3).
+  - `test_pipeline_classifies_llm_output_error_with_linear_backoff` (T0a, branch 3/3).
+  - `test_chunk_error_event_payload_shape` (T0b).
+  - `test_hyphen_partner_missing_event_emitted_with_direction` (T0b).
+  - `test_retry_event_payload_shape` (T0b).
+  - `test_persistent_failure_across_all_chunks_falls_back` (T0d).
+  - `test_composite_observer_isolates_failing_observer` (T0c, primary).
+  - `test_composite_observer_with_no_observers_is_a_noop` (T0c, defensive).
+  - `test_composite_observer_calls_observers_in_registration_order` (T0c, order contract).
+  - DELETED `test_create_job_endpoint_has_rate_limit_attached` (B4, bidon).
 
 ## Tests count evolution
 
@@ -62,12 +85,14 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 - Après L1: unchanged (345). L1 ne touche pas de tests.
 - Après L2: 331 backend + 4 alto-core + 12 frontend = 347 total (+2).
 - Après L3: 332 backend + 4 alto-core + 12 frontend = 348 total (+1).
+- Après L4: 341 backend + 4 alto-core + 12 frontend = 357 total (+10 added, -1 deleted = +9 net).
 
 ## Coverage evolution
 
 - Baseline `observers.py`: 0% (audit).
 - Baseline `correction_pipeline.py`: ~70% (audit).
 - Cible post-L4: `observers.py` ≥ 60%, `correction_pipeline.py` ≥ 85%.
+- Post-L4 actual : see `pytest --cov=app --cov=alto_core --cov-report=term-missing` when needed; observers.py covered by 3 direct tests + indirect via CompositeObserver in JobRunner; classification branches (`is_hyphen_violation` / `is_transient_http` / `is_llm_output_error`) and event payload sites are now reached by at least one assertion each.
 - Cible post-L8: `observers.py` ≥ 90%, `store.py` ≥ 95%, `health.py` ≥ 95%.
 
 ## Risks remaining

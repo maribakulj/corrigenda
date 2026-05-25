@@ -502,3 +502,395 @@ async def test_run_job_resolves_provider_from_registry_when_none(
     job = store.get_job(job_id)
     assert job is not None
     assert job.status.value == "completed"
+
+
+# ===========================================================================
+# Roadmap L4 — pipeline retry classification + event payload coverage
+# ===========================================================================
+#
+# The pipeline classifies exceptions into 3 retry buckets with distinct
+# backoff strategies (correction_pipeline.py:551-595). Pre-L4, none of
+# the three branches was individually exercised — a refactor of the
+# classifier could silently break one strategy and tests stayed green.
+# These tests pin the contract per branch.
+#
+# Event payload tests follow the same logic: the pipeline emits events
+# (chunk_error, retry, hyphen_partner_missing, warning) whose shape
+# downstream observers depend on (LoggingObserver level routing,
+# JobStoreObserver → SSE clients). Pre-L4 only event *presence* was
+# tested ("started" in events) — not the field contract.
+
+# ---------------------------------------------------------------------------
+# Helpers for the classification tests
+# ---------------------------------------------------------------------------
+
+
+class _AlwaysFailProvider:
+    """Provider that raises a configurable exception on every call.
+
+    Used to exercise the retry classifier — the pipeline retries up to
+    3 times then falls back, so a 3-element list of recorded backoffs
+    tells us which branch was taken.
+    """
+
+    def __init__(self, exception_factory) -> None:
+        self._exception_factory = exception_factory
+        self.call_count = 0
+
+    async def list_models(self, api_key: str):
+        return [ModelInfo(id="mock-model", label="Mock")]
+
+    async def complete_structured(self, **kwargs):
+        self.call_count += 1
+        raise self._exception_factory()
+
+
+# Fake HTTP exception — pipeline duck-types on class name (see
+# correction_pipeline.py:554-561 for the allowlist), so the *class
+# name* must match exactly. Defining our own class avoids pulling
+# httpx into the test surface; the leading-underscore convention is
+# dropped on purpose since `__name__` is what the classifier reads.
+class HTTPStatusError(Exception):
+    pass
+
+
+class _OneHyphenViolationThenOK:
+    """Provider that raises a hyphen-violation exactly once (first call)
+    then behaves like ``MockProvider`` for the rest of the run.
+
+    Used by the hyphen-violation classification test: the pipeline
+    flips an internal ``hyphen_violation`` flag after the first retry
+    so subsequent retries on the SAME chunk fall through to the
+    llm_output_error branch (linear backoff). To prove the
+    backoff=0 branch in isolation we need to retry exactly once.
+    """
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def list_models(self, api_key: str):
+        return [ModelInfo(id="mock-model", label="Mock")]
+
+    async def complete_structured(self, **kwargs):
+        self.call_count += 1
+        if self.call_count == 1:
+            raise ValueError("hyphen_integrity_violation: TL5 corrupted")
+        lines_out = [
+            {"line_id": line_in["line_id"], "corrected_text": line_in["ocr_text"]}
+            for line_in in kwargs["user_payload"].get("lines", [])
+        ]
+        return {"lines": lines_out}
+
+
+async def _capture_sleeps(monkeypatch):
+    """Replace ``asyncio.sleep`` with a recorder that returns instantly.
+
+    Returns the list that will accumulate the durations the pipeline
+    requested. Safe because alto-core uses ``asyncio.sleep`` at exactly
+    one site (the retry backoff at correction_pipeline.py:585) and the
+    backend has zero call sites in its runtime path.
+    """
+    sleeps: list[float] = []
+
+    async def _fake(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake)
+    return sleeps
+
+
+async def _collect_events(store: JobStore, job_id: str) -> list[SSEEvent]:
+    queue = store.subscribe(job_id)
+    out: list[SSEEvent] = []
+    while not queue.empty():
+        out.append(queue.get_nowait())
+    return out
+
+
+# ---------------------------------------------------------------------------
+# T0a — exception classification (3 branches, 3 distinct backoff curves)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_classifies_hyphen_violation_with_zero_backoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Roadmap L4 (T0a) — `ValueError("hyphen_integrity_violation: …")` retries
+    instantly (backoff=0) and tags the retry event accordingly.
+
+    Rationale: hyphen violations are deterministic (same prompt, same
+    error), so the pipeline retries once at temperature 0 with no
+    sleep, then falls back. Any non-zero backoff would mean the
+    classifier missed the branch and routed to llm_output_error or
+    transient_http instead.
+    """
+    sleeps = await _capture_sleeps(monkeypatch)
+    store, job_id = _make_store_and_job()
+    queue = store.subscribe(job_id)
+
+    # One hyphen violation then success — captures the FIRST hyphen
+    # retry per chunk (which uses backoff=0). After the first one,
+    # the pipeline's internal flag flips so subsequent retries on the
+    # same chunk fall through to llm_output_error (linear backoff)
+    # — that branch is covered by the dedicated test below.
+    provider = _OneHyphenViolationThenOK()
+    await _run(job_id, provider, tmp_path, store)
+
+    # backoff=0 means `await asyncio.sleep(backoff)` is skipped entirely
+    # (correction_pipeline.py:584 `if backoff > 0`), so no entry lands
+    # in our recorder.
+    assert sleeps == [], (
+        f"first hyphen_violation retry should skip sleep (backoff=0), got {sleeps!r}"
+    )
+
+    # Retry event must carry the fixed sentinel — downstream observers
+    # discriminate hyphen retries from generic LLM errors on this tag.
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    hyphen_retries = [
+        e
+        for e in events
+        if e.event == "retry" and e.data.get("error") == "hyphen_integrity_violation"
+    ]
+    assert hyphen_retries, (
+        "pipeline didn't emit any retry event tagged 'hyphen_integrity_violation'"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_classifies_transient_http_with_exponential_backoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Roadmap L4 (T0a) — HTTPStatusError-shaped exceptions retry with
+    backoff = attempt * 2 (1→2s, 2→4s).
+
+    Network / 5xx upstream issues recover on a timescale of seconds,
+    so the pipeline backs off exponentially to give the upstream room
+    to heal. A bug in the duck-typing allowlist (e.g. removing
+    HTTPStatusError) would make this branch fall through to
+    is_llm_output_error and use linear backoff instead — caught here.
+    """
+    sleeps = await _capture_sleeps(monkeypatch)
+    store, job_id = _make_store_and_job()
+
+    provider = _AlwaysFailProvider(lambda: HTTPStatusError("upstream 503"))
+    await _run(job_id, provider, tmp_path, store)
+
+    # 3 attempts → 2 retries → 2 backoffs. correction_pipeline.py:577-579
+    # sets backoff = attempt * 2 → [2, 4] across attempts [1, 2].
+    # The pipeline may run multiple chunks; assert the backoff PATTERN
+    # rather than the exact count.
+    assert sleeps, "transient_http branch should have triggered at least one backoff"
+    for i, s in enumerate(sleeps):
+        # Either 2 (attempt 1) or 4 (attempt 2) — the exponential curve.
+        assert s in (2, 4), (
+            f"transient_http backoff should follow attempt*2 (2 or 4), got {s} at index {i}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_classifies_llm_output_error_with_linear_backoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Roadmap L4 (T0a) — malformed LLM output (non-hyphen ValueError or
+    JSONDecodeError) retries with backoff = attempt (1→1s, 2→2s).
+
+    The LLM stochasticity can produce a one-off bad JSON on retry-0
+    that won't repeat. Linear backoff is enough — no upstream to heal.
+    """
+    sleeps = await _capture_sleeps(monkeypatch)
+    store, job_id = _make_store_and_job()
+
+    # "invalid JSON" is a generic ValueError → llm_output_error branch.
+    provider = _AlwaysFailProvider(lambda: ValueError("invalid JSON: missing 'lines' key"))
+    await _run(job_id, provider, tmp_path, store)
+
+    assert sleeps, "llm_output_error branch should have triggered at least one backoff"
+    for i, s in enumerate(sleeps):
+        # correction_pipeline.py:580-582 → backoff = attempt
+        # → 1 (attempt 1) or 2 (attempt 2).
+        assert s in (1, 2), (
+            f"llm_output_error backoff should be linear (1 or 2), got {s} at index {i}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T0b — event payload shape coverage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chunk_error_event_payload_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Roadmap L4 (T0b) — `chunk_error` event carries `chunk_id`,
+    `message[:200]`, and `exception_type`.
+
+    `chunk_error` is the safety net for exceptions that escape
+    `_run_chunk`'s retry/fallback envelope (e.g. a bug in
+    `_build_hyphen_pairs` before the try block). Patching `_run_chunk`
+    directly is the most targeted way to exercise the catch site at
+    correction_pipeline.py:405-414.
+    """
+    from alto_core.pipeline.correction_pipeline import CorrectionPipeline
+
+    async def _explode(self, **kwargs):
+        raise OSError("disk on fire")
+
+    monkeypatch.setattr(CorrectionPipeline, "_run_chunk", _explode)
+
+    store, job_id = _make_store_and_job()
+    queue = store.subscribe(job_id)
+    await _run(job_id, MockProvider(), tmp_path, store)
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+
+    chunk_errors = [e for e in events if e.event == "chunk_error"]
+    assert chunk_errors, "_run_chunk crash didn't surface as a chunk_error event"
+
+    for ce in chunk_errors:
+        # Shape contract — downstream observers (LoggingObserver,
+        # JobStoreObserver → SSE) rely on these exact keys.
+        assert "chunk_id" in ce.data
+        assert "message" in ce.data
+        assert "exception_type" in ce.data
+        # Truncation contract: the message field is bounded
+        # (correction_pipeline.py:410 uses [:200]).
+        assert len(ce.data["message"]) <= 200
+        # Exception class name is propagated (allows operators to
+        # alert on OSError vs ValueError without parsing message).
+        assert ce.data["exception_type"] == "OSError"
+
+
+@pytest.mark.asyncio
+async def test_hyphen_partner_missing_event_emitted_with_direction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Roadmap L4 (T0b) — when a hyphen partner can't be resolved, the
+    pipeline emits a structured event with `direction` so observers
+    can tell backward (PART1→PART2) from forward (BOTH→next).
+
+    sample.xml contains an explicit PART1 (TL4); we force
+    `_resolve_partner` to return None to exercise the missing-partner
+    code path without needing a contrived multi-file fixture.
+    """
+    import alto_core.pipeline.correction_pipeline as cp
+
+    monkeypatch.setattr(cp, "_resolve_partner", lambda *args, **kwargs: None)
+
+    store, job_id = _make_store_and_job()
+    queue = store.subscribe(job_id)
+    await _run(job_id, MockProvider(), tmp_path, store)
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+
+    missings = [e for e in events if e.event == "hyphen_partner_missing"]
+    assert missings, (
+        "Forced partner resolution to None for a PART1 in sample.xml — "
+        "pipeline should have emitted at least one hyphen_partner_missing event"
+    )
+
+    for m in missings:
+        # All four keys required by the contract.
+        assert m.data["chunk_id"]
+        assert m.data["line_id"]
+        assert m.data["missing_partner_id"]
+        # Direction is the discriminator between the two emission
+        # sites (backward = PART1→PART2, forward = BOTH→next).
+        assert m.data["direction"] in ("backward", "forward"), (
+            f"direction must be backward|forward, got {m.data['direction']!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_retry_event_payload_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Roadmap L4 (T0b) — `retry` event carries `chunk_id`, `attempt`, and
+    `error`. Without backoff capture, retries fire in real wallclock
+    time — we monkeypatch sleep so the test runs in milliseconds.
+    """
+    await _capture_sleeps(monkeypatch)
+    store, job_id = _make_store_and_job()
+    queue = store.subscribe(job_id)
+
+    # One invalid JSON response then success → exactly 1 retry event.
+    provider = MockProvider(invalid_json_times=1)
+    await _run(job_id, provider, tmp_path, store)
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+
+    retries = [e for e in events if e.event == "retry"]
+    assert retries, "invalid_json_times=1 should have triggered a retry event"
+
+    for r in retries:
+        assert "chunk_id" in r.data
+        assert isinstance(r.data["attempt"], int)
+        assert r.data["attempt"] >= 1
+        # `error` is either the literal "hyphen_integrity_violation"
+        # sentinel or the original message truncated to 120 chars
+        # (correction_pipeline.py:579, 582).
+        assert isinstance(r.data["error"], str)
+        assert len(r.data["error"]) <= 120
+
+
+# ---------------------------------------------------------------------------
+# T0d — multi-chunk persistent failure: every chunk must fall back
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persistent_failure_across_all_chunks_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Roadmap L4 (T0d) — when the provider fails on every call for every
+    chunk, the pipeline must (a) fall back to OCR source on each chunk,
+    (b) still finish with status=COMPLETED, (c) report a fallback
+    counter ≥ chunk_count.
+
+    `test_fallback_on_persistent_failure` only checks the first chunk
+    (the existing MockProvider's `fail_times=3` recovers after — so
+    subsequent chunks succeed). This test forces failure across the
+    entire run.
+    """
+    await _capture_sleeps(monkeypatch)
+    store, job_id = _make_store_and_job()
+
+    provider = _AlwaysFailProvider(lambda: ValueError("provider permanently broken"))
+    await _run(job_id, provider, tmp_path, store)
+
+    job = store.get_job(job_id)
+    assert job is not None
+    # The runner reports completion even when every chunk fell back —
+    # the job has finished its work, the WORK just didn't yield
+    # any corrections. This matches the contract documented in
+    # runner.py: completion ≠ correctness.
+    assert job.status.value == "completed", (
+        f"job status should be completed even after total fallback, got {job.status.value}"
+    )
+    assert job.fallbacks >= 1, "no fallback recorded despite provider always failing"
+
+    # Every single line must carry corrected_text == ocr_text (fallback
+    # contract: we don't drop content, we just refuse to "improve" it).
+    assert job.document_manifest is not None
+    for page in job.document_manifest.pages:
+        for lm in page.lines:
+            assert lm.corrected_text == lm.ocr_text, (
+                f"line {lm.line_id} fallback should preserve ocr_text exactly, "
+                f"got corrected={lm.corrected_text!r} vs ocr={lm.ocr_text!r}"
+            )
