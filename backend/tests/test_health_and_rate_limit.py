@@ -16,10 +16,16 @@ def client():
     app = create_app()
     # Reset the limiter between tests so the per-IP counter from a
     # previous test doesn't leak in. slowapi exposes the storage on
-    # the limiter directly.
+    # the limiter directly. NB: `limiter` is a module-level singleton
+    # shared across every `create_app()` invocation, so we also reset
+    # on teardown to keep tests in OTHER files (notably
+    # test_integration.py, which builds its own apps) from inheriting
+    # an exhausted budget after this file's rate-limit-exhausting
+    # tests run.
     app.state.limiter.reset()
     with TestClient(app) as c:
         yield c
+    app.state.limiter.reset()
 
 
 # ---------------------------------------------------------------------------
@@ -156,17 +162,47 @@ def test_rate_limit_uses_x_forwarded_for(monkeypatch: pytest.MonkeyPatch):
             )
 
 
-# Note (roadmap L4 — B4): the previous
-# `test_create_job_endpoint_has_rate_limit_attached` was deleted on
-# purpose. Its three `or` conditions were each broad enough to pass on
-# any decorated function — `__wrapped__` is set by every FastAPI route
-# decorator, `__slowapi_limits__` defaults to [] when missing, and
-# `"limit" in str(create_job)` was simply tautological for a function
-# whose repr never contains the word. The test reported green without
-# ever proving the rate limiter was wired to `POST /api/jobs`.
-#
-# The end-to-end wiring proof now lives in
-# `test_providers_models_rate_limit_blocks_after_threshold` and
-# `test_rate_limit_uses_x_forwarded_for` above (different endpoint,
-# same Limiter + SlowAPIMiddleware stack — a regression in the wiring
-# trips at least one of them).
+def test_create_job_endpoint_is_rate_limited(client: TestClient):
+    """Roadmap remediation B-NEW-4 — POST /api/jobs is decorated with
+    ``@limiter.limit("20/minute")``. A previous unit test for this
+    wiring was deleted in L4 because it was tautological; the
+    accompanying note claimed the wiring was 'proven' by
+    ``test_providers_models_rate_limit_blocks_after_threshold`` above.
+    That justification is FALSE — that test hits
+    ``/api/providers/models``, which carries a SEPARATE
+    ``@limiter.limit("10/minute")`` decorator. Removing the decorator
+    on ``/api/jobs`` alone would have left the providers/models test
+    green while production was unprotected.
+
+    This test exercises the actual ``/api/jobs`` route through the
+    full SlowAPIMiddleware stack until 429 trips, proving that
+    end-to-end wiring is in place — exactly the contract the prior
+    test was supposed to enforce.
+
+    We use an invalid file extension (.pdf) so each request returns
+    a quick 400 from the route body without spawning a background
+    task; the SlowAPIMiddleware still counts the call against the
+    per-IP budget, so the 21st request hits 429 regardless of the
+    earlier 4xxs.
+    """
+    invalid_files = [("files", ("doc.pdf", b"%PDF-1.4", "application/pdf"))]
+    form = {"provider": "openai", "api_key": "fake", "model": "mock-model"}
+
+    # The decorator caps at 20/minute. Within the same minute,
+    # requests 1..20 should pass through the limiter (they'll return
+    # 400 for the invalid extension), and request 21 must return 429.
+    for i in range(20):
+        resp = client.post("/api/jobs", data=form, files=invalid_files)
+        assert resp.status_code != 429, (
+            f"request #{i + 1} was rate-limited too early — "
+            f"the 20/minute budget should not be exhausted yet"
+        )
+
+    resp = client.post("/api/jobs", data=form, files=invalid_files)
+    assert resp.status_code == 429, (
+        f"after 20 requests inside the 20/minute budget, the 21st must "
+        f"return 429 — got {resp.status_code}. The "
+        f"`@limiter.limit('20/minute')` decorator on POST /api/jobs is "
+        f"either missing or not wired through SlowAPIMiddleware."
+    )
+    assert "rate limit" in resp.json()["detail"].lower()
