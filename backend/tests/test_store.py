@@ -342,6 +342,65 @@ def test_subscriber_count_reports_current_size():
     assert store.subscriber_count(jid) == 0
 
 
+def test_subscribe_rejects_unknown_job_id_instead_of_leaking_entry():
+    """L10/B7 — pre-fix `subscribe()` used
+    `_subscribers.setdefault(job_id, []).append(q)`. After
+    `_remove_job` evicted the job, a late `subscribe(job_id)` call
+    (e.g. SSE reconnect after eviction) silently RE-created the entry
+    in `_subscribers` and attached a queue that nothing would ever
+    feed. The stream_events generator's post-subscribe status check
+    then saw `_jobs.get(job_id) == None`, fell through to the normal
+    poll loop, and hung forever on `queue.get()` while the orphan
+    entry stayed in `_subscribers` until the next eviction sweep.
+
+    After the fix, subscribing to an unknown job raises `LookupError`
+    so no orphan entry is created.
+    """
+    store = JobStore()
+    # No job created — `_jobs` is empty, `_subscribers` is empty.
+    assert "ghost" not in store._subscribers
+
+    with pytest.raises(LookupError, match="ghost"):
+        store.subscribe("ghost")
+
+    # Critical: no orphan list was left behind.
+    assert "ghost" not in store._subscribers
+
+
+def test_subscribe_rejects_evicted_job():
+    """Symmetric to the previous test — same behaviour after the job
+    has been evicted, not just for never-existed ids."""
+    store = JobStore(ttl_seconds=0)
+    jid = store.create_job(Provider.OPENAI, "test")
+    store.update_job(jid, status=JobStatus.COMPLETED)
+    # Trigger eviction via a subsequent create_job.
+    import time
+
+    time.sleep(0.01)
+    store.create_job(Provider.OPENAI, "next")
+
+    assert jid not in store._jobs, "test setup failed — job should be evicted"
+
+    with pytest.raises(LookupError):
+        store.subscribe(jid)
+    assert jid not in store._subscribers
+
+
+@pytest.mark.asyncio
+async def test_stream_events_yields_synthetic_event_when_job_unknown():
+    """L10/B7 — when `subscribe` raises LookupError, stream_events
+    must yield a single synthetic ``error`` event with a meaningful
+    reason and return cleanly (vs hanging on a queue that nothing
+    will feed)."""
+    store = JobStore()
+    events = []
+    async for ev in store.stream_events("never-existed"):
+        events.append(ev)
+    assert len(events) == 1
+    assert events[0].event == "error"
+    assert events[0].data.get("reason") == "job_not_found"
+
+
 @pytest.mark.asyncio
 async def test_stream_events_yields_synthetic_error_when_cap_exhausted():
     """L10/F10 — when `subscribe()` raises because the cap is exhausted,

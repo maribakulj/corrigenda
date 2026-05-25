@@ -117,6 +117,14 @@ class JobStore:
     def subscribe(self, job_id: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=500)
         with self._lock:
+            # L10/B7 — refuse to attach a queue to a job we don't know
+            # about. Pre-fix this used `setdefault(job_id, [])` which
+            # silently recreated an orphan subscriber entry for any
+            # caller (e.g. SSE reconnect after eviction); the queue
+            # then waited 30 s for a keepalive that nothing would
+            # ever feed, leaking the entry until the next eviction.
+            if job_id not in self._jobs:
+                raise LookupError(f"unknown or evicted job: {job_id!r}")
             subs = self._subscribers.setdefault(job_id, [])
             if len(subs) >= self.MAX_SUBSCRIBERS_PER_JOB:
                 # Caller (typically the SSE route handler) should
@@ -168,9 +176,22 @@ class JobStore:
         translate that into a single synthetic ``error`` event so the
         client sees a clean refusal instead of a generic 500 / silent
         disconnect.
+
+        Unknown-job handling (L10/B7): if the caller subscribes to a
+        job_id that was evicted (or never existed), `subscribe()`
+        raises LookupError; same pattern — yield one synthetic
+        ``error`` event with reason ``job_not_found`` so the SSE
+        client closes cleanly instead of hanging on a queue nothing
+        will feed.
         """
         try:
             queue = self.subscribe(job_id)
+        except LookupError as exc:
+            yield SSEEvent(
+                event="error",
+                data={"reason": "job_not_found", "message": str(exc)},
+            )
+            return
         except RuntimeError as exc:
             yield SSEEvent(
                 event="error",
