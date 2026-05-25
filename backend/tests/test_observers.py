@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.jobs.observers import CompositeObserver
+from app.jobs.observers import CompositeObserver, LoggingObserver
 
 
 class _Recorder:
@@ -86,3 +86,67 @@ def test_composite_observer_calls_observers_in_registration_order():
     composite.on_event("foo", {})
 
     assert calls == ["first", "second", "third"]
+
+
+# ---------------------------------------------------------------------------
+# LoggingObserver — level mapping per event type (roadmap L8 / T1a)
+# ---------------------------------------------------------------------------
+
+
+def test_logging_observer_routes_warning_events_to_warning_level(caplog):
+    """Roadmap L8 (T1a) — the three event types in `_WARNING_EVENTS`
+    (`warning`, `chunk_error`, `hyphen_partner_missing`) must surface at
+    WARNING level so operators alerting on `level=WARNING` catch them.
+
+    Pre-L8 this mapping was entirely untested: a refactor that moved
+    a critical event out of `_WARNING_EVENTS` (silently dropping it to
+    DEBUG) would not have failed any test.
+    """
+    observer = LoggingObserver()
+
+    with caplog.at_level(logging.DEBUG, logger="alto_core.pipeline"):
+        observer.on_event("warning", {"chunk_id": "c1", "message": "fallback"})
+        observer.on_event("chunk_error", {"chunk_id": "c1", "exception_type": "OSError"})
+        observer.on_event("hyphen_partner_missing", {"line_id": "L1", "direction": "backward"})
+
+    warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warning_records) == 3, (
+        f"expected 3 WARNING records for the 3 warning-class events, "
+        f"got {[r.levelname for r in caplog.records]}"
+    )
+    # The event_type appears in the formatted message ("pipeline %s: %s")
+    # so observers downstream can grep on it.
+    messages = " ".join(r.message for r in warning_records)
+    for event_type in ("warning", "chunk_error", "hyphen_partner_missing"):
+        assert event_type in messages
+
+
+def test_logging_observer_routes_lifecycle_events_to_debug_level(caplog):
+    """Roadmap L8 (T1a) — non-warning events stream at DEBUG so production
+    logs (typically level=INFO) aren't drowned by per-chunk noise.
+
+    Pre-L8 there was no test that a `chunk_completed` or `page_started`
+    event NOT surface at WARNING. A future maintainer adding a new
+    event type would have to read `_WARNING_EVENTS` to know the default;
+    this test pins the contract.
+    """
+    observer = LoggingObserver()
+
+    with caplog.at_level(logging.DEBUG, logger="alto_core.pipeline"):
+        observer.on_event("page_started", {"page_id": "P1"})
+        observer.on_event("chunk_planned", {"page_id": "P1", "chunk_count": 3})
+        observer.on_event("chunk_started", {"chunk_id": "c1"})
+        observer.on_event("chunk_completed", {"chunk_id": "c1"})
+        observer.on_event("page_completed", {"page_id": "P1"})
+        observer.on_event("retry", {"chunk_id": "c1", "attempt": 1})
+
+    # No WARNING records should have been produced for these lifecycle events.
+    warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert warning_records == [], (
+        f"lifecycle events leaked to WARNING: {[(r.levelname, r.message) for r in warning_records]}"
+    )
+    # All 6 must have shown up at DEBUG.
+    debug_records = [r for r in caplog.records if r.levelname == "DEBUG"]
+    assert len(debug_records) == 6, (
+        f"expected 6 DEBUG records, got {[(r.levelname, r.message) for r in caplog.records]}"
+    )

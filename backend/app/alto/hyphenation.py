@@ -7,10 +7,18 @@ are NOT visible here. Pull those directly from alto-core if a
 test legitimately needs them.
 """
 
-from alto_core.alto.hyphenation import (  # noqa: F401  re-export
+from alto_core.alto.hyphenation import (
     ReconcileMetrics,
     classify_reconcile_outcome,
     enrich_chunk_lines,
     reconcile_hyphen_pair,
     should_stay_in_same_chunk,
 )
+
+__all__ = [
+    "ReconcileMetrics",
+    "classify_reconcile_outcome",
+    "enrich_chunk_lines",
+    "reconcile_hyphen_pair",
+    "should_stay_in_same_chunk",
+]

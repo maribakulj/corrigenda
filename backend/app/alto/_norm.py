@@ -7,8 +7,10 @@ are NOT visible here. Pull those directly from alto-core if a
 test legitimately needs them.
 """
 
-from alto_core.alto._norm import (  # noqa: F401  re-export
+from alto_core.alto._norm import (
     clean_content,
     ncfold,
     nfc,
 )
+
+__all__ = ["clean_content", "ncfold", "nfc"]

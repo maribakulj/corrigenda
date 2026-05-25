@@ -7,8 +7,10 @@ are NOT visible here. Pull those directly from alto-core if a
 test legitimately needs them.
 """
 
-from alto_core.alto.rewriter import (  # noqa: F401  re-export
+from alto_core.alto.rewriter import (
     RewriterMetrics,
     extract_output_texts,
     rewrite_alto_file,
 )
+
+__all__ = ["RewriterMetrics", "extract_output_texts", "rewrite_alto_file"]

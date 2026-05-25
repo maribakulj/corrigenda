@@ -195,6 +195,26 @@ def _structural_facts(xml_path: Path) -> dict[str, Any]:
             for tl in root.iter(f"{ns}TextLine")
         }
 
+    def non_hyphen_string_contents(root: etree._Element) -> dict[str, list[str | None]]:
+        """For each TextLine, list the CONTENT of <String> elements that
+        carry NO SUBS_TYPE attribute — i.e. plain Strings that are not
+        part of a hyphen pair reconstruction.
+
+        Under an identity-correction MockProvider, these Strings must
+        round-trip byte-for-byte: the rewriter has no right to touch
+        their CONTENT. Hyphen-pair Strings (PART1/PART2/BOTH) are
+        legitimately rewritten — they carry SUBS_TYPE — and excluded
+        from this check; the HYP-count assert in the calling test
+        already guards their preservation at structural level.
+        """
+        out: dict[str, list[str | None]] = {}
+        for tl in root.iter(f"{ns}TextLine"):
+            tl_id = tl.get("ID") or ""
+            out[tl_id] = [
+                s.get("CONTENT") for s in tl.iter(f"{ns}String") if s.get("SUBS_TYPE") is None
+            ]
+        return out
+
     src_ids = textline_ids(src_root)
     out_ids = textline_ids(out_root)
     return {
@@ -203,6 +223,9 @@ def _structural_facts(xml_path: Path) -> dict[str, Any]:
         "coords_preserved": coord_map(src_root) == coord_map(out_root),
         "hyp_count": len(list(out_root.iter(f"{ns}HYP"))),
         "src_hyp_count": len(list(src_root.iter(f"{ns}HYP"))),
+        "non_hyphen_string_contents_preserved": (
+            non_hyphen_string_contents(src_root) == non_hyphen_string_contents(out_root)
+        ),
     }
 
 
@@ -217,6 +240,14 @@ def test_semantic_sample_xml():
     assert facts["src_hyp_count"] == facts["hyp_count"], (
         "rewriter must preserve the HYP element count from the source"
     )
+    # Roadmap L8 / T1d — non-hyphen String CONTENT must round-trip
+    # under identity correction. Hyphen-pair Strings carry SUBS_TYPE
+    # and are legitimately rewritten (HYP reconstruction); plain
+    # Strings have no such excuse to mutate.
+    assert facts["non_hyphen_string_contents_preserved"], (
+        "rewriter mutated <String CONTENT> on plain (non-SUBS_TYPE) String elements "
+        "under identity correction — should be a pure round-trip"
+    )
 
 
 @pytest.mark.skipif(not X0000002_XML.exists(), reason="X0000002.xml not in examples/")
@@ -227,3 +258,6 @@ def test_semantic_x0000002_xml():
     assert facts["coords_preserved"]
     assert facts["textline_count"] == 566
     assert facts["src_hyp_count"] == facts["hyp_count"]
+    # Roadmap L8 / T1d — same contract on the 566-line corpus, where
+    # any silent CONTENT mutation has many more chances to surface.
+    assert facts["non_hyphen_string_contents_preserved"]

@@ -7,7 +7,9 @@ are NOT visible here. Pull those directly from alto-core if a
 test legitimately needs them.
 """
 
-from alto_core.pipeline.chunk_planner import (  # noqa: F401  re-export
+from alto_core.pipeline.chunk_planner import (
     downgrade_granularity,
     plan_page,
 )
+
+__all__ = ["downgrade_granularity", "plan_page"]

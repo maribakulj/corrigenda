@@ -1,6 +1,6 @@
 # Remediation status — alto-llm-corrector
 
-Last updated: 2026-05-25 (session L7)
+Last updated: 2026-05-25 (session L8)
 Branch: `claude/vibrant-pascal-STfnR`
 
 Roadmap reference: voir conversation (sections 5 et 6 du plan validé).
@@ -16,8 +16,8 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 | L4          | done         | `610ccce`   | pipeline retry classification + event payload tests (+9 tests net) |
 | L5          | done         | `5412560`   | alto-core release readiness — docstrings, smoke unified, CHANGELOG clarified |
 | L6          | done         | `f1af8e4`   | architecture cleanup — 0 prod consumer of legacy run_job; double-lock removed |
-| L7          | done         | (this push) | release pipeline hardening — version coherence, tag gating, anti-double-upload |
-| L8          | not started  | —           | backlog (T1a-d, R3, R4, R5, A4, A6, NB2) — optional |
+| L7          | done         | `0c94d6f`   | release pipeline hardening — version coherence, tag gating, anti-double-upload |
+| L8          | partial      | (this push) | T1a + T1c (closed as redundant) + T1d + NB2 done; T1b/R3/R4/R5/A4/A6 deferred with rationale |
 
 ## Done
 
@@ -50,6 +50,10 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 - **P5** — `ci.yml` job `alto-core-lint` gains a `Version coherence` step (L7). Reads `__version__` from `src/alto_core/__init__.py` via Python regex and grep's the CHANGELOG for a matching `## [X.Y.Z]` heading. CI blocks the merge if they diverge. Pre-L7 the check only fired at release-script time (`scripts/release-alto-core.sh:55-59`); now caught at every push.
 - **P6** — `publish-alto-core.yml` gains a `Verify HEAD is on an alto-core release tag` step before build (L7). Requires an `alto-core-vX.Y.Z` tag pointing at HEAD where X.Y.Z matches `__version__`. Without it, a maintainer could accidentally workflow_dispatch on any default-branch SHA and publish whatever's there. `actions/checkout@v4` now uses `fetch-depth: 0 + fetch-tags: true` so the tag refs are in the local clone.
 - **P7** — `scripts/release-alto-core.sh` gains an index-side guard before `twine upload` (L7). Hits `https://{,test.}pypi.org/pypi/alto-core/json`, lists existing versions, aborts with a clear message if `${VERSION}` is already there. Branches cleanly on 200 (duplicate check), 404 (first release), and network failure (warning, proceed). Pre-L7 a duplicate upload surfaced as an opaque twine 403 after the full build.
+- **T1a** — `LoggingObserver` level mapping now covered by 2 new tests in `test_observers.py` (L8). `test_logging_observer_routes_warning_events_to_warning_level` proves the 3 event types in `_WARNING_EVENTS` (`warning`, `chunk_error`, `hyphen_partner_missing`) reach WARNING level; `test_logging_observer_routes_lifecycle_events_to_debug_level` proves the 6 lifecycle event types (`page_started`, `chunk_planned`, `chunk_started`, `chunk_completed`, `page_completed`, `retry`) stay at DEBUG.
+- **T1c** — Closed as redundant in L8: already covered by L2's `test_health_ready_returns_503_when_storage_not_writable` in `test_health_and_rate_limit.py:77`. No new test needed.
+- **T1d** — `non_hyphen_string_contents_preserved` fact added to `_structural_facts()` in `test_orchestrator_snapshot.py` (L8). Pins the contract that under identity correction, `<String CONTENT="...">` round-trips byte-for-byte on all non-`SUBS_TYPE` String elements. Exercised on both sample.xml (10 lines) and X0000002.xml (566 lines). Hyphen-pair Strings legitimately mutate (HYP reconstruction) and are excluded — the HYP-count assert already guards that path.
+- **NB2** — 7 backend shims (`alto/{parser,rewriter,hyphenation,_norm}.py`, `jobs/{chunk_planner,validator,line_acceptance}.py`) migrated from `# noqa: F401  re-export` to explicit `__all__` declarations (L8). Matches the existing `app/jobs/correction_pipeline.py` pattern; ruff stays green (the `__all__` opts in to re-export semantics without needing a `noqa` suppression).
 
 ## In progress
 
@@ -59,9 +63,14 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 
 - (none)
 
-## Remaining
+## Deferred from L8 (require design decisions or carry CI risk)
 
-- T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6, NB2 (all backlog/optional — L8).
+- **T1b** (`test_jobstore_threadsafe_under_contention`): meaningful only if the production server moves off single-worker asyncio. Stress tests around `threading.Thread` + `concurrent.futures` tend to be flaky under CI load. Recommendation: skip until either (a) we migrate to multi-worker or (b) an actual race is reported. The `RLock` is documented as *defensive* — its absence wouldn't break anything today.
+- **R3** (SSE race: terminal event lands between `job.status` fast-path check and `subscribe()`): would need a small re-shape of `stream_events` to subscribe FIRST then re-check status. Behaviour change (window narrowed but not closed). Defer until a real client-side miss is reported.
+- **R4** (`JobStore.get_job` returns mutable `JobManifest`): would need to deep-copy or freeze the returned object. Touches every caller. Behaviour change. Defer; under asyncio single-threaded today, the window doesn't matter.
+- **R5** (`JsonFormatter` double-encodes each extra field via `json.dumps`): perf smell, not a bug. Measurable cost only at very high log volumes. Recommendation: ignore until the log pipeline becomes a bottleneck (HF Spaces is currently nowhere near that).
+- **A4** (3 health endpoints — `/health`, `/health/live`, `/health/ready`): keeping `/health` as the lightweight HF Spaces ping is intentional. The "redundancy" is documented in code. Recommendation: leave as is; no operator confusion has been reported and removing it would risk breaking the HF probe configured years ago.
+- **A6** (6 backend tests import `_` privates from `alto_core.alto.parser` / `rewriter` / `hyphenation`): moving them into `packages/alto-core/tests/` requires duplicating the sample fixtures and would block alto-core from renaming its internals. The current setup couples backend tests to alto-core privates — manageable while the backend is the primary consumer. Recommendation: revisit when a second alto-core consumer appears.
 
 ## New bugs discovered
 
@@ -94,6 +103,10 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 - L5 (+2 alto-core tests):
   - `test_all_matches_top_level_attrs` (P8 — iterates `__all__`, future-proof).
   - `test_changelog_added_symbols_are_importable` (B5 — pins sub-module import-path promises).
+- L8 (+2 backend tests, +1 fact extended on snapshot helper):
+  - `test_logging_observer_routes_warning_events_to_warning_level` (T1a, warning side).
+  - `test_logging_observer_routes_lifecycle_events_to_debug_level` (T1a, debug side).
+  - `_structural_facts` extended with `non_hyphen_string_contents_preserved` + asserted in both `test_semantic_sample_xml` and `test_semantic_x0000002_xml` (T1d).
 
 ## Tests count evolution
 
@@ -103,6 +116,8 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 - Après L3: 332 backend + 4 alto-core + 12 frontend = 348 total (+1).
 - Après L4: 341 backend + 4 alto-core + 12 frontend = 357 total (+10 added, -1 deleted = +9 net).
 - Après L5: 341 backend + 6 alto-core + 12 frontend = 359 total (+2 alto-core).
+- Après L7: unchanged (359). L7 ne touche pas de tests.
+- Après L8: 343 backend + 6 alto-core + 12 frontend = 361 total (+2 backend).
 
 ## Coverage evolution
 

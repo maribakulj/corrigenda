@@ -7,8 +7,10 @@ are NOT visible here. Pull those directly from alto-core if a
 test legitimately needs them.
 """
 
-from alto_core.pipeline.line_acceptance import (  # noqa: F401  re-export
+from alto_core.pipeline.line_acceptance import (
     AcceptanceResult,
     check_adjacent_duplicates,
     check_line,
 )
+
+__all__ = ["AcceptanceResult", "check_adjacent_duplicates", "check_line"]

@@ -7,7 +7,9 @@ are NOT visible here. Pull those directly from alto-core if a
 test legitimately needs them.
 """
 
-from alto_core.alto.parser import (  # noqa: F401  re-export
+from alto_core.alto.parser import (
     build_document_manifest,
     parse_alto_file,
 )
+
+__all__ = ["build_document_manifest", "parse_alto_file"]
