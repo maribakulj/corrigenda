@@ -45,7 +45,12 @@ fi
 VERSION=$(python -c "
 import sys, pathlib, re
 init = pathlib.Path('src/alto_core/__init__.py').read_text()
-m = re.search(r'__version__\s*=\s*[\"\\']([^\"\\']+)[\"\\']', init)
+# Optional ``(?::\s*[^=]+)?`` clause matches both the current
+#   __version__ = \"X.Y.Z\"
+# and a future type-annotated form
+#   __version__: Final[str] = \"X.Y.Z\"
+# so adding a type hint cannot silently make the release script abort.
+m = re.search(r'__version__\s*(?::\s*[^=]+)?=\s*[\"\\']([^\"\\']+)[\"\\']', init)
 if not m:
     sys.exit('__version__ not found in src/alto_core/__init__.py')
 print(m.group(1))

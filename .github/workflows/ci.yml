@@ -35,11 +35,15 @@ jobs:
         # (scripts/release-alto-core.sh:55-59); now CI blocks the
         # commit. The check accepts both `## [X.Y.Z]` and
         # `## [X.Y.Z] — date` heading shapes already used in the file.
+        # The regex's optional `(?::\s*[^=]+)?` clause tolerates a future
+        # type annotation (e.g. `__version__: Final[str] = "..."`); without
+        # it, adding a type hint would silently strand CI on the prior
+        # branch where it could not find a match.
         run: |
           VERSION=$(python -c "
           import re, pathlib
           init = pathlib.Path('src/alto_core/__init__.py').read_text()
-          m = re.search(r\"__version__\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]\", init)
+          m = re.search(r\"__version__\\s*(?::\\s*[^=]+)?=\\s*['\\\"]([^'\\\"]+)['\\\"]\", init)
           if not m:
               raise SystemExit('__version__ not found in src/alto_core/__init__.py')
           print(m.group(1))

@@ -61,7 +61,12 @@ jobs:
           VERSION=$(python -c "
           import re, pathlib
           init = pathlib.Path('src/alto_core/__init__.py').read_text()
-          m = re.search(r\"__version__\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]\", init)
+          # Optional `(?::\s*[^=]+)?` clause matches both
+          #   __version__ = \"X.Y.Z\"
+          # and a future type-annotated form
+          #   __version__: Final[str] = \"X.Y.Z\"
+          # which would otherwise return None and abort the publish.
+          m = re.search(r\"__version__\\s*(?::\\s*[^=]+)?=\\s*['\\\"]([^'\\\"]+)['\\\"]\", init)
           if not m:
               raise SystemExit('__version__ not found in src/alto_core/__init__.py')
           print(m.group(1))
