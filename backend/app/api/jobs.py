@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import io
 import json
+import os
+import tempfile
 import zipfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from sse_starlette.sse import EventSourceResponse
+from starlette.background import BackgroundTask
 
 from app.alto.parser import build_document_manifest
 from app.api.deps import get_job_store
@@ -269,25 +271,42 @@ async def download_job(
         )
 
     if len(out_files) == 1:
+        # FileResponse streams the file in 64 KB chunks instead of
+        # holding the full body in memory (the old `xml_path.read_bytes()`
+        # buffered up to 500 MB per request × N concurrent downloads).
         xml_path = out_files[0]
-        return Response(
-            content=xml_path.read_bytes(),
+        return FileResponse(
+            xml_path,
             media_type="application/xml",
-            headers={"Content-Disposition": f'attachment; filename="{xml_path.name}"'},
+            filename=xml_path.name,
         )
 
-    # Multiple files → ZIP in memory
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for p in out_files:
-            zf.write(p, arcname=p.name)
-    buf.seek(0)
-
+    # L10/F8 — multi-file: build the ZIP on disk in a NamedTemporaryFile,
+    # then FileResponse streams it back. Previously we materialised the
+    # whole archive in `io.BytesIO()` and shipped `.getvalue()` as a
+    # bytes blob; on a 500 MB job × a handful of concurrent downloads
+    # that's multi-GB resident memory. The tempfile is cleaned up via
+    # a BackgroundTask that fires AFTER the response is fully sent.
     zip_name = f"job_{job_id}_corrected.zip"
-    return Response(
-        content=buf.getvalue(),
+    with tempfile.NamedTemporaryFile(suffix=".zip", prefix="alto_dl_", delete=False) as tmp:
+        tmp_path = tmp.name
+    # The `with` block closed the file handle but `delete=False` means
+    # the file persists on disk for `FileResponse` to read.
+    try:
+        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for p in out_files:
+                zf.write(p, arcname=p.name)
+    except Exception:
+        # If we crash building the ZIP, the BackgroundTask hasn't been
+        # attached yet — clean up by hand so we don't leak the tempfile.
+        os.unlink(tmp_path)
+        raise
+
+    return FileResponse(
+        tmp_path,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
+        filename=zip_name,
+        background=BackgroundTask(os.unlink, tmp_path),
     )
 
 

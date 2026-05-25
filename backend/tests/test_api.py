@@ -278,6 +278,80 @@ def test_create_job_rejects_file_exceeding_upload_cap(
     )
 
 
+def test_download_multi_file_returns_valid_zip(client: TestClient):
+    """L10/F8 regression net — the multi-file ZIP download path had no
+    behavioural test pre-L10. This commit refactors it from
+    `Response(content=BytesIO.getvalue())` (full materialisation in
+    memory) to a streamed `FileResponse` (bounded memory). The
+    refactor is invisible to the client — what changes is HOW the
+    bytes flow, not WHAT bytes flow. This test pins the WHAT so the
+    refactor cannot silently corrupt the archive."""
+    import io
+    import zipfile
+
+    from app.storage import init_job_dirs, output_dir
+
+    store = client.app.state.job_store
+    job_id = store.create_job(Provider.OPENAI, "mock")
+    init_job_dirs(job_id)
+
+    out_dir = output_dir(job_id)
+    payload_a = b"<alto><A/></alto>"
+    payload_b = b"<alto><B/></alto>"
+    (out_dir / "a.corrected.xml").write_bytes(payload_a)
+    (out_dir / "b.corrected.xml").write_bytes(payload_b)
+
+    resp = client.get(f"/api/jobs/{job_id}/download")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/zip")
+    assert f"job_{job_id}_corrected.zip" in resp.headers.get("content-disposition", "")
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        names = sorted(zf.namelist())
+        assert names == ["a.corrected.xml", "b.corrected.xml"]
+        assert zf.read("a.corrected.xml") == payload_a
+        assert zf.read("b.corrected.xml") == payload_b
+
+
+def test_download_job_does_not_materialise_full_zip_in_memory():
+    """L10/F8 source-AST contract — `download_job` must NOT use the
+    pre-fix pattern `Response(content=buf.getvalue())` for the
+    multi-file ZIP path. That pattern materialises the entire archive
+    in memory before sending, OOM-risk on large jobs × concurrent
+    downloads. Use `FileResponse` (streams from disk) or
+    `StreamingResponse` (streams from a generator) instead.
+
+    The check trips on any `Response(content=...)` whose `content`
+    argument's source unparse contains `getvalue` or `BytesIO`.
+    """
+    import ast
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "app" / "api" / "jobs.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"), filename=str(src))
+
+    offenders: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef) or node.name != "download_job":
+            continue
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Call):
+                continue
+            if isinstance(inner.func, ast.Name) and inner.func.id == "Response":
+                for kw in inner.keywords:
+                    if kw.arg == "content":
+                        rendered = ast.unparse(kw.value)
+                        if "getvalue" in rendered or "BytesIO" in rendered:
+                            offenders.append((inner.lineno, rendered[:80]))
+        break
+
+    assert not offenders, (
+        f"download_job still materialises ZIP in memory: {offenders}. "
+        f"Use FileResponse(tmp_path, ...) or StreamingResponse(generator, ...) "
+        f"to stream the archive without holding it all in memory."
+    )
+
+
 def test_create_job_accepts_file_at_upload_cap_boundary(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ):
