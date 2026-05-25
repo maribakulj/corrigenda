@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import unicodedata
 from pathlib import Path
 
 from lxml import etree
 
 from app.alto._ns import _detect_namespace, _tag
+from app.alto._text import reconstruct_textline
 from app.schemas import (
     BlockManifest,
     Coords,
@@ -21,29 +21,7 @@ from app.schemas import (
 
 
 def _build_ocr_text(textline: etree._Element, ns: str) -> str:
-    parts: list[str] = []
-    for child in textline:
-        local = etree.QName(child.tag).localname
-        if local == "String":
-            parts.append(child.get("CONTENT", ""))
-        elif local == "SP":
-            parts.append(" ")
-        elif local == "HYP":
-            # Normalize: HYP contributes a single "-" to the logical text.
-            # Avoid double-dash when preceding String CONTENT already ends
-            # with a hyphen, and normalize soft-hyphen (\xad) to "-".
-            hyp_char = child.get("CONTENT", "-")
-            if hyp_char == "\u00ad":
-                hyp_char = "-"
-            # Skip if the accumulated text already ends with a dash
-            current = "".join(parts)
-            if current.endswith("-"):
-                continue
-            parts.append(hyp_char)
-    text = "".join(parts)
-    text = text.replace("\r", "")
-    text = unicodedata.normalize("NFC", text)
-    return text.strip()
+    return reconstruct_textline(textline, ns).replace("\r", "").strip()
 
 
 # ---------------------------------------------------------------------------
