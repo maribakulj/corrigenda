@@ -229,6 +229,70 @@ async def test_stream_events_exits_on_terminal_event():
     assert [e.event for e in events] == ["info", "completed"]
 
 
+@pytest.mark.asyncio
+async def test_stream_events_does_not_lose_terminal_during_subscribe_race(monkeypatch):
+    """Roadmap L9 (R3) — there was a race between the initial fast-path
+    status check and the `subscribe()` call:
+
+      1. stream_events reads `job.status` → QUEUED, fast-path skipped.
+      2. Another path (a worker thread, an awaited LLM callback, the
+         pipeline coroutine) sets `status = COMPLETED` and calls
+         `emit("completed", ...)`. Because we haven't subscribed yet,
+         emit finds zero subscribers and silently drops the event.
+      3. stream_events finally calls `subscribe()` → too late.
+      4. `queue.get()` awaits forever; the SSE client never sees a
+         terminal event.
+
+    The fix subscribes FIRST, then re-checks status. With the new
+    ordering, the post-subscribe check finds the terminal status and
+    yields a synthetic terminal event, closing the stream cleanly.
+
+    To force the race deterministically we monkey-patch `subscribe` so
+    the racing `update_job + emit` happens INSIDE the subscribe call
+    (after our caller has decided to subscribe, before the queue is
+    attached). The OLD logic times out — the terminal event was emitted
+    while we had no queue. The FIX yields a synthetic completed event
+    and returns immediately.
+    """
+    store = JobStore()
+    jid = store.create_job(Provider.OPENAI, "test")
+
+    original_subscribe = store.subscribe
+
+    def _racy_subscribe(job_id: str):
+        # Simulate the race: status flips to COMPLETED and the terminal
+        # event is emitted RIGHT BEFORE our queue gets attached. The
+        # emit finds 0 subscribers and drops the event on the floor.
+        store.update_job(job_id, status=JobStatus.COMPLETED)
+        store.emit(job_id, "completed", {"job_id": job_id})
+        return original_subscribe(job_id)
+
+    monkeypatch.setattr(store, "subscribe", _racy_subscribe)
+
+    events: list = []
+    # 2-second budget is generous: the fix yields a synthetic event
+    # synchronously after subscribe; the bug hangs on `queue.get()` for
+    # the full keepalive period (30 s).
+    try:
+        async with asyncio.timeout(2.0):
+            async for ev in store.stream_events(jid):
+                events.append(ev)
+                if ev.event in ("completed", "failed"):
+                    break
+    except TimeoutError:
+        pass
+
+    assert events, (
+        "stream_events yielded nothing — the terminal event was lost in "
+        "the race between the initial status check and subscribe(). The "
+        "post-subscribe re-check must synthesise a terminal event when "
+        "the status is already terminal."
+    )
+    assert events[-1].event == "completed", (
+        f"expected terminal completed event, got {[e.event for e in events]}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Locking contract
 # ---------------------------------------------------------------------------

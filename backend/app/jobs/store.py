@@ -120,19 +120,42 @@ class JobStore:
         """
         Yield SSEEvents for job_id.
 
-        If the job is already in a terminal state (completed/failed) when
-        this generator starts, yield a synthetic terminal event immediately.
-        Otherwise sends a keepalive ping every 30 s and exits on
-        'completed' or 'failed' event.
-        """
-        # Fast-path: job already in terminal state
-        job = self._jobs.get(job_id)
-        if job is not None and job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
-            yield SSEEvent(event=job.status.value, data={"job_id": job_id})
-            return
+        Subscribe first, THEN check status. The reverse order races: a
+        terminal event emitted between the status check and `subscribe()`
+        is dropped by `emit()` (no subscribers yet) and the consumer
+        would hang on `queue.get()`. By subscribing first we own a queue
+        before the terminal event can be missed; the post-subscribe
+        status check then handles the "already terminal" case by
+        draining whatever's in the queue and falling back to a synthetic
+        terminal event when nothing arrived.
 
+        Keepalive ping is sent every 30 s in the normal path; the
+        generator exits on a 'completed' or 'failed' event.
+        """
         queue = self.subscribe(job_id)
         try:
+            # Re-check status AFTER subscribing. Three cases:
+            #   - Terminal event landed BEFORE we subscribed → status is
+            #     terminal, queue is empty → yield a synthetic terminal.
+            #   - Terminal event landed BETWEEN subscribe and this check
+            #     → status is terminal, the real terminal is in our
+            #     queue → drain and yield it.
+            #   - Job is still running → drop to the normal poll loop.
+            job = self._jobs.get(job_id)
+            if job is not None and job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+                # Drain anything already buffered (events that arrived
+                # between subscribe and this re-check) before falling
+                # back to a synthetic terminal event. `get_nowait` is
+                # safe here because we're single-threaded asyncio: no
+                # producer can append while this sync loop runs.
+                while not queue.empty():
+                    buffered = queue.get_nowait()
+                    yield buffered
+                    if buffered.event in ("completed", "failed"):
+                        return
+                yield SSEEvent(event=job.status.value, data={"job_id": job_id})
+                return
+
             while True:
                 try:
                     event: SSEEvent = await asyncio.wait_for(queue.get(), timeout=30.0)
