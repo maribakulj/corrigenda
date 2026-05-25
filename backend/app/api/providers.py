@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from alto_core import sanitize_error
 from fastapi import APIRouter, HTTPException, Request
 
 from app.api.rate_limit import limiter
@@ -26,9 +27,17 @@ async def list_models(request: Request, body: ListModelsRequest) -> ListModelsRe
     try:
         models = await provider.list_models(body.api_key)
     except Exception as exc:
+        # L10/F1 — every provider can leak the api_key into its exception
+        # message (httpx.HTTPStatusError repr embeds the request URL,
+        # vendor SDKs sometimes echo the Authorization header, etc.).
+        # `sanitize_error` redacts the literal key passed as a hint AND
+        # known secret-shaped substrings (Bearer …, sk-…, api_key=…,
+        # x-api-key: …) so even a future provider that leaks via an
+        # unanticipated path cannot reach the HTTP response in clear.
+        safe = sanitize_error(str(exc), api_key=body.api_key)
         raise HTTPException(
             status_code=400,
-            detail=f"Provider error ({body.provider}): {exc}",
+            detail=f"Provider error ({body.provider}): {safe}",
         ) from exc
 
     return ListModelsResponse(provider=body.provider, models=models)

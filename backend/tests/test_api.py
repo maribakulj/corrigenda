@@ -57,6 +57,23 @@ class BadKeyProvider:
         raise ValueError("Invalid API key")
 
 
+class _KeyLeakingProvider:
+    """Raises an exception whose message embeds the api_key — simulates
+    `httpx.HTTPStatusError` repr leaking a URL like
+    `...?key=AIzaSy...`. Used to verify the API handler sanitises
+    provider error messages before echoing them in the HTTP response
+    (L10/F1)."""
+
+    async def list_models(self, api_key: str) -> list[ModelInfo]:
+        raise ValueError(
+            f"upstream 400 at https://api.example/v1/models?key={api_key}: "
+            f"unauthorized; auth header was Bearer {api_key}"
+        )
+
+    async def complete_structured(self, *args, **kwargs) -> dict[str, Any]:
+        raise ValueError("not used in these tests")
+
+
 # ---------------------------------------------------------------------------
 # App fixture with patched provider registry
 # ---------------------------------------------------------------------------
@@ -141,6 +158,62 @@ def test_list_models_bad_api_key(bad_key_client: TestClient):
     )
     assert resp.status_code == 400
     assert "Provider error" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# L10/F1 — provider error messages must be sanitised before being echoed
+# in the HTTP response. A provider that lands the api_key in its
+# exception string (URL params, Authorization header repr, etc.) must
+# NOT cause the key to surface in the response body.
+# ---------------------------------------------------------------------------
+
+
+def test_list_models_response_does_not_echo_api_key_on_provider_error():
+    """L10/F1 — pre-fix `/api/providers/models` returned
+    `detail=f"Provider error ({provider}): {exc}"`. If a provider
+    raised an exception whose string repr embedded the api_key (as
+    httpx.HTTPStatusError does for keys passed via URL params), the
+    key landed in the HTTP response and the operator logs.
+
+    This test injects a deliberately leaky provider whose exception
+    message contains the api_key in multiple shapes (URL `?key=...`
+    and `Bearer ...` header). The handler must sanitise via
+    `alto_core.sanitize_error` before echoing — the key must not
+    appear anywhere in the response.
+    """
+    from app import providers as prov_module
+    from app.main import create_app
+
+    leaker = _KeyLeakingProvider()
+    orig_registry = prov_module._REGISTRY.copy()
+    for k in list(prov_module._REGISTRY.keys()):
+        prov_module._REGISTRY[k] = leaker
+
+    try:
+        app = create_app()
+        app.state.limiter.reset()
+        with TestClient(app, raise_server_exceptions=False) as c:
+            secret = "AIzaSyD-LEAKY-PROVIDER-SECRET-VALUE-1234"
+            resp = c.post(
+                "/api/providers/models",
+                json={"provider": "google", "api_key": secret},
+            )
+
+        assert resp.status_code == 400
+        body_text = resp.text
+        assert secret not in body_text, (
+            f"api_key leaked in /api/providers/models response: {body_text!r}. "
+            f"Handler must call alto_core.sanitize_error(str(exc), api_key=body.api_key)."
+        )
+        # The redacted prefix (first 4 chars + "****") IS expected to
+        # appear, confirming sanitize_error actually ran rather than
+        # the exception being suppressed.
+        assert "****" in body_text or "Bearer" not in body_text, (
+            f"sanitize_error doesn't appear to have run; response: {body_text!r}"
+        )
+    finally:
+        prov_module._REGISTRY.update(orig_registry)
+        app.state.limiter.reset()
 
 
 # ---------------------------------------------------------------------------
