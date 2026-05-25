@@ -605,6 +605,161 @@ async def test_google_complete_structured_does_not_leak_api_key_in_url():
         )
 
 
+# ---------------------------------------------------------------------------
+# L10/R5 — Anthropic max_tokens must scale with chunk size, not be hardcoded
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_anthropic_max_tokens_scales_with_chunk_size():
+    """L10/R5 — pre-fix `max_tokens=8192` was hardcoded. Claude
+    Sonnet/Opus 4.x support up to 64k output tokens; chunks of
+    50+ lines reliably overflow 8192 once correction text + JSON
+    overhead is counted, leading to silent truncation → invalid
+    JSON → mis-classified as retryable LLM-output error → retry of
+    the same truncation → fallback to OCR.
+
+    Verifies the request body's `max_tokens` grows past 8192 for a
+    large chunk.
+    """
+    capture = _PostCapture(
+        {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tu_1",
+                    "name": "ocr_correction",
+                    "input": {
+                        "lines": [{"line_id": f"L{i}", "corrected_text": "x"} for i in range(60)]
+                    },
+                }
+            ]
+        }
+    )
+
+    # 60-line chunk — past 8192-token sensible budget.
+    big_payload = {"lines": [{"line_id": f"L{i}", "ocr_text": "x" * 60} for i in range(60)]}
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = AnthropicProvider()
+        await provider.complete_structured(
+            api_key="fake",
+            model="claude-sonnet-4",
+            system_prompt="SYS",
+            user_payload=big_payload,
+            json_schema=OUTPUT_JSON_SCHEMA,
+        )
+
+    assert capture.last_body is not None
+    max_tokens = capture.last_body["max_tokens"]
+    assert max_tokens > 8192, (
+        f"max_tokens did not scale with chunk size: got {max_tokens}, "
+        f"expected > 8192 for a 60-line chunk. Hardcoded budget will "
+        f"silently truncate the JSON tool-use block."
+    )
+    assert max_tokens <= 64_000, (
+        f"max_tokens exceeded Claude 4.x family ceiling: got {max_tokens}, max 64000"
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_max_tokens_floors_at_8192_for_small_chunks():
+    """Symmetric — small chunks must not get a tiny max_tokens budget
+    (would silently truncate the JSON response). 8192 is the floor."""
+    capture = _PostCapture(
+        {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tu_1",
+                    "name": "ocr_correction",
+                    "input": {"lines": []},
+                }
+            ]
+        }
+    )
+    tiny_payload = {"lines": [{"line_id": "L1", "ocr_text": "x"}]}
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = AnthropicProvider()
+        await provider.complete_structured(
+            api_key="fake",
+            model="claude-sonnet-4",
+            system_prompt="SYS",
+            user_payload=tiny_payload,
+            json_schema=OUTPUT_JSON_SCHEMA,
+        )
+
+    assert capture.last_body["max_tokens"] >= 8192
+
+
+# ---------------------------------------------------------------------------
+# L10/F9 — Anthropic fallback must tolerate prose-wrapped JSON
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_anthropic_fallback_parses_prose_prefixed_json():
+    """L10/F9 — pre-fix `_extract_anthropic_payload` did
+    `json.loads(text)` directly on text blocks. If the model emitted
+    `Here's the JSON:\\n{...}`, the parse crashed; the entire chunk
+    fell back to OCR even though the JSON was right there. Fix
+    extracts the outermost JSON object before parsing.
+    """
+    prose_wrapped = (
+        "Here's the JSON you requested:\n\n"
+        '{"lines": [{"line_id": "L1", "corrected_text": "fixed"}]}\n\n'
+        "Hope that helps!"
+    )
+    capture = _PostCapture(
+        {
+            # No tool_use block; only a text block with prose around JSON.
+            "content": [{"type": "text", "text": prose_wrapped}]
+        }
+    )
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = AnthropicProvider()
+        result = await provider.complete_structured(
+            api_key="fake",
+            model="claude-sonnet-4",
+            system_prompt="SYS",
+            user_payload={"lines": [{"line_id": "L1", "ocr_text": "fxd"}]},
+            json_schema=OUTPUT_JSON_SCHEMA,
+        )
+
+    assert result == {"lines": [{"line_id": "L1", "corrected_text": "fixed"}]}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_fallback_parses_code_fenced_json():
+    """L10/F9 variant — Anthropic models sometimes wrap JSON in
+    ```json ... ``` fences. The outermost-object extractor must
+    handle this too."""
+    fenced = '```json\n{"lines": [{"line_id": "L1", "corrected_text": "ok"}]}\n```'
+    capture = _PostCapture({"content": [{"type": "text", "text": fenced}]})
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = AnthropicProvider()
+        result = await provider.complete_structured(
+            api_key="fake",
+            model="claude-sonnet-4",
+            system_prompt="SYS",
+            user_payload={"lines": [{"line_id": "L1", "ocr_text": "k"}]},
+            json_schema=OUTPUT_JSON_SCHEMA,
+        )
+
+    assert result == {"lines": [{"line_id": "L1", "corrected_text": "ok"}]}
+
+
 def test_google_provider_source_does_not_pass_api_key_via_params():
     """Source-AST contract — no call site in `google_provider.py` may
     pass ``params={"key": ...}`` (or any dict literal whose first key
