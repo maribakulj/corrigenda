@@ -201,5 +201,7 @@ jobs:
         run: npm run format:check
       - name: Type check
         run: npx tsc --noEmit
+      - name: Tests (Vitest)
+        run: npm run test
       - name: Build
         run: npm run build
