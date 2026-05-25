@@ -19,7 +19,8 @@ from __future__ import annotations
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-# Global limiter. `key_func=get_remote_address` keys on the client IP
-# (X-Forwarded-For respected when uvicorn runs behind a reverse proxy
-# with `--proxy-headers`, which HF Spaces sets).
+# Global limiter. `key_func=get_remote_address` keys on the client IP.
+# X-Forwarded-For is honoured via ProxyHeadersMiddleware (installed in
+# create_app(), gated by the TRUSTED_PROXIES env var) which rewrites
+# request.client.host before slowapi sees the request.
 limiter = Limiter(key_func=get_remote_address)

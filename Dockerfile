@@ -55,15 +55,17 @@ EXPOSE 7860
 # requests return 503 quickly. `--timeout-keep-alive` matches the SSE
 # keepalive interval used by stream_events.
 #
-# `--proxy-headers --forwarded-allow-ips=*` is defense-in-depth: uvicorn
-# also installs its own ProxyHeadersMiddleware on top of the one
-# create_app() configures. Both layers are idempotent — they both
-# rewrite request.client.host from X-Forwarded-For exactly once.
+# Proxy-header handling lives in the Python middleware stack
+# (backend/app/main.py installs ProxyHeadersMiddleware with the
+# configurable TRUSTED_PROXIES env var). Previously we ALSO passed
+# `--proxy-headers --forwarded-allow-ips=*` to uvicorn so the same
+# rewrite happened twice; the second pass was a no-op but it
+# silently widened trust to "any upstream", overriding whatever
+# TRUSTED_PROXIES might be set to. Single layer is enough and keeps
+# TRUSTED_PROXIES as the sole authority on which proxies to trust.
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "7860", \
      "--workers", "1", \
      "--limit-concurrency", "100", \
-     "--timeout-keep-alive", "60", \
-     "--proxy-headers", \
-     "--forwarded-allow-ips=*"]
+     "--timeout-keep-alive", "60"]

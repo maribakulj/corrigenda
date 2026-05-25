@@ -26,12 +26,11 @@ EXPOSE 8000
 # Single worker — JobStore is in-process state (see root Dockerfile).
 # Concurrency cap protects against slow LLM calls accumulating
 # connections; surplus requests return 503 quickly.
-# `--proxy-headers --forwarded-allow-ips=*`: see root Dockerfile.
+# Proxy-header handling: Python middleware only (see root Dockerfile
+# comment for rationale).
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
      "--workers", "1", \
      "--limit-concurrency", "100", \
-     "--timeout-keep-alive", "60", \
-     "--proxy-headers", \
-     "--forwarded-allow-ips=*"]
+     "--timeout-keep-alive", "60"]
