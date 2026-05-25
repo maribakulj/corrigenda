@@ -21,7 +21,9 @@ export function DownloadButton({ jobId, stats }: DownloadButtonProps) {
             <div className="text-slate-500 uppercase tracking-wider text-xs">Hyphen pairs</div>
           </div>
           <div className="text-center">
-            <div className="text-green-400 text-xl font-bold">{stats.duration_seconds.toFixed(1)}s</div>
+            <div className="text-green-400 text-xl font-bold">
+              {stats.duration_seconds.toFixed(1)}s
+            </div>
             <div className="text-slate-500 uppercase tracking-wider text-xs">Duration</div>
           </div>
         </div>
@@ -34,9 +36,19 @@ export function DownloadButton({ jobId, stats }: DownloadButtonProps) {
                    bg-amber-500 hover:bg-amber-400 text-slate-900 font-mono font-bold
                    text-sm rounded transition-colors uppercase tracking-wider"
       >
-        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
-            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          className="w-4 h-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2.5}
+            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+          />
         </svg>
         Download corrected ALTO
       </button>

@@ -46,3 +46,15 @@ repos:
           - lxml>=6.1
           - httpx>=0.27
           - fastapi>=0.115
+
+  # Frontend formatter — runs on the .ts/.tsx/.json/.css/.md tracked
+  # by the frontend's .prettierrc. ESLint is run only in CI (its
+  # plugin set is heavy and the local feedback loop via the IDE is
+  # already there for most contributors).
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v3.1.0
+    hooks:
+      - id: prettier
+        files: ^frontend/src/.*\.(ts|tsx|json|css|md)$
+        additional_dependencies:
+          - prettier@3.8.3

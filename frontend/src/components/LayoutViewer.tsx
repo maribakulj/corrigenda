@@ -6,12 +6,12 @@ import type { LayoutData, LayoutPage } from '../types'
 // ---------------------------------------------------------------------------
 
 const C = {
-  pageBg:       '#ffffff',
-  blockBorder:  '#475569',   // slate-600
-  textUnchanged:'#94a3b8',   // slate-400
-  textChanged:  '#d97706',   // amber-600 (readable on white)
-  rectChanged:  'rgba(253,230,138,0.25)',
-  hyphenBar:    '#f59e0b',   // amber-500
+  pageBg: '#ffffff',
+  blockBorder: '#475569', // slate-600
+  textUnchanged: '#94a3b8', // slate-400
+  textChanged: '#d97706', // amber-600 (readable on white)
+  rectChanged: 'rgba(253,230,138,0.25)',
+  hyphenBar: '#f59e0b', // amber-500
 } as const
 
 // ---------------------------------------------------------------------------
@@ -31,7 +31,7 @@ interface SVGOverlayProps {
 
 function SVGOverlay({ page, side, opacity, withBackground }: SVGOverlayProps) {
   const { blocks } = page
-  const W = page.page_width  || blocks.reduce((m, b) => Math.max(m, b.hpos + b.width),  0)
+  const W = page.page_width || blocks.reduce((m, b) => Math.max(m, b.hpos + b.width), 0)
   const H = page.page_height || blocks.reduce((m, b) => Math.max(m, b.vpos + b.height), 0)
 
   if (!W || !H) {
@@ -72,20 +72,24 @@ function SVGOverlay({ page, side, opacity, withBackground }: SVGOverlayProps) {
               if (withBackground) {
                 // SVG-only mode: coloured text on white page
                 const fontSize = Math.max(line.height * 0.7, 1)
-                const textY    = line.vpos + line.height * 0.75
+                const textY = line.vpos + line.height * 0.75
                 return (
                   <g key={line.line_id}>
                     {line.modified && (
                       <rect
-                        x={line.hpos} y={line.vpos}
-                        width={line.width} height={line.height}
+                        x={line.hpos}
+                        y={line.vpos}
+                        width={line.width}
+                        height={line.height}
                         fill={C.rectChanged}
                       />
                     )}
                     {hasHyphen && (
                       <rect
-                        x={line.hpos} y={line.vpos}
-                        width={8} height={line.height}
+                        x={line.hpos}
+                        y={line.vpos}
+                        width={8}
+                        height={line.height}
                         fill={C.hyphenBar}
                       />
                     )}
@@ -105,20 +109,24 @@ function SVGOverlay({ page, side, opacity, withBackground }: SVGOverlayProps) {
               } else {
                 // Image overlay mode: semi-opaque bg behind text for readability
                 const fontSize = Math.max(line.height * 0.72, 1)
-                const textY    = line.vpos + line.height * 0.78
+                const textY = line.vpos + line.height * 0.78
                 return (
                   <g key={line.line_id}>
                     <rect
-                      x={line.hpos} y={line.vpos}
-                      width={line.width} height={line.height}
+                      x={line.hpos}
+                      y={line.vpos}
+                      width={line.width}
+                      height={line.height}
                       fill={line.modified ? 'rgba(251,191,36,0.70)' : 'rgba(255,255,255,0.78)'}
                       stroke={line.modified ? 'rgba(217,119,6,0.90)' : 'rgba(148,163,184,0.40)'}
                       strokeWidth={2}
                     />
                     {hasHyphen && (
                       <rect
-                        x={line.hpos} y={line.vpos}
-                        width={8} height={line.height}
+                        x={line.hpos}
+                        y={line.vpos}
+                        width={8}
+                        height={line.height}
                         fill={C.hyphenBar}
                         opacity={0.9}
                       />
@@ -157,7 +165,7 @@ interface PagePanelProps {
 
 function PagePanel({ page, side, overlayOpacity }: PagePanelProps) {
   const { blocks } = page
-  const W = page.page_width  || blocks.reduce((m, b) => Math.max(m, b.hpos + b.width),  0)
+  const W = page.page_width || blocks.reduce((m, b) => Math.max(m, b.hpos + b.width), 0)
   const H = page.page_height || blocks.reduce((m, b) => Math.max(m, b.vpos + b.height), 0)
 
   if (page.image_url) {
@@ -172,31 +180,22 @@ function PagePanel({ page, side, overlayOpacity }: PagePanelProps) {
             src={page.image_url}
             alt="source scan"
             style={{
-              position: 'absolute', top: 0, left: 0,
-              width: '100%', height: '100%',
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
               objectFit: 'fill',
             }}
           />
         )}
-        <SVGOverlay
-          page={page}
-          side={side}
-          opacity={overlayOpacity}
-          withBackground={!W || !H}
-        />
+        <SVGOverlay page={page} side={side} opacity={overlayOpacity} withBackground={!W || !H} />
       </div>
     )
   }
 
   // No image: SVG on white background — opacity still controlled by slider
-  return (
-    <SVGOverlay
-      page={page}
-      side={side}
-      opacity={overlayOpacity}
-      withBackground={true}
-    />
-  )
+  return <SVGOverlay page={page} side={side} opacity={overlayOpacity} withBackground={true} />
 }
 
 // ---------------------------------------------------------------------------
@@ -208,11 +207,11 @@ interface LayoutViewerProps {
 }
 
 export function LayoutViewer({ data }: LayoutViewerProps) {
-  const [pageIdx,         setPageIdx]         = useState(0)
-  const [overlayOpacity,  setOverlayOpacity]  = useState(0.85)
-  const leftRef  = useRef<HTMLDivElement>(null)
+  const [pageIdx, setPageIdx] = useState(0)
+  const [overlayOpacity, setOverlayOpacity] = useState(0.85)
+  const leftRef = useRef<HTMLDivElement>(null)
   const rightRef = useRef<HTMLDivElement>(null)
-  const syncing  = useRef(false)
+  const syncing = useRef(false)
 
   // All hooks (useCallback) must come BEFORE any conditional return,
   // otherwise the hook count varies between renders. See PR 2 / B-002.
@@ -240,11 +239,10 @@ export function LayoutViewer({ data }: LayoutViewerProps) {
   }
 
   const currentPage = data.pages[pageIdx] ?? data.pages[0]
-  const hasImage    = !!currentPage.image_url
+  const hasImage = !!currentPage.image_url
 
   return (
     <div className="rounded-lg border border-slate-700/60 bg-slate-800/40 overflow-hidden">
-
       {/* Header */}
       <div className="px-4 py-3 border-b border-slate-700/60 flex items-center justify-between gap-4 flex-wrap">
         <h3 className="font-serif text-sm font-semibold text-slate-200">
@@ -290,8 +288,10 @@ export function LayoutViewer({ data }: LayoutViewerProps) {
 
       {/* Column labels */}
       <div className="grid grid-cols-2 border-b border-slate-700/40 bg-slate-800/60">
-        <div className="px-3 py-1.5 font-mono text-[10px] text-slate-500 uppercase tracking-wider
-                        border-r border-slate-700/40">
+        <div
+          className="px-3 py-1.5 font-mono text-[10px] text-slate-500 uppercase tracking-wider
+                        border-r border-slate-700/40"
+        >
           OCR source{hasImage ? ' (scan)' : ''}
         </div>
         <div className="px-3 py-1.5 font-mono text-[10px] text-slate-500 uppercase tracking-wider">

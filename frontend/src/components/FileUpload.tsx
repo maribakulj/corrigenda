@@ -54,7 +54,10 @@ export function FileUpload({ onFilesChange, disabled }: FileUploadProps) {
     [files, disabled],
   )
 
-  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setDragging(true) }
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragging(true)
+  }
   const onDragLeave = () => setDragging(false)
 
   return (
@@ -67,10 +70,11 @@ export function FileUpload({ onFilesChange, disabled }: FileUploadProps) {
         onDragLeave={onDragLeave}
         className={[
           'border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors',
-          disabled ? 'opacity-40 cursor-not-allowed border-slate-600' :
-          dragging
-            ? 'border-amber-400 bg-amber-500/10'
-            : 'border-slate-600 hover:border-amber-500/60 hover:bg-slate-800/50',
+          disabled
+            ? 'opacity-40 cursor-not-allowed border-slate-600'
+            : dragging
+              ? 'border-amber-400 bg-amber-500/10'
+              : 'border-slate-600 hover:border-amber-500/60 hover:bg-slate-800/50',
         ].join(' ')}
       >
         <div className="text-3xl mb-2">📄</div>

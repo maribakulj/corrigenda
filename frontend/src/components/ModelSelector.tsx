@@ -40,7 +40,8 @@ export function ModelSelector({
           </option>
           {models.map((m) => (
             <option key={m.id} value={m.id}>
-              {m.label}{m.context_window ? ` (${formatContext(m.context_window)})` : ''}
+              {m.label}
+              {m.context_window ? ` (${formatContext(m.context_window)})` : ''}
             </option>
           ))}
         </select>

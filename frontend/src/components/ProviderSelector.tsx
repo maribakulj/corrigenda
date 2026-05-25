@@ -21,9 +21,13 @@ export function ProviderSelector({ value, onChange, disabled }: ProviderSelector
                    focus:outline-none focus:border-amber-500 disabled:opacity-40 disabled:cursor-not-allowed
                    appearance-none cursor-pointer"
       >
-        <option value="" disabled>Select a provider…</option>
+        <option value="" disabled>
+          Select a provider…
+        </option>
         {PROVIDERS.map((p) => (
-          <option key={p} value={p}>{PROVIDER_LABELS[p]}</option>
+          <option key={p} value={p}>
+            {PROVIDER_LABELS[p]}
+          </option>
         ))}
       </select>
     </div>

@@ -10,25 +10,17 @@ interface Token {
   changed: boolean
 }
 
-function tokenDiff(
-  ocr: string,
-  corrected: string,
-): { ocrTokens: Token[]; corrTokens: Token[] } {
+function tokenDiff(ocr: string, corrected: string): { ocrTokens: Token[]; corrTokens: Token[] } {
   const a = ocr.split(' ')
   const b = corrected.split(' ')
   const m = a.length
   const n = b.length
 
   // LCS table
-  const dp: number[][] = Array.from({ length: m + 1 }, () =>
-    new Array(n + 1).fill(0),
-  )
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
-      dp[i][j] =
-        a[i - 1] === b[j - 1]
-          ? dp[i - 1][j - 1] + 1
-          : Math.max(dp[i - 1][j], dp[i][j - 1])
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1])
     }
   }
 
@@ -63,18 +55,22 @@ function TokenSpan({ token }: { token: Token }) {
   if (!token.changed) {
     return <span>{token.text} </span>
   }
-  return (
-    <span className="bg-amber-200/20 text-amber-200 rounded px-0.5">
-      {token.text}{' '}
-    </span>
-  )
+  return <span className="bg-amber-200/20 text-amber-200 rounded px-0.5">{token.text} </span>
 }
 
 // ---------------------------------------------------------------------------
 // DiffRow — one TextLine
 // ---------------------------------------------------------------------------
 
-function DiffRow({ line, selected, onSelect }: { line: DiffLine; selected: boolean; onSelect?: () => void }) {
+function DiffRow({
+  line,
+  selected,
+  onSelect,
+}: {
+  line: DiffLine
+  selected: boolean
+  onSelect?: () => void
+}) {
   const isModified = line.modified
   const hasHyphen = line.hyphen_role !== 'none'
 
@@ -95,9 +91,7 @@ function DiffRow({ line, selected, onSelect }: { line: DiffLine; selected: boole
     return (
       <div className={rowBase} onClick={onSelect}>
         {/* line_id */}
-        <span className="font-mono text-[10px] text-slate-600 pt-0.5 truncate">
-          {line.line_id}
-        </span>
+        <span className="font-mono text-[10px] text-slate-600 pt-0.5 truncate">{line.line_id}</span>
         {/* OCR */}
         <span className="text-slate-500">{line.ocr_text}</span>
         {/* Corrected */}
@@ -112,9 +106,7 @@ function DiffRow({ line, selected, onSelect }: { line: DiffLine; selected: boole
     <div className={rowBase} onClick={onSelect}>
       {/* line_id + hyphen badge */}
       <div className="flex flex-col gap-1 pt-0.5">
-        <span className="font-mono text-[10px] text-slate-600 truncate">
-          {line.line_id}
-        </span>
+        <span className="font-mono text-[10px] text-slate-600 truncate">{line.line_id}</span>
         {hasHyphen && (
           <span className="font-mono text-[9px] text-amber-600/80 border border-amber-700/40 rounded px-1 py-0.5 leading-none w-fit">
             césure
@@ -164,9 +156,7 @@ export function DiffViewer({ data, selectedLineId, onSelectLine }: DiffViewerPro
     <div className="rounded-lg border border-slate-700/60 bg-slate-800/40 overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3 border-b border-slate-700/60 flex items-center justify-between gap-4 flex-wrap">
-        <h3 className="font-serif text-sm font-semibold text-slate-200">
-          Résultats de correction
-        </h3>
+        <h3 className="font-serif text-sm font-semibold text-slate-200">Résultats de correction</h3>
         <div className="flex items-center gap-4">
           {/* Stats */}
           <span className="font-mono text-xs text-amber-400">
@@ -199,8 +189,12 @@ export function DiffViewer({ data, selectedLineId, onSelectLine }: DiffViewerPro
       {/* Column headers */}
       <div className="grid grid-cols-[5rem_1fr_1fr] gap-x-3 px-4 py-2 border-b border-slate-700/40 bg-slate-800/60">
         <span className="font-mono text-[10px] text-slate-600 uppercase tracking-wider">ID</span>
-        <span className="font-mono text-[10px] text-slate-500 uppercase tracking-wider">OCR source</span>
-        <span className="font-mono text-[10px] text-slate-500 uppercase tracking-wider">Corrigé</span>
+        <span className="font-mono text-[10px] text-slate-500 uppercase tracking-wider">
+          OCR source
+        </span>
+        <span className="font-mono text-[10px] text-slate-500 uppercase tracking-wider">
+          Corrigé
+        </span>
       </div>
 
       {/* Lines */}
