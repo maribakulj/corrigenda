@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import io
 import json
-import logging
 import zipfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -141,17 +139,11 @@ async def create_job(
 
     out_dir = output_dir(job_id)
 
-    # Launch correction in background with crash tracking
-    def _on_task_done(task: asyncio.Task) -> None:
-        exc = task.exception()
-        if exc is not None:
-            logging.getLogger(__name__).error(
-                "Background job %s crashed: %s",
-                job_id,
-                exc,
-            )
-
-    task = asyncio.create_task(
+    # Spawn correction through the per-app registry so the task is
+    # strongly referenced (prevents GC mid-run) AND so the lifespan
+    # handler can drain it on SIGTERM. Crash logging is centralised
+    # in BackgroundTaskRegistry._on_done.
+    request.app.state.tasks.spawn(
         run_job(
             job_id=job_id,
             document_manifest=doc_manifest,
@@ -162,9 +154,9 @@ async def create_job(
             source_files={name: path for name, path in saved.items()},
             provider=provider_instance,
             job_store_override=store,
-        )
+        ),
+        name=f"run_job:{job_id}",
     )
-    task.add_done_callback(_on_task_done)
 
     return CreateJobResponse(job_id=job_id)
 

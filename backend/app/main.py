@@ -18,6 +18,7 @@ from app.api.jobs import router as jobs_router
 from app.api.providers import router as providers_router
 from app.api.rate_limit import limiter
 from app.jobs.store import JobStore
+from app.jobs.task_registry import BackgroundTaskRegistry
 from app.observability.logging_config import setup_json_logging
 
 # Resolved once at import time — same process for the lifetime of the container
@@ -32,7 +33,17 @@ _INDEX_HTML = _STATIC_DIR / "index.html"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Startup/shutdown hooks.
+
+    On startup: nothing extra (state is set up in ``create_app``).
+    On shutdown: ask the background-task registry to drain in-flight
+    correction jobs so we don't leave half-written output files when
+    Docker/HF Spaces sends SIGTERM during a redeploy.
+    """
     yield
+    registry: BackgroundTaskRegistry | None = getattr(app.state, "tasks", None)
+    if registry is not None:
+        await registry.shutdown(timeout=30.0)
 
 
 def _rate_limit_handler(_request, exc: RateLimitExceeded) -> JSONResponse:
@@ -66,6 +77,10 @@ def create_app() -> FastAPI:
     # Endpoints reach this through `Depends(get_job_store)` rather than
     # importing a module-level singleton — see app/api/deps.py.
     app.state.job_store = JobStore()
+    # Strong-referenced registry for fire-and-forget background tasks
+    # (correction runs spawned from POST /api/jobs). Drained on
+    # shutdown by the lifespan handler above.
+    app.state.tasks = BackgroundTaskRegistry()
 
     # Rate limiter (per remote IP) — slowapi reads `app.state.limiter`
     # via SlowAPIMiddleware to enforce `@limiter.limit(...)` decorators
