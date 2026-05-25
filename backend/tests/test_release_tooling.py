@@ -91,3 +91,51 @@ def test_release_tooling_file_uses_annotation_tolerant_regex(path: Path):
         f"will no longer be parsed by this file's regex, silently aborting "
         f"the release pipeline."
     )
+
+
+# ---------------------------------------------------------------------------
+# L10/R4 + R6 — every GitHub Actions workflow must declare a
+# `permissions:` block (minimum required, not default repo-wide) AND a
+# `concurrency:` block (prevent concurrent runs from racing or wasting
+# OIDC slots / clobbering the HF mirror). Both are pinned at the
+# top-level of the workflow YAML.
+# ---------------------------------------------------------------------------
+
+
+_WORKFLOWS_DIR = _REPO_ROOT / ".github" / "workflows"
+
+
+def _workflow_files() -> list[Path]:
+    return sorted(_WORKFLOWS_DIR.glob("*.yml")) + sorted(_WORKFLOWS_DIR.glob("*.yaml"))
+
+
+@pytest.mark.parametrize("path", _workflow_files(), ids=lambda p: p.name)
+def test_workflow_declares_explicit_permissions_block(path: Path):
+    """L10/R4 — every workflow must declare top-level `permissions:`.
+    Without it, GitHub falls back to the repo-level default which can
+    be `contents: write` (or worse). Explicit is mandatory.
+    """
+    import yaml
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict) and data.get("permissions"), (
+        f"{path.name} is missing a top-level `permissions:` block. "
+        f"Add at minimum `permissions: {{ contents: read }}`."
+    )
+
+
+@pytest.mark.parametrize("path", _workflow_files(), ids=lambda p: p.name)
+def test_workflow_declares_concurrency_block(path: Path):
+    """L10/R6 — every workflow must declare top-level `concurrency:`
+    to prevent two simultaneous runs racing (CI rebuilds twice on a
+    rapid push, two operators publishing concurrently fight on PyPI,
+    two force-pushes to the HF mirror clobber each other).
+    """
+    import yaml
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict) and data.get("concurrency"), (
+        f"{path.name} is missing a top-level `concurrency:` block. "
+        f"Add at minimum `concurrency: {{ group: <workflow>-${{{{ github.ref }}}}, "
+        f"cancel-in-progress: <true|false> }}`."
+    )

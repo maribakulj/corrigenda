@@ -11,6 +11,13 @@ on:
 permissions:
   contents: read
 
+# Cancel in-flight CI when a newer commit is pushed to the same ref.
+# Saves CI minutes; the only thing that matters is the latest state.
+# Per-ref grouping keeps PRs and pushes to other branches independent.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   alto-core-lint:
     runs-on: ubuntu-latest

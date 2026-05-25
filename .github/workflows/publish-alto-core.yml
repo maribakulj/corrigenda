@@ -24,6 +24,16 @@ permissions:
   contents: read
   id-token: write
 
+# Serialise publish runs. Two operators dispatching the workflow at
+# the same time would both build, both attempt OIDC exchange, and
+# either (a) collide on the version (PyPI rejects a duplicate upload)
+# or (b) waste an OIDC slot. `cancel-in-progress: false` because a
+# publish must NOT be cancelled mid-flight — once the wheel is built
+# and partially uploaded, we want the run to finish or fail cleanly.
+concurrency:
+  group: publish-alto-core-${{ github.event.inputs.target }}
+  cancel-in-progress: false
+
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
