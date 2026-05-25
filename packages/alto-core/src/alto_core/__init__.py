@@ -16,7 +16,11 @@ consumers reach for. See the README for a minimal working example.
 
 from alto_core.alto.parser import build_document_manifest, parse_alto_file
 from alto_core.alto.rewriter import extract_output_texts, rewrite_alto_file
-from alto_core.pipeline.correction_pipeline import CorrectionPipeline, CorrectionResult
+from alto_core.pipeline.correction_pipeline import (
+    CorrectionPipeline,
+    CorrectionResult,
+    sanitize_error,
+)
 from alto_core.protocols import BaseProvider, OutputWriter, PipelineObserver
 from alto_core.protocols.provider import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 from alto_core.schemas import (
@@ -55,6 +59,7 @@ __all__ = [
     # LLM contract
     "OUTPUT_JSON_SCHEMA",
     "SYSTEM_PROMPT",
+    "sanitize_error",
     # Schemas (domain only)
     "BlockManifest",
     "ChunkGranularity",

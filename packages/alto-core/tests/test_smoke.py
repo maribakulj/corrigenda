@@ -68,6 +68,7 @@ def test_top_level_public_api_is_importable():
         extract_output_texts,
         parse_alto_file,
         rewrite_alto_file,
+        sanitize_error,
     )
 
     # Just touch each one so flake/mypy can't optimise the import away.
@@ -85,6 +86,7 @@ def test_top_level_public_api_is_importable():
             extract_output_texts,
             OUTPUT_JSON_SCHEMA,
             SYSTEM_PROMPT,
+            sanitize_error,
             DocumentManifest,
             PageManifest,
             BlockManifest,
