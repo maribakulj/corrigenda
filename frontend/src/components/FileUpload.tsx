@@ -29,17 +29,25 @@ export function FileUpload({ onFilesChange, disabled }: FileUploadProps) {
     onFilesChange(next)
   }
 
-  function addFiles(incoming: FileList | null) {
-    if (!incoming) return
-    const valid = Array.from(incoming).filter(isAllowed)
-    const merged = [...files]
-    for (const f of valid) {
-      if (!merged.some((existing) => existing.name === f.name)) {
-        merged.push(f)
+  const addFiles = useCallback(
+    (incoming: FileList | null) => {
+      if (!incoming) return
+      const valid = Array.from(incoming).filter(isAllowed)
+      const merged = [...files]
+      for (const f of valid) {
+        if (!merged.some((existing) => existing.name === f.name)) {
+          merged.push(f)
+        }
       }
-    }
-    updateFiles(merged)
-  }
+      updateFiles(merged)
+    },
+    // updateFiles closes over `setFiles` (stable) and `onFilesChange`
+    // (a prop, deliberately re-captured each render since the parent
+    // controls its identity). `files` is the only changing capture
+    // we need to track here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [files],
+  )
 
   function removeFile(index: number) {
     updateFiles(files.filter((_, i) => i !== index))
@@ -51,7 +59,7 @@ export function FileUpload({ onFilesChange, disabled }: FileUploadProps) {
       setDragging(false)
       if (!disabled) addFiles(e.dataTransfer.files)
     },
-    [files, disabled],
+    [addFiles, disabled],
   )
 
   const onDragOver = (e: React.DragEvent) => {
