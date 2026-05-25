@@ -51,26 +51,40 @@ _INVISIBLE_TRANSLATION = str.maketrans({c: "" for c in _INVISIBLE_CHARS})
 
 
 def clean_content(s: str) -> str:
-    """Strip invisible / control characters before writing to ALTO CONTENT.
+    """Normalise and strip a string before writing to ALTO CONTENT.
 
-    Removes:
-      - U+00AD (SOFT HYPHEN) — some OCR engines emit it as a hyphen
-        variant; ALTO CONTENT should not carry it.
-      - Zero-width characters (U+200B, U+200C, U+200D, U+FEFF) — leak
-        in via copy-paste of OCR'd PDF text and corrupt character-
-        indexed downstream consumers.
-      - Newlines / carriage returns / tabs — invalid in a single-line
-        ALTO CONTENT attribute. The validator already rejects ``\\n`` /
-        ``\\r`` in ``corrected_text``, but a CONTENT attribute with
-        one would silently corrupt re-parsing.
+    Three responsibilities:
 
-    Also strips C0 / C1 control characters (U+0000..U+001F /
-    U+007F..U+009F) via a generator filter — these never have legitimate
-    semantics in an OCR text node.
+    1. **NFC normalisation** (L10/R1). The parser NFC-normalises every
+       CONTENT it READS; the rewriter must do the same on WRITE so the
+       on-disk bytes are symmetric across the round-trip. Without this,
+       an LLM returning `café` in NFD form (`cafe\\u0301`) would land
+       4 NFD bytes on disk; downstream byte-indexed consumers (search
+       index, byte-snapshot tests) would diverge from anything that
+       re-parses through `parser.py`.
 
-    Pre-L10 only U+00AD was stripped; the other invisibles slipped
-    through and ended up in CONTENT attributes (L10/R2).
+    2. **Invisible-character stripping** (L10/R2):
+         - U+00AD (SOFT HYPHEN) — emitted by some OCR engines as a
+           hyphen variant; the hyphenation reconciler reconstructs it
+           from manifest state, so the raw CONTENT must not carry it.
+         - Zero-width characters (U+200B, U+200C, U+200D, U+FEFF) —
+           leak in via copy-paste of OCR'd PDF text and corrupt
+           character-indexed downstream consumers.
+         - Newlines / carriage returns / tabs — invalid in a single-
+           line ALTO CONTENT attribute. The validator already rejects
+           ``\\n`` / ``\\r`` in ``corrected_text``, but a CONTENT
+           attribute with one would silently corrupt re-parsing.
+
+    3. **C0 / C1 control-char stripping** (L10/R2). U+0000..U+001F and
+       U+007F..U+009F have no legitimate semantics in an OCR text node.
+
+    Order matters: NFC first so the translate table sees fully
+    composed characters (a NFD `é` is two codepoints `e` + combining
+    acute, neither of which is in the invisible set; NFC merges them
+    into the single codepoint U+00E9 before invisible/control
+    stripping runs).
     """
+    s = nfc(s)
     s = s.translate(_INVISIBLE_TRANSLATION)
     # C0/C1 control chars — never legitimate in OCR text. Filter via
     # generator (cheaper than another translate for an open-ended set).

@@ -257,6 +257,101 @@ def test_clean_content_still_strips_soft_hyphen():
     assert clean_content("ca­fé") == "café"
 
 
+# ---------------------------------------------------------------------------
+# R1 — rewriter must NFC-normalize CONTENT before writing
+# ---------------------------------------------------------------------------
+
+
+def test_clean_content_nfc_normalizes_decomposed_input():
+    """L10/R1 — the parser NFC-normalizes every CONTENT it READS
+    (alto_core.alto.parser:45). The rewriter's `clean_content` did
+    NOT — so an LLM returning `café` in NFD (`cafe\\u0301`) would
+    land NFD bytes in the output CONTENT. A subsequent re-parse via
+    `_extract_text_from_line` (which applies `nfc(...)` again) would
+    yield `café` in NFC — equal to the original, but the bytes on
+    disk differ from what every other consumer (search index,
+    grep, byte-for-byte snapshot) would expect.
+
+    Fix: `clean_content` now applies `nfc(...)` so the WRITE path is
+    symmetric with the READ path.
+    """
+    from alto_core.alto._norm import clean_content
+
+    nfd = "café"  # 'café' in NFD (e + combining acute)
+    nfc_expected = "café"  # NFC precomposed
+    assert nfd != nfc_expected, "test setup: NFD/NFC bytes must differ"
+
+    cleaned = clean_content(nfd)
+    assert cleaned == nfc_expected, (
+        f"clean_content did not NFC-normalize: {cleaned!r} != {nfc_expected!r}. "
+        f"Output bytes will differ from the parser's read-side normalisation."
+    )
+
+
+def test_rewriter_writes_nfc_content_from_nfd_correction():
+    """L10/R1 integration — write an NFD-form `corrected_text` through
+    the full rewriter and verify the on-disk CONTENT is NFC. Without
+    this fix the bytes on disk are NFD, silently breaking byte-for-
+    byte snapshot tests and downstream byte-indexed consumers."""
+    import unicodedata
+
+    from alto_core.alto.parser import parse_alto_file
+    from alto_core.alto.rewriter import rewrite_alto_file
+    from alto_core.schemas import LineStatus
+
+    # Source ALTO with a single line containing precomposed "café".
+    src = b"""<?xml version="1.0"?>
+<alto xmlns="http://www.loc.gov/standards/alto/ns-v4#">
+  <Layout>
+    <Page ID="P1" WIDTH="100" HEIGHT="100">
+      <PrintSpace>
+        <TextBlock ID="B1" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="100">
+          <TextLine ID="L1" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="10">
+            <String CONTENT="cafe" HPOS="0" VPOS="0" WIDTH="50" HEIGHT="10"/>
+          </TextLine>
+        </TextBlock>
+      </PrintSpace>
+    </Page>
+  </Layout>
+</alto>"""
+
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tmp:
+        tmp.write(src)
+        tmp.flush()
+        from pathlib import Path as _Path
+
+        src_path = _Path(tmp.name)
+
+    pages, _root = parse_alto_file(src_path, "src.xml")
+    # Inject NFD-form correction into the manifest.
+    line = pages[0].lines[0]
+    line.corrected_text = unicodedata.normalize("NFD", "café")
+    line.status = LineStatus.CORRECTED
+    assert line.corrected_text != "café", "test setup: corrected_text must be NFD"
+
+    out_bytes, _metrics, _paths = rewrite_alto_file(
+        src_path, pages, provider="test", model="test"
+    )
+
+    # The CONTENT attribute on disk must be NFC, not NFD.
+    assert b"caf\xc3\xa9" in out_bytes, (
+        f"rewriter wrote non-NFC bytes for 'café'. Output excerpt: "
+        f"{out_bytes[out_bytes.find(b'CONTENT') : out_bytes.find(b'CONTENT') + 80]!r}"
+    )
+    # Negative: the NFD byte sequence (e + combining acute) must NOT
+    # appear in the output where the corrected token landed.
+    nfd_bytes = (
+        "café".encode("utf-8")
+        if "café".encode("utf-8") != b"caf\xc3\xa9"
+        else b"cafe\xcc\x81"
+    )
+    assert nfd_bytes not in out_bytes, (
+        f"rewriter leaked NFD bytes into CONTENT: {nfd_bytes!r}"
+    )
+
+
 def test_validate_llm_response_accepts_normal_text():
     """Symmetric — normal text content must still validate (no
     over-zealous rejection from the R3 fix)."""
