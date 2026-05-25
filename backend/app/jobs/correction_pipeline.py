@@ -28,7 +28,7 @@ from app.alto.hyphenation import enrich_chunk_lines, reconcile_hyphen_pair
 from app.alto.rewriter import extract_output_texts, rewrite_alto_file
 from app.jobs.chunk_planner import plan_page
 from app.jobs.line_acceptance import check_adjacent_duplicates, check_line
-from app.jobs.validator import validate_llm_response
+from app.jobs.validator import HyphenIntegrityError, validate_llm_response
 from app.protocols import BaseProvider, OutputWriter, PipelineObserver
 from app.providers.base import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 from app.schemas import (
@@ -489,10 +489,8 @@ class CorrectionPipeline:
 
             except Exception as exc:
                 msg = sanitize_error(str(exc), api_key)
+                is_hyphen_violation = isinstance(exc, HyphenIntegrityError)
                 is_http_error = not isinstance(exc, ValueError)
-                is_hyphen_violation = isinstance(
-                    exc, ValueError
-                ) and "hyphen_integrity_violation" in str(exc)
 
                 if attempt < max_attempts:
                     if is_hyphen_violation and not hyphen_violation:

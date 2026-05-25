@@ -1,20 +1,21 @@
 """Pin the exception-classification logic inside `_run_chunk` (audit §7.1).
 
 `CorrectionPipeline._run_chunk` distinguishes three exception classes
-via a string-match on the message and an isinstance check:
+by isinstance check:
 
-  - "hyphen integrity violation" (any ValueError whose str(exc) contains
-    "hyphen_integrity_violation"): retry with temperature=0.0, backoff 0,
-    error_tag="hyphen_integrity_violation".
-  - HTTP / generic errors (anything NOT a ValueError): retry with
+  - HyphenIntegrityError (subclass of ValueError): retry with
+    temperature=0.0, backoff 0, error_tag="hyphen_integrity_violation".
+  - Anything NOT a ValueError (HTTP, runtime, …): retry with
     backoff = attempt * 2, error_tag = sanitized msg.
   - Other ValueError (schema validation, missing keys, …): retry with
     backoff = attempt, error_tag = sanitized msg.
 
-Phase 3 will replace the string-match with a typed exception
-`HyphenIntegrityError`. This test pins the OBSERVABLE behaviour
-(sleep durations, retry event tags, temperature ramp) so the
-substitution is provably equivalent.
+Before Phase 3.2 the hyphen path was triggered by a string-match on
+``"hyphen_integrity_violation" in str(exc)``. The migration to a typed
+exception is meant to be observably equivalent in production (the
+validator raises HyphenIntegrityError exactly where it used to embed
+the magic string). These tests pin the OBSERVABLE behaviour: sleep
+durations, retry event tags, temperature ramp.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ import pytest
 from app.alto.parser import build_document_manifest
 from app.jobs.orchestrator import run_job
 from app.jobs.store import JobStore
+from app.jobs.validator import HyphenIntegrityError
 from app.schemas import ModelInfo, Provider, SSEEvent
 
 SAMPLE_XML = Path(__file__).parent.parent.parent / "examples" / "sample.xml"
@@ -152,7 +154,7 @@ async def test_hyphen_violation_uses_zero_backoff(tmp_path: Path, sleep_calls: l
     """First chunk gets hyphen violation on attempt 1 then succeeds.
     The retry must NOT sleep (backoff=0 → asyncio.sleep skipped)."""
     provider = _ScriptedProvider(
-        [ValueError("hyphen_integrity_violation: PART1 grew from 3 to 8 words")]
+        [HyphenIntegrityError("hyphen_integrity_violation: PART1 grew from 3 to 8 words")]
     )
     events, store, job_id = await _run_and_collect(tmp_path, provider)
 
@@ -171,7 +173,7 @@ async def test_hyphen_violation_retry_event_has_fixed_error_tag(
     """The retry event must carry error_tag='hyphen_integrity_violation'
     (not the truncated message). Phase 3 keeps this contract."""
     provider = _ScriptedProvider(
-        [ValueError("hyphen_integrity_violation: anything goes after this")]
+        [HyphenIntegrityError("hyphen_integrity_violation: anything goes after this")]
     )
     events, _store, _job_id = await _run_and_collect(tmp_path, provider)
 
@@ -187,7 +189,9 @@ async def test_hyphen_violation_keeps_temperature_zero_on_retry(
 ):
     """After a hyphen violation, the next call must still use temp=0.0,
     not the normal ramp (0.0 → 0.3 → 0.5)."""
-    provider = _ScriptedProvider([ValueError("hyphen_integrity_violation: drift detected")])
+    provider = _ScriptedProvider(
+        [HyphenIntegrityError("hyphen_integrity_violation: drift detected")]
+    )
     events, _store, _job_id = await _run_and_collect(tmp_path, provider)
 
     # First two complete_structured calls hit the first chunk:
@@ -303,7 +307,7 @@ async def test_second_hyphen_violation_falls_into_linear_backoff(
     consecutive hyphen-violation falls into the generic-ValueError path:
     backoff = attempt = 2, AND the error_tag is the sanitized message
     (not the fixed 'hyphen_integrity_violation' tag)."""
-    hyp_exc = ValueError("hyphen_integrity_violation: PART2 collapsed")
+    hyp_exc = HyphenIntegrityError("hyphen_integrity_violation: PART2 collapsed")
     provider = _ScriptedProvider([hyp_exc, hyp_exc])
     events, store, job_id = await _run_and_collect(tmp_path, provider)
 
