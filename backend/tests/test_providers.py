@@ -494,3 +494,143 @@ async def test_google_complete_structured_raises_on_empty_parts():
                 user_payload={},
                 json_schema=OUTPUT_JSON_SCHEMA,
             )
+
+
+# ---------------------------------------------------------------------------
+# L10 / B2 — Google API key must NOT be sent as a URL query parameter.
+#
+# httpx.HTTPStatusError stringifies the failing request URL including
+# its query string, so a `params={"key": SECRET}` call leaks the key
+# into every error message — which `app/api/providers.py` echoes back
+# to the client AND `httpx` writes to logs. Sending the key as an
+# `x-goog-api-key` header keeps it out of URL/query-string surfaces.
+# ---------------------------------------------------------------------------
+
+
+_SECRET_KEY = "AIzaSyD-FAKE_TEST_SECRET_KEY_DO_NOT_LEAK"
+
+
+class _FullKwargsCapture:
+    """Captures every kwarg passed to httpx post/get for inspection."""
+
+    def __init__(self, response_body: dict) -> None:
+        self.response_body = response_body
+        self.calls: list[dict] = []
+
+    def __call__(self, url, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        return _make_response(200, self.response_body)
+
+
+def _assert_key_not_in_url_or_params(call: dict, secret: str) -> None:
+    url = str(call.get("url", ""))
+    params = call.get("params") or {}
+    params_str = " ".join(f"{k}={v}" for k, v in params.items())
+    assert secret not in url, (
+        f"API key leaked into request URL: {url!r}. "
+        f"Use a header (x-goog-api-key) instead of params={{'key': ...}}."
+    )
+    assert secret not in params_str, (
+        f"API key leaked into request params: {params_str!r}. "
+        f"Use a header (x-goog-api-key) instead of params={{'key': ...}}."
+    )
+
+
+@pytest.mark.asyncio
+async def test_google_list_models_does_not_leak_api_key_in_url():
+    """L10/B2 — `GoogleProvider.list_models` must send the api_key as
+    an HTTP header, NOT a URL query parameter. Pre-fix the call passed
+    ``params={"key": api_key}`` which surfaced the key in every
+    httpx.HTTPStatusError string representation, then echoed it back
+    via ``app/api/providers.py`` error responses.
+    """
+    capture = _FullKwargsCapture({"models": []})
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.get = AsyncMock(side_effect=capture)
+        provider = GoogleProvider()
+        await provider.list_models(api_key=_SECRET_KEY)
+
+    assert capture.calls, "GoogleProvider.list_models did not make any HTTP call"
+    for call in capture.calls:
+        _assert_key_not_in_url_or_params(call, _SECRET_KEY)
+        headers = call.get("headers") or {}
+        assert headers.get("x-goog-api-key") == _SECRET_KEY, (
+            f"API key not sent via x-goog-api-key header: {headers!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_google_complete_structured_does_not_leak_api_key_in_url():
+    """L10/B2 symmetric with list_models — the POST to
+    ``:generateContent`` must also send the key via header, not URL.
+    """
+    capture = _FullKwargsCapture(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": json.dumps(
+                                    {"lines": [{"line_id": "L1", "corrected_text": "x"}]}
+                                )
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture)
+        provider = GoogleProvider()
+        await provider.complete_structured(
+            api_key=_SECRET_KEY,
+            model="gemini-1.5-pro",
+            system_prompt="SYS",
+            user_payload={"lines": [{"line_id": "L1", "ocr_text": "x"}]},
+            json_schema=OUTPUT_JSON_SCHEMA,
+        )
+
+    assert capture.calls, "GoogleProvider.complete_structured did not POST"
+    for call in capture.calls:
+        _assert_key_not_in_url_or_params(call, _SECRET_KEY)
+        headers = call.get("headers") or {}
+        assert headers.get("x-goog-api-key") == _SECRET_KEY, (
+            f"API key not sent via x-goog-api-key header: {headers!r}"
+        )
+
+
+def test_google_provider_source_does_not_pass_api_key_via_params():
+    """Source-AST contract — no call site in `google_provider.py` may
+    pass ``params={"key": ...}`` (or any dict literal whose first key
+    is ``"key"``). Catches accidental reintroduction of the URL-param
+    form regardless of what the runtime tests cover.
+    """
+    import ast
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "app" / "providers" / "google_provider.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"), filename=str(src))
+
+    offenders: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg != "params":
+                continue
+            if not isinstance(kw.value, ast.Dict):
+                continue
+            for key in kw.value.keys:
+                if isinstance(key, ast.Constant) and key.value == "key":
+                    offenders.append((node.lineno, "params={'key': ...}"))
+                    break
+    assert not offenders, (
+        f"google_provider.py still passes api_key via URL params: {offenders}. "
+        f"Use headers={{'x-goog-api-key': api_key}} instead."
+    )
