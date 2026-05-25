@@ -174,6 +174,59 @@ def _reconcile_one_pair(
         lm.hyphen_subs_content = subs
 
 
+def _reconcile_pairs(
+    chunk_lines: list[LineManifest],
+    line_by_id: dict[str, LineManifest],
+    text_by_id: dict[str, str],
+    cross_page_partners: dict[tuple[str, str], LineManifest] | None,
+) -> int:
+    """Reconcile all hyphen pairs whose PART1 (or BOTH forward) side sits
+    in this chunk. Mutates the manifests in place via _reconcile_one_pair.
+
+    Two passes — one per source role — share the same body:
+      PART1 reconciles with its (backward) partner;
+      BOTH reconciles with its forward partner.
+    Order matters: a BOTH line can be PART2 of a preceding PART1 (handled
+    in pass 1 from the PART1 side) and PART1 of the next pair (handled in
+    pass 2 from the BOTH side). A shared `processed_part2` set prevents
+    double-reconciliation when the two passes land on the same partner.
+
+    Returns the count of pairs actually reconciled.
+    """
+    reconciled = 0
+    processed_part2: set[tuple[str, str]] = set()
+    passes = (
+        (HyphenRole.PART1, False, "hyphen_pair_line_id"),
+        (HyphenRole.BOTH, True, "hyphen_forward_pair_id"),
+    )
+    for role, is_forward, partner_attr in passes:
+        for lm in chunk_lines:
+            if lm.hyphen_role != role or not getattr(lm, partner_attr):
+                continue
+            part2 = _resolve_partner(
+                lm,
+                is_forward=is_forward,
+                line_by_id=line_by_id,
+                cross_page_partners=cross_page_partners,
+            )
+            if part2 is None:
+                logger.warning(
+                    "Hyphen partner %s not found for %s line %s "
+                    "(likely cross-page pair — skipping reconciliation)",
+                    getattr(lm, partner_attr),
+                    role.value,
+                    lm.line_id,
+                )
+                continue
+            part2_key = (part2.page_id, part2.line_id)
+            if part2_key in processed_part2:
+                continue
+            _reconcile_one_pair(lm, part2, text_by_id, is_forward=is_forward)
+            processed_part2.add(part2_key)
+            reconciled += 1
+    return reconciled
+
+
 def _apply_line_acceptance(
     chunk_lines: list[LineManifest],
     text_by_id: dict[str, str],
@@ -611,44 +664,9 @@ class CorrectionPipeline:
             # --- Success: apply corrections ---
             text_by_id: dict[str, str] = {o.line_id: o.corrected_text for o in response.lines}
 
-            reconciled_count = 0
-            processed_part2: set[tuple[str, str]] = set()
-
-            # Two passes — one per source role — share the same body:
-            #   PART1 reconciles with its (backward) partner;
-            #   BOTH reconciles with its forward partner.
-            # Order matters: a BOTH line can be both PART2 of a preceding
-            # PART1 (handled in pass 1 from the PART1 side) and PART1 of
-            # the next pair (handled in pass 2 from the BOTH side).
-            reconcile_passes = (
-                (HyphenRole.PART1, False, "hyphen_pair_line_id"),
-                (HyphenRole.BOTH, True, "hyphen_forward_pair_id"),
+            reconciled_count = _reconcile_pairs(
+                chunk_lines, line_by_id, text_by_id, cross_page_partners
             )
-            for role, is_forward, partner_attr in reconcile_passes:
-                for lm in chunk_lines:
-                    if lm.hyphen_role != role or not getattr(lm, partner_attr):
-                        continue
-                    part2 = _resolve_partner(
-                        lm,
-                        is_forward=is_forward,
-                        line_by_id=line_by_id,
-                        cross_page_partners=cross_page_partners,
-                    )
-                    if part2 is None:
-                        logger.warning(
-                            "Hyphen partner %s not found for %s line %s "
-                            "(likely cross-page pair — skipping reconciliation)",
-                            getattr(lm, partner_attr),
-                            role.value,
-                            lm.line_id,
-                        )
-                        continue
-                    part2_key = (part2.page_id, part2.line_id)
-                    if part2_key in processed_part2:
-                        continue
-                    _reconcile_one_pair(lm, part2, text_by_id, is_forward=is_forward)
-                    processed_part2.add(part2_key)
-                    reconciled_count += 1
 
             # Apply remaining lines via line_acceptance policy
             _apply_line_acceptance(chunk_lines, text_by_id, all_lines_by_id, traces)
