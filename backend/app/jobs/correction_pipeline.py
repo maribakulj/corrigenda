@@ -174,6 +174,59 @@ def _reconcile_one_pair(
         lm.hyphen_subs_content = subs
 
 
+def _apply_line_acceptance(
+    chunk_lines: list[LineManifest],
+    text_by_id: dict[str, str],
+    all_lines_by_id: dict[str, LineManifest],
+    traces: dict[str, LineTrace] | None,
+) -> None:
+    """Apply per-line acceptance policy to chunk lines not yet decided.
+
+    Lines whose ``corrected_text`` was already set by hyphen reconciliation
+    are skipped. For the others:
+      - Orphan-hyphen guard: a PART1/BOTH whose OCR ends with ``-`` but
+        whose corrected text doesn't still end with ``-`` is reverted to
+        OCR with ``fallback_reason="orphan_hyphen_completed"``.
+      - Otherwise ``check_line`` is consulted with neighbour OCR context;
+        rejected corrections are reverted to OCR with the rejection
+        reason captured in the trace.
+    """
+    for lm in chunk_lines:
+        if lm.corrected_text is not None:
+            continue
+        corrected = text_by_id.get(lm.line_id)
+        if corrected is None:
+            continue
+
+        if (
+            lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
+            and lm.ocr_text.rstrip().endswith("-")
+            and not corrected.rstrip().endswith("-")
+        ):
+            lm.corrected_text = lm.ocr_text
+            lm.status = LineStatus.FALLBACK
+            _set_trace(traces, lm, fallback_reason="orphan_hyphen_completed")
+            continue
+
+        prev_ocr = (
+            all_lines_by_id[lm.prev_line_id].ocr_text
+            if lm.prev_line_id and lm.prev_line_id in all_lines_by_id
+            else None
+        )
+        next_ocr = (
+            all_lines_by_id[lm.next_line_id].ocr_text
+            if lm.next_line_id and lm.next_line_id in all_lines_by_id
+            else None
+        )
+        result = check_line(lm.ocr_text, corrected, prev_ocr, next_ocr)
+        lm.corrected_text = result.text
+        if result.accepted:
+            lm.status = LineStatus.CORRECTED
+        else:
+            lm.status = LineStatus.FALLBACK
+            _set_trace(traces, lm, fallback_reason=result.reason)
+
+
 @dataclass
 class CorrectionResult:
     """Outcome of a full pipeline run.
@@ -598,37 +651,7 @@ class CorrectionPipeline:
                     reconciled_count += 1
 
             # Apply remaining lines via line_acceptance policy
-            for lm in chunk_lines:
-                if lm.corrected_text is None:
-                    corrected = text_by_id.get(lm.line_id)
-                    if corrected is not None:
-                        if (
-                            lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
-                            and lm.ocr_text.rstrip().endswith("-")
-                            and not corrected.rstrip().endswith("-")
-                        ):
-                            lm.corrected_text = lm.ocr_text
-                            lm.status = LineStatus.FALLBACK
-                            _set_trace(traces, lm, fallback_reason="orphan_hyphen_completed")
-                            continue
-
-                        prev_ocr = (
-                            all_lines_by_id[lm.prev_line_id].ocr_text
-                            if lm.prev_line_id and lm.prev_line_id in all_lines_by_id
-                            else None
-                        )
-                        next_ocr = (
-                            all_lines_by_id[lm.next_line_id].ocr_text
-                            if lm.next_line_id and lm.next_line_id in all_lines_by_id
-                            else None
-                        )
-                        result = check_line(lm.ocr_text, corrected, prev_ocr, next_ocr)
-                        lm.corrected_text = result.text
-                        if result.accepted:
-                            lm.status = LineStatus.CORRECTED
-                        else:
-                            lm.status = LineStatus.FALLBACK
-                            _set_trace(traces, lm, fallback_reason=result.reason)
+            _apply_line_acceptance(chunk_lines, text_by_id, all_lines_by_id, traces)
 
             # Adjacent duplicate detection (post-acceptance pass)
             accepted_lines = [
