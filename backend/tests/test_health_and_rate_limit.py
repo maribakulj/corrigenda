@@ -123,6 +123,74 @@ def test_providers_models_rate_limit_blocks_after_threshold(client: TestClient):
     assert "rate limit" in resp.json()["detail"].lower()
 
 
+def test_default_trusted_proxies_does_not_trust_arbitrary_x_forwarded_for(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """L10/F5 — when `TRUSTED_PROXIES` is unset, the app must fall back
+    to the safe default (loopback only) and IGNORE `X-Forwarded-For`
+    from any other upstream. Pre-L10 the Dockerfiles shipped
+    `TRUSTED_PROXIES=*`, so any self-hoster deploying the image
+    directly (not behind HF's sanitising proxy) exposed their rate
+    limits to trivial bypass — an attacker rotates the header per
+    request and never hits the per-IP cap.
+
+    The inverse contract (with `*`, distinct `X-Forwarded-For`s are
+    each given their own bucket) is pinned by the existing
+    `test_rate_limit_uses_x_forwarded_for` above. This test pins the
+    safe default: same caller, same bucket, regardless of header
+    spoofing.
+    """
+    monkeypatch.delenv("TRUSTED_PROXIES", raising=False)
+    app = create_app()
+    app.state.limiter.reset()
+
+    body = {"provider": "openai", "api_key": "fake"}
+    with TestClient(app) as c:
+        # First 10 requests inside the 10/minute budget should pass,
+        # all keyed on the same testclient IP regardless of the
+        # `X-Forwarded-For` spoofing — because testclient is NOT in
+        # `trusted_hosts` (which defaults to 127.0.0.1).
+        for i in range(10):
+            ip = f"192.0.2.{i + 1}"
+            c.post(
+                "/api/providers/models",
+                json=body,
+                headers={"X-Forwarded-For": ip},
+            )
+        # 11th request: must 429 even though it claims a fresh IP.
+        resp = c.post(
+            "/api/providers/models",
+            json=body,
+            headers={"X-Forwarded-For": "192.0.2.99"},
+        )
+    app.state.limiter.reset()
+
+    assert resp.status_code == 429, (
+        f"X-Forwarded-For was trusted from an untrusted upstream — "
+        f"got {resp.status_code}, expected 429. Default TRUSTED_PROXIES "
+        f"(127.0.0.1) must NOT honour X-Forwarded-For from a remote IP."
+    )
+
+
+def test_backend_dockerfile_does_not_default_trusted_proxies_wildcard():
+    """L10/F5 — `backend/Dockerfile` (the docker-compose target) must
+    NOT set `TRUSTED_PROXIES=*`. The compose deployment runs behind
+    Docker's bridge network; there is no edge proxy whose
+    X-Forwarded-For we should trust. Defaulting to `*` here was a
+    holdover from the HF Space Dockerfile (which DOES need `*`
+    because HF's proxy IP is unknown).
+    """
+    from pathlib import Path
+
+    dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+    text = dockerfile.read_text(encoding="utf-8")
+    assert "ENV TRUSTED_PROXIES=*" not in text, (
+        f"{dockerfile.name} still defaults TRUSTED_PROXIES to '*' — this "
+        f"is unsafe for compose / self-hosted deployments. Remove the "
+        f"ENV line so the Python default (127.0.0.1) takes effect."
+    )
+
+
 def test_rate_limit_uses_x_forwarded_for(monkeypatch: pytest.MonkeyPatch):
     """Roadmap L3 (R1) — slowapi keys on the real client IP, not the proxy's.
 

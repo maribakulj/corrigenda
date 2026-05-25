@@ -27,10 +27,16 @@ COPY --from=frontend-builder /frontend/dist /app/static/
 
 ENV JOB_STORAGE_DIR=/tmp/app-jobs
 ENV PYTHONPATH=/app/backend
-# HF Spaces sits behind an edge proxy that rewrites X-Forwarded-For;
-# tell the app to trust it so per-IP rate-limit keys on the real
-# caller IP, not the single proxy IP every request reaches us through.
-# See backend/app/main.py (ProxyHeadersMiddleware wiring).
+# TRUSTED_PROXIES=* is HF SPACES SPECIFIC. The HF edge proxy strips
+# the incoming X-Forwarded-For and re-emits its own, so "trust any
+# upstream" is safe in that context. Anyone reusing this Dockerfile
+# OUTSIDE of HF Spaces (self-hosted, custom k8s, behind a reverse
+# proxy that does NOT sanitise X-Forwarded-For) MUST override this
+# env var to either "127.0.0.1" (safe baseline) or the explicit
+# proxy IP. Leaving the wildcard in a non-HF deployment lets any
+# unauthenticated caller spoof X-Forwarded-For to bypass per-IP
+# rate limits — making /api/providers/models a free
+# credential-spray oracle (see L10/F5).
 ENV TRUSTED_PROXIES=*
 
 # Create non-root user and ensure storage dir is writable

@@ -16,9 +16,16 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY backend/app/ /app/backend/app/
 
 ENV PYTHONPATH=/app/backend
-# Trust X-Forwarded-For from any upstream when this image runs behind
-# the docker-compose reverse proxy. See root Dockerfile + backend/app/main.py.
-ENV TRUSTED_PROXIES=*
+# TRUSTED_PROXIES intentionally NOT set here. The Python middleware
+# defaults to "127.0.0.1" which is the safe choice for the docker-
+# compose deployment (no edge proxy; the frontend talks directly to
+# the backend over the Docker bridge network). Operators deploying
+# this image behind a real reverse proxy must explicitly set the env
+# var to the proxy's IP(s) — e.g. `TRUSTED_PROXIES=10.0.0.1` — or to
+# "*" if the proxy itself strips/re-emits X-Forwarded-For. The
+# previous unconditional `*` here was a holdover from the HF Space
+# Dockerfile and exposed every self-hosted deployment to trivial
+# rate-limit bypass via header spoofing (see L10/F5).
 RUN useradd --create-home appuser && mkdir -p /tmp/app-jobs && chown appuser /tmp/app-jobs
 USER appuser
 
