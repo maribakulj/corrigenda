@@ -561,55 +561,41 @@ class CorrectionPipeline:
             reconciled_count = 0
             processed_part2: set[tuple[str, str]] = set()
 
-            # Pass 1: PART1 → partner (partner may be PART2 or BOTH)
-            for lm in chunk_lines:
-                if lm.hyphen_role != HyphenRole.PART1 or not lm.hyphen_pair_line_id:
-                    continue
-                part2 = _resolve_partner(
-                    lm,
-                    is_forward=False,
-                    line_by_id=line_by_id,
-                    cross_page_partners=cross_page_partners,
-                )
-                if part2 is None:
-                    logger.warning(
-                        "Hyphen pair partner %s not found for PART1 %s "
-                        "(likely cross-page pair — skipping reconciliation)",
-                        lm.hyphen_pair_line_id,
-                        lm.line_id,
+            # Two passes — one per source role — share the same body:
+            #   PART1 reconciles with its (backward) partner;
+            #   BOTH reconciles with its forward partner.
+            # Order matters: a BOTH line can be both PART2 of a preceding
+            # PART1 (handled in pass 1 from the PART1 side) and PART1 of
+            # the next pair (handled in pass 2 from the BOTH side).
+            reconcile_passes = (
+                (HyphenRole.PART1, False, "hyphen_pair_line_id"),
+                (HyphenRole.BOTH, True, "hyphen_forward_pair_id"),
+            )
+            for role, is_forward, partner_attr in reconcile_passes:
+                for lm in chunk_lines:
+                    if lm.hyphen_role != role or not getattr(lm, partner_attr):
+                        continue
+                    part2 = _resolve_partner(
+                        lm,
+                        is_forward=is_forward,
+                        line_by_id=line_by_id,
+                        cross_page_partners=cross_page_partners,
                     )
-                    continue
-                part2_key = (part2.page_id, part2.line_id)
-                if part2_key in processed_part2:
-                    continue
-                _reconcile_one_pair(lm, part2, text_by_id, is_forward=False)
-                processed_part2.add(part2_key)
-                reconciled_count += 1
-
-            # Pass 2: BOTH → forward partner
-            for lm in chunk_lines:
-                if lm.hyphen_role != HyphenRole.BOTH or not lm.hyphen_forward_pair_id:
-                    continue
-                part2 = _resolve_partner(
-                    lm,
-                    is_forward=True,
-                    line_by_id=line_by_id,
-                    cross_page_partners=cross_page_partners,
-                )
-                if part2 is None:
-                    logger.warning(
-                        "Hyphen forward partner %s not found for BOTH %s "
-                        "(likely cross-page pair — skipping reconciliation)",
-                        lm.hyphen_forward_pair_id,
-                        lm.line_id,
-                    )
-                    continue
-                part2_key = (part2.page_id, part2.line_id)
-                if part2_key in processed_part2:
-                    continue
-                _reconcile_one_pair(lm, part2, text_by_id, is_forward=True)
-                processed_part2.add(part2_key)
-                reconciled_count += 1
+                    if part2 is None:
+                        logger.warning(
+                            "Hyphen partner %s not found for %s line %s "
+                            "(likely cross-page pair — skipping reconciliation)",
+                            getattr(lm, partner_attr),
+                            role.value,
+                            lm.line_id,
+                        )
+                        continue
+                    part2_key = (part2.page_id, part2.line_id)
+                    if part2_key in processed_part2:
+                        continue
+                    _reconcile_one_pair(lm, part2, text_by_id, is_forward=is_forward)
+                    processed_part2.add(part2_key)
+                    reconciled_count += 1
 
             # Apply remaining lines via line_acceptance policy
             for lm in chunk_lines:
