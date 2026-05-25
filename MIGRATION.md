@@ -34,8 +34,8 @@ backend/
 │   │   ├── parser.py               446 LOC
 │   │   ├── rewriter.py             622 LOC
 │   │   ├── hyphenation.py          343 LOC
-│   │   ├── _norm.py                35 LOC
-│   │   └── _ns.py                  24 LOC
+│   │   ├── _norm.py                35 LOC   ← snapshot d'origine ; shim supprimé post-extraction (cf. REMEDIATION_STATUS.md L8/S6)
+│   │   └── _ns.py                  24 LOC   ← idem
 │   ├── api/                        432 LOC — FastAPI routes
 │   │   ├── jobs.py                 404 LOC — couplé à job_store global
 │   │   └── providers.py            28 LOC
@@ -82,8 +82,10 @@ backend/
 | `backend/app/alto/parser.py` | `packages/alto-core/src/alto_core/alto/parser.py` | alto-core | 2 |
 | `backend/app/alto/rewriter.py` | `packages/alto-core/src/alto_core/alto/rewriter.py` | alto-core | 2 |
 | `backend/app/alto/hyphenation.py` | `packages/alto-core/src/alto_core/alto/hyphenation.py` | alto-core | 2 |
-| `backend/app/alto/_norm.py` | `packages/alto-core/src/alto_core/alto/_norm.py` | alto-core | 2 |
-| `backend/app/alto/_ns.py` | `packages/alto-core/src/alto_core/alto/_ns.py` | alto-core | 2 |
+| `backend/app/alto/_norm.py` ⚠ | `packages/alto-core/src/alto_core/alto/_norm.py` | alto-core | 2 |
+| `backend/app/alto/_ns.py` ⚠ | `packages/alto-core/src/alto_core/alto/_ns.py` | alto-core | 2 |
+
+> ⚠ Le shim côté `backend/` a été **supprimé** après extraction (commit `618be08`, L8 corrective wave) : zéro consumer interne. La version alto-core reste la seule source.
 | `backend/app/jobs/chunk_planner.py` | `packages/alto-core/src/alto_core/pipeline/chunk_planner.py` | alto-core | 2 |
 | `backend/app/jobs/validator.py` | `packages/alto-core/src/alto_core/pipeline/validator.py` | alto-core | 2 |
 | `backend/app/jobs/line_acceptance.py` | `packages/alto-core/src/alto_core/pipeline/line_acceptance.py` | alto-core | 2 |

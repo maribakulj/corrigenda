@@ -437,9 +437,9 @@ surface élevée. Heureusement la validation backend est plus stricte.
 
 ## DETTE / REFACTOR
 
-### D-001 🟡 — `_detect_namespace` dupliqué
-**Fichiers :** `backend/app/alto/parser.py:29-34`, `backend/app/alto/rewriter.py:38-42`
-**Fix :** module `backend/app/alto/_ns.py` partagé.
+### D-001 🟡 — `_detect_namespace` dupliqué — ✅ RÉSOLU
+**Fichiers :** `backend/app/alto/parser.py:29-34`, `backend/app/alto/rewriter.py:38-42` (pré-extraction).
+**Fix appliqué :** centralisé dans `alto_core.alto._ns` lors de l'extraction Phase 2. Le shim transitoire `backend/app/alto/_ns.py` a depuis été supprimé (commit `618be08`, L8 corrective wave) faute de consumer — la dédup vit désormais dans `alto_core`.
 
 ### D-002 🟡 — `lifespan` vide alors qu'on a des ressources à initialiser
 **Fichier :** `backend/app/main.py:26-27`
