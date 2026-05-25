@@ -10,9 +10,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
+from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
 from app.api.providers import router as providers_router
+from app.api.rate_limit import limiter
 from app.jobs.store import JobStore
 from app.observability.logging_config import setup_json_logging
 
@@ -29,6 +33,14 @@ _INDEX_HTML = _STATIC_DIR / "index.html"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
+
+
+def _rate_limit_handler(_request, exc: RateLimitExceeded) -> JSONResponse:
+    """Render slowapi's RateLimitExceeded as a uniform JSON 429."""
+    return JSONResponse(
+        {"detail": f"Rate limit exceeded: {exc.detail}"},
+        status_code=429,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +67,13 @@ def create_app() -> FastAPI:
     # importing a module-level singleton — see app/api/deps.py.
     app.state.job_store = JobStore()
 
+    # Rate limiter (per remote IP) — slowapi reads `app.state.limiter`
+    # via SlowAPIMiddleware to enforce `@limiter.limit(...)` decorators
+    # on individual routes.
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+    app.add_middleware(SlowAPIMiddleware)
+
     # ------------------------------------------------------------------
     # CORS
     # Origins are configurable via CORS_ORIGINS env var (comma-separated).
@@ -70,12 +89,15 @@ def create_app() -> FastAPI:
     )
 
     # ------------------------------------------------------------------
-    # Health check — registered first, always reachable, never depends
-    # on static files or any other optional feature.
+    # Health checks — registered first, always reachable. /health stays
+    # as the lightweight legacy ping (HF Spaces hits it); /health/live
+    # and /health/ready are the new explicit probes (see app/api/health.py).
     # ------------------------------------------------------------------
     @app.get("/health", include_in_schema=False)
-    async def health():
+    async def health() -> JSONResponse:
         return JSONResponse({"status": "ok"})
+
+    app.include_router(health_router, tags=["health"])
 
     # ------------------------------------------------------------------
     # API routers

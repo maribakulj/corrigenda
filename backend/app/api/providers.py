@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
+from app.api.rate_limit import limiter
 from app.providers import get_provider
 from app.schemas import ListModelsRequest, ListModelsResponse
 
@@ -11,7 +12,11 @@ router = APIRouter()
 
 
 @router.post("/models", response_model=ListModelsResponse)
-async def list_models(body: ListModelsRequest) -> ListModelsResponse:
+# Rate limited because the route validates user-supplied api_keys
+# against upstream providers — without throttling it becomes a free
+# credential-spray oracle.
+@limiter.limit("10/minute")
+async def list_models(request: Request, body: ListModelsRequest) -> ListModelsResponse:
     """List available models for a given provider and API key."""
     try:
         provider = get_provider(body.provider)

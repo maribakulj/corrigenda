@@ -10,12 +10,13 @@ import zipfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from sse_starlette.sse import EventSourceResponse
 
 from app.alto.parser import build_document_manifest
 from app.api.deps import get_job_store
+from app.api.rate_limit import limiter
 from app.jobs.orchestrator import run_job
 from app.protocols import JobStore
 from app.schemas import (
@@ -69,7 +70,11 @@ def get_completed_job(
 
 
 @router.post("", response_model=CreateJobResponse)
+# Rate limited to throttle file uploads + spawned background tasks
+# against a single-worker server with bounded disk/CPU budget.
+@limiter.limit("20/minute")
 async def create_job(
+    request: Request,
     files: list[UploadFile] = File(...),
     provider: str = Form(...),
     api_key: str = Form(...),
