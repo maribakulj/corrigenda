@@ -15,7 +15,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.alto.parser import build_document_manifest
 from app.api.deps import get_job_store
 from app.api.rate_limit import limiter
-from app.jobs.orchestrator import _JOB_TIMEOUT_SECONDS
+from app.jobs import orchestrator as _orch
 from app.jobs.runner import JobRunner
 from app.protocols import JobStore
 from app.schemas import (
@@ -163,7 +163,10 @@ async def create_job(
             output_writer=output_writer_instance,
             source_files={name: path for name, path in saved.items()},
             provider=provider_instance,
-            timeout_seconds=_JOB_TIMEOUT_SECONDS,
+            # Lookup is dynamic (not a snapshot) so `monkeypatch.setattr(
+            # app.jobs.orchestrator, "_JOB_TIMEOUT_SECONDS", ...)` in tests —
+            # and any future runtime tunable — actually takes effect.
+            timeout_seconds=_orch._JOB_TIMEOUT_SECONDS,
         ),
         name=f"run_job:{job_id}",
     )

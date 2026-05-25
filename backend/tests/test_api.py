@@ -302,3 +302,53 @@ def test_sse_endpoint_exists(client: TestClient):
     assert "text/event-stream" in resp.headers.get("content-type", "")
     # The terminal event should appear in the body
     assert "completed" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Regression: app/api/jobs.py must look up _JOB_TIMEOUT_SECONDS dynamically
+# (not snapshot it at import time). See REMEDIATION_STATUS.md "B-NEW-1".
+# ---------------------------------------------------------------------------
+
+
+def test_create_job_resolves_timeout_seconds_dynamically(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """The L6 migration moved `app/api/jobs.py` from `run_job(...)` to
+    `JobRunner.run(..., timeout_seconds=N)`. A naive
+    `from app.jobs.orchestrator import _JOB_TIMEOUT_SECONDS` would freeze
+    the value at module import — so any later mutation of
+    `app.jobs.orchestrator._JOB_TIMEOUT_SECONDS` (tests, operator hot-tune,
+    a future env-driven override) would silently NOT propagate to the
+    actual call site. This test pins the dynamic lookup so the regression
+    cannot reappear unnoticed.
+    """
+    from app.jobs import orchestrator as orch
+    from app.jobs.runner import JobRunner
+
+    captured: dict[str, Any] = {}
+
+    async def _noop_coro() -> None:
+        return None
+
+    def _fake_run(self: JobRunner, **kwargs: Any):
+        # Synchronous capture happens BEFORE the coroutine is scheduled by
+        # `BackgroundTaskRegistry.spawn`, so the assertion below can run
+        # immediately after the HTTP response without racing the scheduler.
+        captured.update(kwargs)
+        return _noop_coro()
+
+    monkeypatch.setattr(JobRunner, "run", _fake_run)
+    sentinel = 4242
+    monkeypatch.setattr(orch, "_JOB_TIMEOUT_SECONDS", sentinel)
+
+    resp = client.post(
+        "/api/jobs",
+        data=_form_fields(),
+        files=[_sample_xml_upload()],
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured.get("timeout_seconds") == sentinel, (
+        f"timeout_seconds was not resolved dynamically: "
+        f"got {captured.get('timeout_seconds')!r}, expected {sentinel!r}. "
+        f"app/api/jobs.py likely snapshotted _JOB_TIMEOUT_SECONDS at import."
+    )
