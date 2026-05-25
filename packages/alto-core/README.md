@@ -89,12 +89,12 @@ async def main():
         output_writer=FilesystemWriter(Path("./out")),
     )
     result = await pipeline.run(
-        job_id="local-run",
         document_manifest=doc,
         api_key="",
         model="mock",
         provider_name="local",
         source_files={src.name: src},
+        run_id="local-run",  # optional — auto-generated when omitted
     )
     print(f"reconciled {result.total_reconciled} hyphen pairs across {result.total_chunks} chunks")
 
@@ -102,6 +102,29 @@ async def main():
 asyncio.run(main())
 ```
 
+## Releasing
+
+The version is read from `src/alto_core/__init__.py::__version__` by
+hatchling (single source of truth — `pyproject.toml` is `dynamic`).
+
+To cut a new release:
+
+1. Bump `__version__` in `src/alto_core/__init__.py`.
+2. Add a `## [X.Y.Z]` entry to [CHANGELOG.md](./CHANGELOG.md).
+3. Commit + tag: `git tag alto-core-vX.Y.Z`.
+4. Push the tag.
+5. From the GitHub UI, run **Actions → Publish alto-core → Run
+   workflow**. Pick `testpypi` first to validate, then `pypi`. The
+   workflow uses Trusted Publishing (PEP 740 / OIDC) — no API token
+   stored in GitHub secrets.
+
+For a local dry-run before pushing:
+
+```bash
+scripts/release-alto-core.sh             # build + smoke-install only
+scripts/release-alto-core.sh --testpypi  # build + upload TestPyPI
+```
+
 ## License
 
-Apache 2.0.
+Apache 2.0 (see [LICENSE](./LICENSE)).

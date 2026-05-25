@@ -1,0 +1,88 @@
+name: Publish alto-core
+
+# Manual-only: a release is a deliberate act, not a side-effect of a
+# merge. The repo maintainer triggers this from the GitHub UI
+# (Actions → Publish alto-core → Run workflow) after bumping the
+# version in src/alto_core/__init__.py and updating CHANGELOG.md.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish"
+        required: true
+        default: "testpypi"
+        type: choice
+        options:
+          - testpypi
+          - pypi
+
+# Trusted Publishing (PEP 740 / OIDC) needs `id-token: write`. No
+# long-lived PyPI token is stored as a GitHub secret — the workflow
+# exchanges its OIDC token for a short-lived PyPI credential at
+# upload time.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/alto-core
+    # Map the dispatch input to an Environment so PyPI/TestPyPI rules
+    # (required reviewers, branch protection) can be configured per
+    # target without touching this file.
+    environment:
+      name: ${{ inputs.target }}
+      url: ${{ inputs.target == 'pypi' && 'https://pypi.org/project/alto-core/' || 'https://test.pypi.org/project/alto-core/' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build tooling
+        run: pip install build
+
+      - name: Build wheel + sdist
+        run: python -m build
+
+      - name: Smoke-install the wheel
+        # Catch packaging regressions before they reach the index.
+        # Same check as scripts/release-alto-core.sh.
+        run: |
+          python -m venv /tmp/wheel-smoke
+          /tmp/wheel-smoke/bin/pip install dist/*.whl
+          /tmp/wheel-smoke/bin/python -c "
+          from alto_core import (
+              CorrectionPipeline, BaseProvider, PipelineObserver, OutputWriter,
+              parse_alto_file, build_document_manifest, rewrite_alto_file,
+              DocumentManifest, LineManifest, HyphenRole, sanitize_error,
+          )
+          import alto_core
+          print(f'smoke ok: alto-core {alto_core.__version__}')
+          "
+
+      - name: Publish to TestPyPI (Trusted Publishing OIDC)
+        if: inputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: packages/alto-core/dist/
+
+      - name: Publish to PyPI (Trusted Publishing OIDC)
+        if: inputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/alto-core/dist/
+
+      - name: Upload distribution artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alto-core-dist-${{ inputs.target }}
+          path: packages/alto-core/dist/
+          if-no-files-found: error
