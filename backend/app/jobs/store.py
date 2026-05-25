@@ -9,7 +9,14 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from app.schemas import JobManifest, JobStatus, Provider, SSEEvent
+from app.schemas import (
+    DocumentManifest,
+    JobManifest,
+    JobStatus,
+    LineTrace,
+    Provider,
+    SSEEvent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +50,53 @@ class JobStore:
     def get_job(self, job_id: str) -> JobManifest | None:
         return self._jobs.get(job_id)
 
-    def update_job(self, job_id: str, **kwargs: Any) -> None:
+    def update_job(
+        self,
+        job_id: str,
+        *,
+        status: JobStatus | None = None,
+        document_manifest: DocumentManifest | None = None,
+        total_lines: int | None = None,
+        lines_modified: int | None = None,
+        chunks_total: int | None = None,
+        retries: int | None = None,
+        fallbacks: int | None = None,
+        duration_seconds: float | None = None,
+        error: str | None = None,
+        images: dict[str, str] | None = None,
+        line_traces: dict[str, LineTrace] | None = None,
+    ) -> None:
+        """Update mutable fields on the job manifest. None means "do not touch".
+
+        Misnamed kwargs are caught at definition time by the static type
+        checker; bad values for typed fields raise ValidationError at
+        assignment thanks to JobManifest.model_config["validate_assignment"].
+        """
         job = self._jobs.get(job_id)
         if job is None:
             return
-        for k, v in kwargs.items():
-            setattr(job, k, v)
+        if status is not None:
+            job.status = status
+        if document_manifest is not None:
+            job.document_manifest = document_manifest
+        if total_lines is not None:
+            job.total_lines = total_lines
+        if lines_modified is not None:
+            job.lines_modified = lines_modified
+        if chunks_total is not None:
+            job.chunks_total = chunks_total
+        if retries is not None:
+            job.retries = retries
+        if fallbacks is not None:
+            job.fallbacks = fallbacks
+        if duration_seconds is not None:
+            job.duration_seconds = duration_seconds
+        if error is not None:
+            job.error = error
+        if images is not None:
+            job.images = images
+        if line_traces is not None:
+            job.line_traces = line_traces
         # Track when a job reaches terminal state for eviction
         if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
             self._completed_at.setdefault(job_id, time.monotonic())

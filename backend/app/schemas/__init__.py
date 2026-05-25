@@ -161,6 +161,12 @@ class ChunkPlan(BaseModel):
 
 
 class JobManifest(BaseModel):
+    # validate_assignment turns silent typos into ValidationError at write
+    # time — paired with the typed JobStore.update_job signature, this
+    # prevents a misnamed kwarg from quietly creating a bogus attribute
+    # that won't round-trip on serialisation.
+    model_config = {"validate_assignment": True}
+
     job_id: str
     provider: Provider
     model: str

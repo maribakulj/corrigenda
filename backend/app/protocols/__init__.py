@@ -69,7 +69,22 @@ class JobStore(Protocol):
 
     def get_job(self, job_id: str) -> JobManifest | None: ...
 
-    def update_job(self, job_id: str, **kwargs: Any) -> None: ...
+    def update_job(
+        self,
+        job_id: str,
+        *,
+        status: JobStatus | None = None,
+        document_manifest: Any | None = None,
+        total_lines: int | None = None,
+        lines_modified: int | None = None,
+        chunks_total: int | None = None,
+        retries: int | None = None,
+        fallbacks: int | None = None,
+        duration_seconds: float | None = None,
+        error: str | None = None,
+        images: dict[str, str] | None = None,
+        line_traces: dict[str, Any] | None = None,
+    ) -> None: ...
 
     def emit(self, job_id: str, event: str, data: dict[str, Any]) -> None: ...
 
