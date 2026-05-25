@@ -1,7 +1,9 @@
 """Tests for /health/live, /health/ready, and slowapi rate limiting
-(Stage 4.D)."""
+(Stage 4.D + roadmap L2)."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -45,6 +47,56 @@ def test_legacy_health_still_works(client: TestClient):
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+def test_health_ready_does_not_create_storage_dir(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Roadmap L2 (B2) — readiness probe must NOT mutate the filesystem.
+
+    A probe scraped every second by an orchestrator must not create
+    directories as a side effect: doing so (a) masks a genuine
+    'storage dir missing' bug since the probe silently provisions it,
+    and (b) makes the endpoint non-idempotent in shared environments.
+    """
+    target = tmp_path / "should-not-be-created-by-probe"
+    assert not target.exists()
+    monkeypatch.setenv("JOB_STORAGE_DIR", str(target))
+
+    client.get("/health/ready")
+
+    # Whatever the response (200 or 503), the directory must NOT have
+    # been created. The check is the side-effect, not the status code.
+    assert not target.exists(), (
+        "/health/ready created the storage dir on disk — readiness probes must be observation-only"
+    )
+
+
+def test_health_ready_returns_503_when_storage_not_writable(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Roadmap L2 — exercise the degraded branch end-to-end.
+
+    Uses a regular file as ``JOB_STORAGE_DIR`` so the writability
+    check fails deterministically regardless of the user running the
+    test (chmod-based read-only tricks break under root in CI
+    containers).
+    """
+    blocker = tmp_path / "i-am-a-file-not-a-dir.txt"
+    blocker.write_bytes(b"x")
+    monkeypatch.setenv("JOB_STORAGE_DIR", str(blocker))
+
+    resp = client.get("/health/ready")
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["job_store"] == "ok"
+    assert body["checks"]["storage_dir"].startswith("error:")
 
 
 # ---------------------------------------------------------------------------

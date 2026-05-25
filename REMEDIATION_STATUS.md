@@ -1,6 +1,6 @@
 # Remediation status — alto-llm-corrector
 
-Last updated: 2026-05-25 (session L1)
+Last updated: 2026-05-25 (session L2)
 Branch: `claude/vibrant-pascal-STfnR`
 
 Roadmap reference: voir conversation (sections 5 et 6 du plan validé).
@@ -10,8 +10,8 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 
 | Lot/Session | Statut       | Commits     | Notes |
 |-------------|--------------|-------------|-------|
-| L1          | done         | (this push) | size-limit + preset-app added |
-| L2          | not started  | —           | health endpoints (B2, B3) |
+| L1          | done         | `f0270ed`   | size-limit + preset-app added |
+| L2          | done         | (this push) | health/ready observation-only + off-loop |
 | L3          | not started  | —           | proxy headers + middleware (R1, R2) |
 | L4          | not started  | —           | pipeline tests P0 (B4, T0a-d) |
 | L5          | not started  | —           | alto-core release readiness (B5, A5, B6, P3, P8) |
@@ -21,7 +21,10 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 
 ## Done
 
-- **B1** — `size-limit` + `@size-limit/preset-app` added to `frontend/devDependencies` (L1). `npx size-limit` exits 0, reports JS 49.77 KB / 75 KB budget, CSS 3.88 KB / 10 KB budget.
+- **B1** — `size-limit` + `@size-limit/preset-app` added to `frontend/devDependencies` (L1, commit `f0270ed`). `npx size-limit` exits 0, reports JS 49.77 KB / 75 KB budget, CSS 3.88 KB / 10 KB budget.
+- **B2** — `/health/ready` no longer mutates the filesystem (L2). Replaced `mkdir + write_bytes + unlink` with `path.is_dir() and os.access(path, os.W_OK)`. New test `test_health_ready_does_not_create_storage_dir` characterises the contract (failed against old code, passes against new).
+- **B3** — `/health/ready` storage check runs off the event loop via `asyncio.to_thread` (L2). Even an `os.access` syscall can stall asyncio for tens of ms on NFS/overlay FS, freezing concurrent SSE streams. Wrapping in `to_thread` prevents that.
+- Bonus coverage: new test `test_health_ready_returns_503_when_storage_not_writable` exercises the degraded branch end-to-end (uses a file-not-dir as `JOB_STORAGE_DIR` for deterministic failure regardless of test-runner user).
 
 ## In progress
 
@@ -33,7 +36,7 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 
 ## Remaining
 
-- B2, B3, R1, R2, B4, A5, B5, B6, P3, P8, T0a, T0b, T0c, T0d, A1, A2, A3, A9, P5, P6, P7, T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6.
+- R1, R2, B4, A5, B5, B6, P3, P8, T0a, T0b, T0c, T0d, A1, A2, A3, A9, P5, P6, P7, T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6.
 
 ## New bugs discovered
 
@@ -44,12 +47,16 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 
 ## Tests added
 
-- (none — L1 is a packaging fix, no test required per roadmap §5/L1)
+- L1: none (packaging fix).
+- L2:
+  - `test_health_ready_does_not_create_storage_dir` (B2 characterisation — failed against old code).
+  - `test_health_ready_returns_503_when_storage_not_writable` (degraded-branch end-to-end coverage, previously missing).
 
 ## Tests count evolution
 
 - Baseline (avant L1): 329 backend + 4 alto-core + 12 frontend = 345 total.
 - Après L1: unchanged (345). L1 ne touche pas de tests.
+- Après L2: 331 backend + 4 alto-core + 12 frontend = 347 total (+2).
 
 ## Coverage evolution
 

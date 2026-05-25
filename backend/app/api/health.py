@@ -20,6 +20,7 @@ rate-limit middleware that may sit in front of the app.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -38,6 +39,17 @@ async def live() -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+def _storage_writable(path: Path) -> bool:
+    """True iff ``path`` is an existing directory we have write access to.
+
+    Observation-only: never creates, writes to, or unlinks anything.
+    A readiness probe that mutates the filesystem (a) silently masks a
+    genuine "storage dir missing" bug by provisioning it, and (b) is
+    non-idempotent under high probe frequency.
+    """
+    return path.is_dir() and os.access(path, os.W_OK)
+
+
 @router.get("/health/ready", include_in_schema=False)
 async def ready(
     store: JobStore = Depends(get_job_store),
@@ -53,16 +65,17 @@ async def ready(
     except Exception as exc:
         checks["job_store"] = f"error: {type(exc).__name__}"
 
-    # Storage directory must exist and be writable.
+    # Storage directory check runs off the event loop: even a single
+    # `os.access` syscall can stall asyncio for tens of milliseconds on
+    # a slow filesystem (NFS, container overlay under pressure), which
+    # in turn freezes every concurrent SSE stream the server is serving.
     storage_dir = Path(os.environ.get("JOB_STORAGE_DIR", "/tmp/app-jobs"))
     try:
-        storage_dir.mkdir(parents=True, exist_ok=True)
-        probe = storage_dir / ".readiness_probe"
-        probe.write_bytes(b"ok")
-        probe.unlink(missing_ok=True)
-        checks["storage_dir"] = "ok"
+        is_writable = await asyncio.to_thread(_storage_writable, storage_dir)
     except Exception as exc:
         checks["storage_dir"] = f"error: {type(exc).__name__}"
+    else:
+        checks["storage_dir"] = "ok" if is_writable else "error: not writable"
 
     healthy = all(v == "ok" for v in checks.values())
     return JSONResponse(
