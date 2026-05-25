@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,21 @@ from app.schemas import DocumentManifest, JobStatus
 from app.storage.output_writer import FilesystemOutputWriter
 
 logger = logging.getLogger(__name__)
+
+
+def _default_timeout_from_env() -> int:
+    """Resolve JOB_TIMEOUT_SECONDS once at import. 0 disables the timeout."""
+    try:
+        return int(os.environ.get("JOB_TIMEOUT_SECONDS", "1800"))
+    except ValueError:
+        warnings.warn(
+            "JOB_TIMEOUT_SECONDS env var is not a valid integer; using default 1800s",
+            stacklevel=1,
+        )
+        return 1800
+
+
+DEFAULT_JOB_TIMEOUT_SECONDS: int = _default_timeout_from_env()
 
 
 class _JobStoreObserver:

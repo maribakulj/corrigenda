@@ -25,7 +25,7 @@ from typing import Any
 import pytest
 
 from app.alto.parser import build_document_manifest
-from app.jobs.orchestrator import run_job
+from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider
 
@@ -68,7 +68,7 @@ def _run_and_capture(xml_path: Path) -> dict[str, Any]:
         out_dir = Path(td)
         doc = build_document_manifest([(xml_path, xml_path.name)])
         asyncio.run(
-            run_job(
+            JobRunner(job_store=store).run(
                 job_id=job_id,
                 document_manifest=doc,
                 provider_name="openai",
@@ -77,7 +77,6 @@ def _run_and_capture(xml_path: Path) -> dict[str, Any]:
                 output_dir=out_dir,
                 source_files={xml_path.name: xml_path},
                 provider=_IdentityProvider(),
-                job_store_override=store,
             )
         )
         job = store.get_job(job_id)

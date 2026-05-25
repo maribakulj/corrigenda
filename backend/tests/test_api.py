@@ -245,7 +245,7 @@ def test_download_not_ready(client: TestClient):
 def test_download_single_xml(client: TestClient):
     """Complete a job synchronously then download the output XML."""
     from app.alto.parser import build_document_manifest
-    from app.jobs.orchestrator import run_job
+    from app.jobs.runner import JobRunner
     from app.storage import init_job_dirs, output_dir, save_uploaded_files
 
     store = client.app.state.job_store
@@ -260,7 +260,7 @@ def test_download_single_xml(client: TestClient):
     out_dir = output_dir(job_id)
 
     asyncio.run(
-        run_job(
+        JobRunner(job_store=store).run(
             job_id=job_id,
             document_manifest=doc,
             provider_name="openai",
@@ -269,7 +269,6 @@ def test_download_single_xml(client: TestClient):
             output_dir=out_dir,
             source_files={n: p for n, p in saved.items()},
             provider=MockProvider(),
-            job_store_override=store,
         )
     )
 

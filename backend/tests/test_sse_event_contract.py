@@ -26,7 +26,7 @@ from typing import Any
 import pytest
 
 from app.alto.parser import build_document_manifest
-from app.jobs.orchestrator import run_job
+from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider, SSEEvent
 
@@ -96,7 +96,7 @@ async def _collect_events(tmp_path: Path, provider: _MockProvider) -> list[str]:
     queue = store.subscribe(job_id)
 
     doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-    await run_job(
+    await JobRunner(job_store=store).run(
         job_id=job_id,
         document_manifest=doc,
         provider_name="openai",
@@ -105,7 +105,6 @@ async def _collect_events(tmp_path: Path, provider: _MockProvider) -> list[str]:
         output_dir=tmp_path,
         source_files={SAMPLE_XML.name: SAMPLE_XML},
         provider=provider,
-        job_store_override=store,
     )
 
     events: list[str] = []

@@ -25,7 +25,7 @@ import pytest
 
 from app.alto.parser import build_document_manifest
 from app.jobs.correction_pipeline import CorrectionPipeline
-from app.jobs.orchestrator import run_job
+from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider
 
@@ -74,7 +74,7 @@ async def test_runner_does_not_leak_partial_api_key_across_500_boundary(
 
     store, job_id = _make_store_and_job()
     doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-    await run_job(
+    await JobRunner(job_store=store).run(
         job_id=job_id,
         document_manifest=doc,
         provider_name="openai",
@@ -83,7 +83,6 @@ async def test_runner_does_not_leak_partial_api_key_across_500_boundary(
         output_dir=tmp_path,
         source_files={SAMPLE_XML.name: SAMPLE_XML},
         provider=_NullProvider(),
-        job_store_override=store,
     )
 
     job = store.get_job(job_id)
@@ -120,7 +119,7 @@ async def test_runner_sanitizes_short_message_with_key(
 
     store, job_id = _make_store_and_job()
     doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-    await run_job(
+    await JobRunner(job_store=store).run(
         job_id=job_id,
         document_manifest=doc,
         provider_name="openai",
@@ -129,7 +128,6 @@ async def test_runner_sanitizes_short_message_with_key(
         output_dir=tmp_path,
         source_files={SAMPLE_XML.name: SAMPLE_XML},
         provider=_NullProvider(),
-        job_store_override=store,
     )
 
     job = store.get_job(job_id)

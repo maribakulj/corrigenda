@@ -11,7 +11,7 @@ import pytest
 
 from app.alto.parser import build_document_manifest, parse_alto_file
 from app.alto.rewriter import extract_output_texts, rewrite_alto_file
-from app.jobs.orchestrator import run_job
+from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.schemas import (
     HyphenRole,
@@ -139,7 +139,7 @@ def _run_job_with_traces(
 
     out_dir = output_dir(job_id)
     _run(
-        run_job(
+        JobRunner(job_store=store).run(
             job_id=job_id,
             document_manifest=doc,
             provider_name="openai",
@@ -148,7 +148,6 @@ def _run_job_with_traces(
             output_dir=out_dir,
             source_files={n: p for n, p in saved.items()},
             provider=provider,
-            job_store_override=store,
         )
     )
 
