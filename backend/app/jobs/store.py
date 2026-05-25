@@ -16,6 +16,7 @@ from app.schemas import (
     LineTrace,
     Provider,
     SSEEvent,
+    SSEEventType,
 )
 
 logger = logging.getLogger(__name__)
@@ -150,7 +151,7 @@ class JobStore:
                     if event.event in ("completed", "failed"):
                         break
                 except TimeoutError:
-                    yield SSEEvent(event="keepalive", data={})
+                    yield SSEEvent(event=SSEEventType.KEEPALIVE, data={})
         finally:
             self.unsubscribe(job_id, queue)
 

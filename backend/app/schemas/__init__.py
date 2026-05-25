@@ -47,6 +47,41 @@ class HyphenRole(str, Enum):
     BOTH = "HypBoth"  # PART2 of previous pair AND PART1 of next pair (chained)
 
 
+class SSEEventType(str, Enum):
+    """Canonical event names emitted by the correction pipeline.
+
+    This enum is the authoritative source of truth shared with the
+    frontend's ``frontend/src/hooks/useJobStream.ts::EVENTS`` list. Any
+    new event MUST appear in both places; ``tests/test_sse_event_contract``
+    enforces the subset relation at every CI run.
+
+    The string values stay stable across releases — they are part of the
+    SSE wire contract.
+    """
+
+    # Pipeline lifecycle (runner)
+    STARTED = "started"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+    # Document / page / chunk lifecycle (correction_pipeline)
+    DOCUMENT_PARSED = "document_parsed"
+    PAGE_STARTED = "page_started"
+    PAGE_COMPLETED = "page_completed"
+    CHUNK_PLANNED = "chunk_planned"
+    CHUNK_STARTED = "chunk_started"
+    CHUNK_COMPLETED = "chunk_completed"
+    RETRY = "retry"
+    WARNING = "warning"
+
+    # Frontend-only initial state (kept in the enum so the contract test
+    # can verify the frontend list against this set).
+    QUEUED = "queued"
+
+    # Stream keep-alive (emitted by JobStore.stream_events, not the pipeline)
+    KEEPALIVE = "keepalive"
+
+
 # ---------------------------------------------------------------------------
 # Geometry
 # ---------------------------------------------------------------------------

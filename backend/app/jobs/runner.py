@@ -19,7 +19,7 @@ from typing import Any
 
 from app.jobs.correction_pipeline import CorrectionPipeline, sanitize_error
 from app.protocols import BaseProvider, JobStore
-from app.schemas import DocumentManifest, JobStatus
+from app.schemas import DocumentManifest, JobStatus, SSEEventType
 from app.storage.output_writer import FilesystemOutputWriter
 
 logger = logging.getLogger(__name__)
@@ -120,7 +120,7 @@ class JobRunner:
 
             self.job_store.emit(
                 job_id,
-                "completed",
+                SSEEventType.COMPLETED,
                 {
                     "job_id": job_id,
                     "total_lines": document_manifest.total_lines,
@@ -141,7 +141,9 @@ class JobRunner:
                 error=safe_error,
                 duration_seconds=elapsed,
             )
-            self.job_store.emit(job_id, "failed", {"job_id": job_id, "error": safe_error})
+            self.job_store.emit(
+                job_id, SSEEventType.FAILED, {"job_id": job_id, "error": safe_error}
+            )
 
         except Exception as exc:
             logger.exception("Job %s failed", job_id)
@@ -157,7 +159,7 @@ class JobRunner:
             )
             self.job_store.emit(
                 job_id,
-                "failed",
+                SSEEventType.FAILED,
                 {
                     "job_id": job_id,
                     "error": safe_error,
@@ -178,7 +180,7 @@ class JobRunner:
     ) -> tuple[int, int]:
         """Drive the pure pipeline and persist its counters back."""
         self.job_store.update_job(job_id, status=JobStatus.STARTED)
-        self.job_store.emit(job_id, "started", {"job_id": job_id})
+        self.job_store.emit(job_id, SSEEventType.STARTED, {"job_id": job_id})
 
         self.job_store.update_job(
             job_id,

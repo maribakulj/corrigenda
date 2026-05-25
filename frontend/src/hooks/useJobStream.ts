@@ -73,6 +73,9 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
 
     let cancelled = false
     const MAX_RETRIES = 3
+    // Mirror of backend/app/schemas/__init__.py::SSEEventType. Every new
+    // event MUST appear in both places; backend/tests/test_sse_event_contract
+    // enforces the subset relation at every CI run.
     const EVENTS = [
       'queued', 'started', 'document_parsed', 'page_started',
       'chunk_planned', 'chunk_started', 'chunk_completed',

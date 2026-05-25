@@ -44,6 +44,7 @@ from app.schemas import (
     LLMResponse,
     LLMUserPayload,
     PageManifest,
+    SSEEventType,
 )
 
 logger = logging.getLogger(__name__)
@@ -346,7 +347,7 @@ class CorrectionPipeline:
         )
 
         self.observer.on_event(
-            "document_parsed",
+            SSEEventType.DOCUMENT_PARSED,
             {
                 "total_pages": document_manifest.total_pages,
                 "total_lines": document_manifest.total_lines,
@@ -442,7 +443,7 @@ class CorrectionPipeline:
             1 for lm in page.lines if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
         )
         self.observer.on_event(
-            "page_started",
+            SSEEventType.PAGE_STARTED,
             {
                 "page_id": page.page_id,
                 "page_index": page.page_index,
@@ -454,7 +455,7 @@ class CorrectionPipeline:
         plan = plan_page(page, document_id, self.config)
 
         self.observer.on_event(
-            "chunk_planned",
+            SSEEventType.CHUNK_PLANNED,
             {
                 "page_id": page.page_id,
                 "chunk_count": len(plan.chunks),
@@ -482,7 +483,7 @@ class CorrectionPipeline:
             except Exception as exc:
                 logger.exception("Chunk %s raised unexpectedly", chunk.chunk_id)
                 self.observer.on_event(
-                    "warning",
+                    SSEEventType.WARNING,
                     {
                         "chunk_id": chunk.chunk_id,
                         "message": str(exc)[:200],
@@ -497,7 +498,7 @@ class CorrectionPipeline:
             if lm.corrected_text is not None and lm.corrected_text != lm.ocr_text
         )
         self.observer.on_event(
-            "page_completed",
+            SSEEventType.PAGE_COMPLETED,
             {
                 "page_id": page.page_id,
                 "page_index": page.page_index,
@@ -642,7 +643,7 @@ class CorrectionPipeline:
                     chunk.chunk_id,
                 )
                 self.observer.on_event(
-                    "warning",
+                    SSEEventType.WARNING,
                     {
                         "chunk_id": chunk.chunk_id,
                         "message": f"Fallback to OCR source: {msg[:120]}",
@@ -685,7 +686,7 @@ class CorrectionPipeline:
         all_lines_by_id = line_by_id
 
         self.observer.on_event(
-            "chunk_started",
+            SSEEventType.CHUNK_STARTED,
             {
                 "chunk_id": chunk.chunk_id,
                 "granularity": chunk.granularity.value,
@@ -744,7 +745,7 @@ class CorrectionPipeline:
                     trace.fallback_reason = dup_reverts[lm.line_id]
 
         self.observer.on_event(
-            "chunk_completed",
+            SSEEventType.CHUNK_COMPLETED,
             {
                 "chunk_id": chunk.chunk_id,
                 "line_count": len(chunk_lines),
