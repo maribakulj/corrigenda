@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -198,6 +198,15 @@ class ChunkPlan(BaseModel):
 
 class JobManifest(BaseModel):
     """Server-side record of a correction job — status, counters, and trace data."""
+
+    # L10/F6 — `JobStore.update_job` mutates fields via `setattr(job, k, v)`
+    # in a loop. Pydantic v2's default `validate_assignment=False` would
+    # silently accept any type at assignment time, so a typo like
+    # `update_job(jid, status="garbage")` lands a string into the enum
+    # field; downstream `job.status.value` then crashes far from the
+    # original mistake. Turning validation on at assignment surfaces
+    # the bug at the offending call-site immediately.
+    model_config = ConfigDict(validate_assignment=True)
 
     job_id: str
     provider: Provider

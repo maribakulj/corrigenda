@@ -294,6 +294,77 @@ async def test_stream_events_does_not_lose_terminal_during_subscribe_race(monkey
 
 
 # ---------------------------------------------------------------------------
+# L10/F6 — JobManifest must reject bad-typed setattr
+# ---------------------------------------------------------------------------
+
+
+def test_jobmanifest_rejects_invalid_status_via_setattr():
+    """L10/F6 — `JobStore.update_job` loops `setattr(job, k, v)` over
+    its kwargs. Without `validate_assignment=True` on the model,
+    Pydantic v2 silently accepts wrong types — e.g.
+    `update_job(jid, status="garbage")` writes the literal string
+    into the status enum field. Downstream `job.status.value` (e.g.
+    in the SSE generator and API response) then crashes with
+    AttributeError far from the offending caller.
+
+    With `validate_assignment=True`, the bad setattr raises
+    ValidationError immediately, surfacing the real bug at the
+    offending callsite.
+    """
+    from alto_core.schemas import JobManifest
+    from pydantic import ValidationError
+
+    job = JobManifest(job_id="j1", provider=Provider.OPENAI, model="m")
+    with pytest.raises(ValidationError):
+        job.status = "totally not a JobStatus enum"  # type: ignore[assignment]
+
+
+def test_update_job_rejects_wrong_typed_field():
+    """L10/F6 integration — `update_job` should now propagate the
+    ValidationError from the underlying setattr, not silently corrupt
+    the field. We use a fresh JobStore to avoid touching other jobs."""
+    from pydantic import ValidationError
+
+    store = JobStore()
+    jid = store.create_job(Provider.OPENAI, "m")
+    with pytest.raises(ValidationError):
+        store.update_job(jid, status="garbage")
+
+
+# ---------------------------------------------------------------------------
+# L10/F7 — get_job must return a snapshot, not the live reference
+# ---------------------------------------------------------------------------
+
+
+def test_get_job_returns_snapshot_not_live_reference():
+    """L10/F7 — pre-fix `get_job` returned the live `JobManifest` from
+    `_jobs`. Callers reading multiple attributes could observe an
+    inconsistent state when `update_job` mutated the same object
+    mid-read. The fix returns `job.model_copy()` under the lock so
+    the caller has a frozen-in-time snapshot.
+
+    The contract pinned here: mutating the returned object MUST NOT
+    affect the in-store record. Pre-fix, mutating the returned ref
+    DID affect the store (because it was the store's own object).
+    """
+    store = JobStore()
+    jid = store.create_job(Provider.OPENAI, "m")
+    store.update_job(jid, total_lines=10, lines_modified=3)
+
+    snapshot = store.get_job(jid)
+    assert snapshot is not None
+    # Mutate the snapshot.
+    snapshot.lines_modified = 99
+    # Re-fetch the store record; it must NOT reflect the mutation.
+    fresh = store.get_job(jid)
+    assert fresh is not None
+    assert fresh.lines_modified == 3, (
+        f"get_job returned a live reference instead of a snapshot — "
+        f"mutating the result polluted the store (lines_modified={fresh.lines_modified})."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Subscriber cap (L10/F10) — prevent SSE-connection-flood DoS
 # ---------------------------------------------------------------------------
 

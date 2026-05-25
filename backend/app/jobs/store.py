@@ -67,8 +67,20 @@ class JobStore:
             return job_id
 
     def get_job(self, job_id: str) -> JobManifest | None:
-        # Single dict.get is atomic in CPython; no lock needed.
-        return self._jobs.get(job_id)
+        # L10/F7 — return a SNAPSHOT (model_copy) under the lock so the
+        # caller sees a consistent view across multiple attribute reads.
+        # Pre-fix this returned the live `_jobs[job_id]` reference, so an
+        # HTTP handler doing `job.status; job.total_lines; job.retries;
+        # job.error` (eight reads in JobStatusResponse) could observe an
+        # `update_job` in flight and emit a torn payload (e.g. status =
+        # COMPLETED but counters from the pre-completion update).
+        # Snapshot cost: ~1 dict-copy + recursive submodel copies; cheap
+        # given the read frequency.
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            return job.model_copy()
 
     def update_job(self, job_id: str, **kwargs: Any) -> None:
         with self._lock:
