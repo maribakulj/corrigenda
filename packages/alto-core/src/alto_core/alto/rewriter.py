@@ -8,7 +8,7 @@ from pathlib import Path
 from lxml import etree
 
 from alto_core.alto._norm import clean_content, nfc
-from alto_core.alto._ns import _detect_namespace, _tag
+from alto_core.alto._ns import _detect_namespace, _tag, make_safe_parser
 from alto_core.schemas import HyphenRole, LineManifest, PageManifest
 
 # ---------------------------------------------------------------------------
@@ -542,7 +542,10 @@ def rewrite_alto_file(
     Returns (rewritten_xml_bytes, metrics, line_rewriter_paths).
     line_rewriter_paths maps line_id → "untouched"/"subs_only"/"fast_path"/"slow_path".
     """
-    tree = etree.parse(str(xml_path))
+    # Hardened parser — see alto_core.alto._ns.make_safe_parser docstring
+    # for the rationale. Using lxml's default here would expose every
+    # rewrite to entity-amplification DoS via crafted ALTO uploads.
+    tree = etree.parse(str(xml_path), make_safe_parser())
     root = tree.getroot()
     ns = _detect_namespace(root)
     metrics = RewriterMetrics()
@@ -612,7 +615,11 @@ def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]
     Uses the same _extract_text_from_line logic as the rewriter's
     _line_text_unchanged check, ensuring consistency with parser normalization.
     """
-    root = etree.fromstring(xml_bytes)
+    # Hardened parser — see alto_core.alto._ns.make_safe_parser. The
+    # bytes here are typically the OUTPUT of rewrite_alto_file but the
+    # function is documented as accepting arbitrary ALTO bytes, so we
+    # treat them as untrusted.
+    root = etree.fromstring(xml_bytes, make_safe_parser())
     ns = _detect_namespace(root)
     textline_tag = _tag("TextLine", ns)
     result: dict[str, str] = {}

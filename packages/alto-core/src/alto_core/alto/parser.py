@@ -5,7 +5,7 @@ from pathlib import Path
 
 from lxml import etree
 
-from alto_core.alto._ns import _detect_namespace, _tag
+from alto_core.alto._ns import _detect_namespace, _tag, make_safe_parser
 from alto_core.schemas import (
     BlockManifest,
     Coords,
@@ -245,8 +245,9 @@ def parse_alto_file(
     """
     Parse one ALTO XML file and return (list_of_PageManifest, root_element).
     """
-    parser = etree.XMLParser(resolve_entities=False, no_network=True)
-    tree = etree.parse(str(xml_path), parser)
+    # Hardened parser shared with rewriter.py + extract_output_texts.
+    # See alto_core.alto._ns.make_safe_parser docstring.
+    tree = etree.parse(str(xml_path), make_safe_parser())
     root = tree.getroot()
     ns = _detect_namespace(root)
 

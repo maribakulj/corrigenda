@@ -1,7 +1,10 @@
-"""Shared ALTO XML namespace helpers.
+"""Shared ALTO XML namespace + low-level parser helpers.
 
 Both parser.py and rewriter.py need identical _detect_namespace / _tag
-logic. Centralising here prevents the two copies drifting apart.
+logic plus the SAME hardened lxml parser configuration. Centralising
+here prevents the parser config drifting between call sites — a class
+of bug a hostile audit caught pre-L10 (the rewriter was using lxml's
+default parser, exposing it to entity-expansion DoS).
 """
 
 from __future__ import annotations
@@ -25,5 +28,41 @@ def _tag(local: str, ns: str) -> str:
     return f"{{{ns}}}{local}" if ns else local
 
 
+def make_safe_parser() -> etree.XMLParser:
+    """Return an lxml parser hardened against XXE / SSRF / entity-amplification.
+
+    The four flags together neutralise the well-known XML attack surface:
+
+      - ``resolve_entities=False`` — do not expand ``&entity;`` references.
+        Defeats internal-entity amplification ("billion laughs") and any
+        residual external-entity leak across lxml versions.
+      - ``no_network=True`` — refuse to fetch external DTDs / entities.
+        Defeats SSRF via ``<!DOCTYPE x SYSTEM "http://...">``.
+      - ``load_dtd=False`` — do not load any DTD (inline or external).
+        Defence in depth on top of ``no_network``.
+      - ``dtd_validation=False`` — do not validate against a DTD. Default
+        already; pinned here for clarity (a future maintainer flipping
+        validation on would silently re-enable DTD loading).
+
+    Returns a FRESH parser instance per call: lxml parsers are not
+    documented as thread-safe and the construction cost is microseconds.
+
+    Use this for EVERY ``etree.parse`` / ``etree.fromstring`` call that
+    touches user-controlled XML — the grep-based contract test in
+    ``packages/alto-core/tests/test_xml_security.py`` trips on any
+    call site that doesn't.
+    """
+    return etree.XMLParser(
+        resolve_entities=False,
+        no_network=True,
+        load_dtd=False,
+        dtd_validation=False,
+    )
+
+
 # --- __all__ (Stage 3 audit remediation) ---
+# `make_safe_parser` stays reachable via the private module path; the
+# 7 backend shims that used to forward this module's symbols were
+# deleted in L8/L9 — the canonical import is now
+# ``from alto_core.alto._ns import make_safe_parser``.
 __all__: list[str] = []

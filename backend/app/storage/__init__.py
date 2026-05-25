@@ -217,8 +217,12 @@ def link_alto_to_images(
         # Strategy 1: read sourceImageInformation/fileName from ALTO XML
         image_key: str | None = None
         try:
-            _parser = etree.XMLParser(resolve_entities=False, no_network=True)
-            tree = etree.parse(str(alto_path), _parser)
+            # Single source of truth for the hardened parser: shared
+            # with alto_core.alto.parser / rewriter — see
+            # alto_core.alto._ns.make_safe_parser docstring.
+            from alto_core.alto._ns import make_safe_parser
+
+            tree = etree.parse(str(alto_path), make_safe_parser())
             for el in tree.findall(".//{*}fileName"):
                 fname = (el.text or "").strip()
                 if fname:
