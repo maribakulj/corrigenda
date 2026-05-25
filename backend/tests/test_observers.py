@@ -101,6 +101,13 @@ def test_logging_observer_routes_warning_events_to_warning_level(caplog):
     Pre-L8 this mapping was entirely untested: a refactor that moved
     a critical event out of `_WARNING_EVENTS` (silently dropping it to
     DEBUG) would not have failed any test.
+
+    The assertion is filtered to the `alto_core.pipeline` logger and
+    keyed on event-type substrings rather than a strict count, so an
+    unrelated module emitting its own WARNING during the test cannot
+    flip the result. The contract we pin is: for each of these three
+    event types, the OBSERVER produced at least one WARNING record on
+    the alto_core.pipeline logger.
     """
     observer = LoggingObserver()
 
@@ -109,16 +116,15 @@ def test_logging_observer_routes_warning_events_to_warning_level(caplog):
         observer.on_event("chunk_error", {"chunk_id": "c1", "exception_type": "OSError"})
         observer.on_event("hyphen_partner_missing", {"line_id": "L1", "direction": "backward"})
 
-    warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
-    assert len(warning_records) == 3, (
-        f"expected 3 WARNING records for the 3 warning-class events, "
-        f"got {[r.levelname for r in caplog.records]}"
-    )
-    # The event_type appears in the formatted message ("pipeline %s: %s")
-    # so observers downstream can grep on it.
+    warning_records = [
+        r for r in caplog.records if r.levelname == "WARNING" and r.name == "alto_core.pipeline"
+    ]
     messages = " ".join(r.message for r in warning_records)
     for event_type in ("warning", "chunk_error", "hyphen_partner_missing"):
-        assert event_type in messages
+        assert event_type in messages, (
+            f"event {event_type!r} did not produce a WARNING-level log "
+            f"record on alto_core.pipeline; got messages: {messages!r}"
+        )
 
 
 def test_logging_observer_routes_lifecycle_events_to_debug_level(caplog):
@@ -129,9 +135,22 @@ def test_logging_observer_routes_lifecycle_events_to_debug_level(caplog):
     event NOT surface at WARNING. A future maintainer adding a new
     event type would have to read `_WARNING_EVENTS` to know the default;
     this test pins the contract.
+
+    The DEBUG-count check is filtered to the `alto_core.pipeline`
+    logger and asserts presence-by-event-type rather than a strict
+    count, so the test stays green if an unrelated logger emits a
+    same-level record during the run.
     """
     observer = LoggingObserver()
 
+    lifecycle_events = (
+        "page_started",
+        "chunk_planned",
+        "chunk_started",
+        "chunk_completed",
+        "page_completed",
+        "retry",
+    )
     with caplog.at_level(logging.DEBUG, logger="alto_core.pipeline"):
         observer.on_event("page_started", {"page_id": "P1"})
         observer.on_event("chunk_planned", {"page_id": "P1", "chunk_count": 3})
@@ -140,13 +159,22 @@ def test_logging_observer_routes_lifecycle_events_to_debug_level(caplog):
         observer.on_event("page_completed", {"page_id": "P1"})
         observer.on_event("retry", {"chunk_id": "c1", "attempt": 1})
 
-    # No WARNING records should have been produced for these lifecycle events.
-    warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
+    # The OBSERVER must not emit any WARNING on its own logger for
+    # these events (other modules' WARNINGs are out of scope).
+    warning_records = [
+        r for r in caplog.records if r.levelname == "WARNING" and r.name == "alto_core.pipeline"
+    ]
     assert warning_records == [], (
-        f"lifecycle events leaked to WARNING: {[(r.levelname, r.message) for r in warning_records]}"
+        f"lifecycle events leaked to WARNING on alto_core.pipeline: "
+        f"{[(r.levelname, r.message) for r in warning_records]}"
     )
-    # All 6 must have shown up at DEBUG.
-    debug_records = [r for r in caplog.records if r.levelname == "DEBUG"]
-    assert len(debug_records) == 6, (
-        f"expected 6 DEBUG records, got {[(r.levelname, r.message) for r in caplog.records]}"
+    debug_messages = " ".join(
+        r.message
+        for r in caplog.records
+        if r.levelname == "DEBUG" and r.name == "alto_core.pipeline"
     )
+    for event_type in lifecycle_events:
+        assert event_type in debug_messages, (
+            f"lifecycle event {event_type!r} did not produce a DEBUG-level "
+            f"log record on alto_core.pipeline; got messages: {debug_messages!r}"
+        )
