@@ -135,6 +135,128 @@ def test_validate_llm_response_rejects_whitespace_only_corrected_text(
         validate_llm_response(raw=raw, expected_line_ids=["L1"])
 
 
+# ---------------------------------------------------------------------------
+# B6 — hyphen heuristic must not fire on pure-numeric "ranges"
+# ---------------------------------------------------------------------------
+
+
+def _alto_with_two_lines(line1_text: str, line2_text: str, tmp_path: Path) -> Path:
+    p = tmp_path / "two_lines.xml"
+    p.write_bytes(
+        f"""<?xml version="1.0"?>
+<alto xmlns="http://www.loc.gov/standards/alto/ns-v4#">
+  <Layout>
+    <Page ID="P1" WIDTH="100" HEIGHT="100">
+      <PrintSpace>
+        <TextBlock ID="B1" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="100">
+          <TextLine ID="L1" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="10">
+            <String CONTENT="{line1_text}" HPOS="0" VPOS="0" WIDTH="50" HEIGHT="10"/>
+          </TextLine>
+          <TextLine ID="L2" HPOS="0" VPOS="20" WIDTH="100" HEIGHT="10">
+            <String CONTENT="{line2_text}" HPOS="0" VPOS="20" WIDTH="50" HEIGHT="10"/>
+          </TextLine>
+        </TextBlock>
+      </PrintSpace>
+    </Page>
+  </Layout>
+</alto>""".encode()
+    )
+    return p
+
+
+@pytest.mark.parametrize(
+    "first_line",
+    ["1789-", "n°5-", "-", "42-", "—"],
+    ids=["year_range", "num_with_dash", "lone_dash", "pure_numeric", "em_dash"],
+)
+def test_hyphen_heuristic_does_not_fire_on_non_alpha_trailing_dash(
+    first_line: str, tmp_path: Path
+):
+    """L10/B6 — pre-fix any token ending in `-` was flagged PART1.
+    Year ranges like `1789-\\n1799`, list numbers `n°5-`, lone
+    dashes, em-dashes all tripped it. The rewriter then emitted a
+    phantom HYP element for these false positives. The tightened
+    heuristic requires at least one alphabetic char before the
+    trailing dash."""
+    from alto_core.schemas import HyphenRole
+
+    p = _alto_with_two_lines(first_line, "1799", tmp_path)
+    pages, _root = parse_alto_file(p, "x.xml")
+    line1 = pages[0].lines[0]
+    assert line1.hyphen_role == HyphenRole.NONE, (
+        f"line {line1.line_id!r} was incorrectly tagged "
+        f"hyphen_role={line1.hyphen_role.value!r} for ocr_text={first_line!r}. "
+        f"The heuristic should only fire on word-break hyphens "
+        f"(alphabetic content before the trailing dash)."
+    )
+
+
+def test_hyphen_heuristic_still_fires_on_genuine_word_break(tmp_path: Path):
+    """Negative control — a normal word-break hyphen like "écri-" must
+    still be flagged PART1 after the heuristic tightening."""
+    from alto_core.schemas import HyphenRole
+
+    p = _alto_with_two_lines("écri-", "vain", tmp_path)
+    pages, _root = parse_alto_file(p, "x.xml")
+    line1 = pages[0].lines[0]
+    assert line1.hyphen_role == HyphenRole.PART1, (
+        f"genuine word-break hyphen (ocr_text='écri-') was NOT flagged "
+        f"PART1 — heuristic over-tightened. Got {line1.hyphen_role.value!r}."
+    )
+
+
+# ---------------------------------------------------------------------------
+# R2 — clean_content strips control + zero-width characters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw_text,expected",
+    [
+        ("hello\x00world", "helloworld"),  # NUL
+        ("a​b", "ab"),  # ZWSP
+        ("c‌d", "cd"),  # ZWNJ
+        ("e‍f", "ef"),  # ZWJ
+        ("﻿text", "text"),  # BOM
+        ("line1\nline2", "line1line2"),  # NL
+        ("\rcarriage", "carriage"),  # CR
+        ("tab\there", "tabhere"),  # TAB
+        ("c\x01trl\x7fchars", "ctrlchars"),  # SOH + DEL
+        ("clean text", "clean text"),  # no-op
+    ],
+    ids=[
+        "nul",
+        "zwsp",
+        "zwnj",
+        "zwj",
+        "bom",
+        "newline",
+        "carriage_return",
+        "tab",
+        "control_chars",
+        "noop",
+    ],
+)
+def test_clean_content_strips_invisible_and_control_chars(raw_text: str, expected: str):
+    """L10/R2 — pre-fix `clean_content` only stripped U+00AD. NUL bytes,
+    zero-width chars, newlines, tabs, and other C0/C1 control chars
+    survived and ended up in ALTO CONTENT attributes — corrupting
+    downstream character-indexed consumers and silently violating the
+    "no newline in corrected_text" invariant the validator pinned.
+    """
+    from alto_core.alto._norm import clean_content
+
+    assert clean_content(raw_text) == expected
+
+
+def test_clean_content_still_strips_soft_hyphen():
+    """Regression guard — the original behaviour (strip U+00AD) must
+    still hold after extending the function."""
+    from alto_core.alto._norm import clean_content
+
+    assert clean_content("ca­fé") == "café"
+
+
 def test_validate_llm_response_accepts_normal_text():
     """Symmetric — normal text content must still validate (no
     over-zealous rejection from the R3 fix)."""

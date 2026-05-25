@@ -201,12 +201,34 @@ def _parse_textline_hyphen_info(
                 if sc:
                     forward_subs = sc
 
-    # Heuristic: last non-space token ends with "-"
+    # Heuristic: last non-space token ends with "-" AND contains at
+    # least one alphabetic character before the trailing dash.
+    # L10/B6 — the pre-fix check accepted any token ending in "-",
+    # including pure-numeric forms ("1789-", "n°5-") and dialog
+    # em-dashes ("—"). A page like "Régnait de 1789-\n1799" would
+    # mark "1789-" as PART1 and "1799" as PART2; the rewriter
+    # would then emit a phantom HYP element on output. Requiring
+    # an alpha-before-dash narrows the heuristic to genuine
+    # word-break hyphens (the explicit SUBS_TYPE="HypPart1" path
+    # above still catches every legitimate hyphen pair flagged
+    # by the OCR engine itself).
     if not is_part1:
         tokens = line.ocr_text.split()
-        if tokens and tokens[-1].endswith("-"):
-            is_part1 = True
-            forward_explicit = False
+        if tokens:
+            last = tokens[-1]
+            if last.endswith("-"):
+                bare = last.rstrip("-")
+                # Require the character IMMEDIATELY before the dash to
+                # be alphabetic — that's the signature of a genuine
+                # word-break hyphen ("écri-", "infor-"). Pre-fix "any
+                # alpha anywhere" let `n°5-` slip through because "n"
+                # is alpha; a year range like `1789-` was rejected
+                # correctly, but mixed alpha-numeric like list numbers
+                # still produced false positives. Adjacent-alpha is
+                # the strict version of the original heuristic.
+                if bare and bare[-1].isalpha():
+                    is_part1 = True
+                    forward_explicit = False
 
     # --- Set role based on detection ---
     if is_part2 and is_part1:

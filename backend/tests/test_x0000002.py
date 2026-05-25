@@ -142,10 +142,14 @@ class TestX0000002Structure:
         explicit = [lm for lm in p1 if lm.hyphen_source_explicit]
         heuristic = [lm for lm in p1 if not lm.hyphen_source_explicit]
 
-        assert len(p1) == 104
+        # L10/B6 — heuristic dropped from 14 to 13 after the
+        # "alpha-before-dash" tightening eliminated one OCR-garbage
+        # line that had a non-alpha char before its trailing dash
+        # (was being detected as a phantom hyphen pair).
+        assert len(p1) == 103
         assert len(explicit) == 90
-        assert len(heuristic) == 14
-        assert len(p2) == 100  # was 125, 25 moved to BOTH
+        assert len(heuristic) == 13
+        assert len(p2) == 99  # was 125, 25 moved to BOTH, 1 dropped by L10/B6
         assert len(both) == 26  # chained hyphenation lines
 
     def test_linked_pairs(self):
@@ -159,7 +163,10 @@ class TestX0000002Structure:
             for lm in lines.values()
             if lm.hyphen_role == HyphenRole.PART1 and lm.hyphen_pair_line_id
         ]
-        assert len(linked_p1) == 100
+        # L10/B6 — one previously-linked PART1 was OCR-garbage
+        # (non-alpha before trailing dash); tightened heuristic
+        # correctly drops it.
+        assert len(linked_p1) == 99
 
         for lm in linked_p1:
             partner = lines.get(lm.hyphen_pair_line_id)
@@ -389,7 +396,8 @@ class TestX0000002ReconcileInvariant:
         rec = _reconcile_all_pairs(pages)
         # All pairs: correction == OCR text → neutralised
         assert rec.fallback == 0
-        assert rec.total == 126  # 100 PART1 + 26 BOTH forward pairs
+        # 99 PART1 (was 100, -1 from L10/B6 corpus invariant change) + 26 BOTH
+        assert rec.total == 125
 
     def test_coherent_pair_necessaires(self):
         """Simulated coherent correction for néces-/saires."""
