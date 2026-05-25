@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 
 interface FileUploadProps {
   onFilesChange: (files: File[]) => void
@@ -24,43 +24,40 @@ export function FileUpload({ onFilesChange, disabled }: FileUploadProps) {
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  function updateFiles(next: File[]) {
-    setFiles(next)
-    onFilesChange(next)
-  }
-
-  const addFiles = useCallback(
-    (incoming: FileList | null) => {
-      if (!incoming) return
-      const valid = Array.from(incoming).filter(isAllowed)
-      const merged = [...files]
+  // Functional setState lets these handlers read the current `files`
+  // without capturing it in a closure — so they don't need `useCallback`
+  // and the parent's `onFilesChange` is called exactly once per change
+  // with the up-to-date list. The earlier `useCallback([files, ...])`
+  // chain was eslint-clean but produced a new identity on every `files`
+  // change anyway, so the memoisation gave nothing.
+  function addFiles(incoming: FileList | null) {
+    if (!incoming) return
+    const valid = Array.from(incoming).filter(isAllowed)
+    setFiles((prev) => {
+      const merged = [...prev]
       for (const f of valid) {
         if (!merged.some((existing) => existing.name === f.name)) {
           merged.push(f)
         }
       }
-      updateFiles(merged)
-    },
-    // updateFiles closes over `setFiles` (stable) and `onFilesChange`
-    // (a prop, deliberately re-captured each render since the parent
-    // controls its identity). `files` is the only changing capture
-    // we need to track here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [files],
-  )
-
-  function removeFile(index: number) {
-    updateFiles(files.filter((_, i) => i !== index))
+      onFilesChange(merged)
+      return merged
+    })
   }
 
-  const onDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault()
-      setDragging(false)
-      if (!disabled) addFiles(e.dataTransfer.files)
-    },
-    [addFiles, disabled],
-  )
+  function removeFile(index: number) {
+    setFiles((prev) => {
+      const next = prev.filter((_, i) => i !== index)
+      onFilesChange(next)
+      return next
+    })
+  }
+
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragging(false)
+    if (!disabled) addFiles(e.dataTransfer.files)
+  }
 
   const onDragOver = (e: React.DragEvent) => {
     e.preventDefault()
