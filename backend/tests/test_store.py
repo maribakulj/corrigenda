@@ -227,3 +227,51 @@ async def test_stream_events_exits_on_terminal_event():
     await asyncio.gather(producer(), consumer())
 
     assert [e.event for e in events] == ["info", "completed"]
+
+
+# ---------------------------------------------------------------------------
+# Locking contract
+# ---------------------------------------------------------------------------
+
+
+def test_remove_job_is_invoked_under_lock_during_eviction(monkeypatch):
+    """Roadmap remediation S1 — `_remove_job` mutates three dicts AND
+    calls a filesystem cleanup, so the caller MUST hold `self._lock`.
+    The L6 fix removed the in-method re-acquire on the grounds that
+    `_evict_stale` (the only caller) is itself called from `create_job`
+    under the lock. This test pins the contract so a future refactor
+    that adds a new caller WITHOUT the lock trips here rather than
+    causing a subtle race in production.
+
+    We spy on `_remove_job` and record whether the RLock is owned by
+    the current thread at each call. The check uses the CPython-stable
+    `_is_owned()` private method — it's the documented way to test RLock
+    ownership and the same idiom used by asyncio internals.
+    """
+    clock = _patched_clock(monkeypatch)
+    store = JobStore(ttl_seconds=0)
+
+    # Set up an evictable job: completed, with a timestamp older than
+    # `ttl_seconds=0` will tolerate after any forward tick.
+    jid = store.create_job(Provider.OPENAI, "test")
+    store.update_job(jid, status=JobStatus.COMPLETED)
+    clock.advance(0.01)
+
+    lock_states: list[bool] = []
+    original_remove = store._remove_job
+
+    def _spy(job_id: str) -> None:
+        lock_states.append(store._lock._is_owned())  # type: ignore[attr-defined]
+        original_remove(job_id)
+
+    monkeypatch.setattr(store, "_remove_job", _spy)
+
+    # Triggers _evict_stale, which calls _remove_job for the stale job.
+    store.create_job(Provider.OPENAI, "next")
+
+    assert lock_states, "_remove_job was never invoked — eviction did not fire"
+    assert all(lock_states), (
+        f"_remove_job called without holding self._lock at some point: "
+        f"{lock_states}. A new caller has been added that does not enter "
+        f"the lock first — restore the locking discipline."
+    )
