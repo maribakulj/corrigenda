@@ -71,7 +71,7 @@ section **Corrective wave (post-L8 audit)** below.
 - **T1b** (`test_jobstore_threadsafe_under_contention`): meaningful only if the production server moves off single-worker asyncio. Stress tests around `threading.Thread` + `concurrent.futures` tend to be flaky under CI load. Recommendation: skip until either (a) we migrate to multi-worker or (b) an actual race is reported. The `RLock` is documented as *defensive* — its absence wouldn't break anything today.
 - **R3** (SSE race: terminal event lands between `job.status` fast-path check and `subscribe()`): would need a small re-shape of `stream_events` to subscribe FIRST then re-check status. Behaviour change (window narrowed but not closed). Defer until a real client-side miss is reported.
 - **R4** (`JobStore.get_job` returns mutable `JobManifest`): would need to deep-copy or freeze the returned object. Touches every caller. Behaviour change. Defer; under asyncio single-threaded today, the window doesn't matter.
-- **R5** (`JsonFormatter` double-encodes each extra field via `json.dumps`): perf smell, not a bug. Measurable cost only at very high log volumes. Recommendation: ignore until the log pipeline becomes a bottleneck (HF Spaces is currently nowhere near that).
+- **R5** (`JsonFormatter` double-encodes each extra field via `json.dumps`): **the original deferral text was wrong** — a re-read during the post-L8 audit confirmed `logging_config.py:85-88` only uses `json.dumps` as a serializability probe; values are stored raw in the payload dict and the final `json.dumps(payload)` runs once. No double-encode, no perf smell. Item closed as not-a-bug, no action required.
 - **A4** (3 health endpoints — `/health`, `/health/live`, `/health/ready`): keeping `/health` as the lightweight HF Spaces ping is intentional. The "redundancy" is documented in code. Recommendation: leave as is; no operator confusion has been reported and removing it would risk breaking the HF probe configured years ago.
 - **A6** (6 backend tests import `_` privates from `alto_core.alto.parser` / `rewriter` / `hyphenation`): moving them into `packages/alto-core/tests/` requires duplicating the sample fixtures and would block alto-core from renaming its internals. The current setup couples backend tests to alto-core privates — manageable while the backend is the primary consumer. Recommendation: revisit when a second alto-core consumer appears.
 
@@ -81,7 +81,7 @@ section **Corrective wave (post-L8 audit)** below.
   - `postcss` < safe: XSS via unescaped `</style>` ([GHSA-qx2v-qp2m-jg93](https://github.com/advisories/GHSA-qx2v-qp2m-jg93)), moderate.
   - `vite` ≤ 6.4.1: path traversal + arbitrary file read via dev server WebSocket ([GHSA-4w7w-66w2-5vf9](https://github.com/advisories/GHSA-4w7w-66w2-5vf9), [GHSA-p9ff-h696-f583](https://github.com/advisories/GHSA-p9ff-h696-f583)), high.
   - These existed before L1 — not introduced by size-limit. Both are dev-only (`npm audit --omit=dev` reports 0). Proposed lot: new mini-lot **L9** (security bumps) after L8, or fold into L8 if scope permits. Decision pending.
-- **NB2** (L6) — 7 of the 8 backend shims (`app/alto/parser.py`, `rewriter.py`, `hyphenation.py`, `_norm.py`, `app/jobs/chunk_planner.py`, `validator.py`, `line_acceptance.py`) use `# noqa: F401  re-export` instead of declaring an explicit `__all__` like `correction_pipeline.py` does. The latter is the better pattern: it makes the re-export surface a first-class object linters can reason about, and it's robust against ruff's RUF100 (which strips redundant `noqa` comments). Migrating the 7 stragglers is a tiny, mechanical refactor — proposed for L8 if scope permits, otherwise a separate housekeeping commit.
+- **NB2** (L6, closed L8/L9) — 7 of the 8 backend shims (`app/alto/parser.py`, `rewriter.py`, `hyphenation.py`, `_norm.py`, `app/jobs/chunk_planner.py`, `validator.py`, `line_acceptance.py`) used `# noqa: F401  re-export` instead of declaring an explicit `__all__` like `correction_pipeline.py` does. The latter is the better pattern: it makes the re-export surface a first-class object linters can reason about, and it's robust against ruff's RUF100 (which strips redundant `noqa` comments). **Resolution:** L8 migrated all 7 stragglers to explicit `__all__`. The L9 corrective wave subsequently DELETED `app/alto/_norm.py` and `app/alto/_ns.py` outright (commit `618be08`) since they had zero consumers — see Corrective wave / S6 below.
 
 ## Tests added
 
@@ -187,3 +187,28 @@ commit so it can be reverted independently.
 
 - `backend/app/alto/_norm.py` (S6).
 - `backend/app/alto/_ns.py` (S6).
+
+## L9 — Second corrective wave (issues raised by post-L8 audit)
+
+A second audit ran after the corrective wave above. It surfaced 4
+items the first wave did not address; each got its own commit:
+
+| Priority | Commit       | Issue       | Title |
+|----------|--------------|-------------|-------|
+| P1       | `39779d7`    | R3          | fix(store): close SSE race in stream_events by subscribing first |
+| P1       | `c678ab2`    | P1-1        | fix(frontend): wrap addFiles in useCallback to fix exhaustive-deps warning |
+| P1       | `4e9caa0`    | NB1         | chore(frontend): bump vite to 6.4.2 and postcss to 8.5.15 |
+| P2       | (this push)  | docs        | refresh stale NB2 entry + close R5 as not-a-bug |
+
+### Items closed in L9
+
+- **R3** — `JobStore.stream_events` checked status FIRST, then called `subscribe()`. A terminal event emitted in the window between (by a worker thread, an awaited LLM callback, or a future multi-threaded refactor) was silently dropped by `emit()` (zero subscribers at that instant), and the consumer hung on `queue.get()` until keepalive without ever receiving a terminal event. Reordered to subscribe first, then re-check status; the post-subscribe check drains anything already in the queue and falls back to a synthetic terminal event if nothing arrived. Backed by `test_stream_events_does_not_lose_terminal_during_subscribe_race`, verified to FAIL against the pre-fix code (consumer times out) and PASS after.
+- **P1-1** — ESLint `react-hooks/exhaustive-deps` warning on `FileUpload.tsx:54`. The `onDrop` useCallback referenced `addFiles` (a plain inline function recreated every render) without listing it in the dep array. Wrapped `addFiles` itself in useCallback with `[files]` deps so its identity is stable, then added it to `onDrop`'s deps. `npm run lint` now clean (was 1 warning).
+- **NB1** — `vite ≤ 6.4.1` (HIGH: path traversal + arbitrary file read) and `postcss < 8.5.10` (MODERATE: XSS) flagged by `npm audit` since L1. Both bumps (6.4.1 → 6.4.2, 8.4.49 → 8.5.15) fall inside existing `^` ranges so only `package-lock.json` moves. `npm audit` post-bump: 0 vulnerabilities.
+
+### Test counts after L9
+
+- Backend: 350 → **351** (+1 for R3 race characterisation test).
+- alto-core: 6 (unchanged).
+- Frontend: 12 (unchanged — vite + postcss bump leaves test count alone).
+- **Total: 369.**
