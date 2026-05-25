@@ -129,6 +129,30 @@ class JobRunner:
             )
             self.job_store.emit(job_id, "failed", {"job_id": job_id, "error": safe_error})
 
+        except asyncio.CancelledError:
+            # L10/B8 — SIGTERM during shutdown cancels the runner task
+            # via `BackgroundTaskRegistry.shutdown()` past the 30 s grace
+            # deadline. `CancelledError` extends `BaseException` (not
+            # `Exception`) in Python 3.8+, so without this handler it
+            # slipped past both `except TimeoutError` and `except
+            # Exception` — leaving the job in RUNNING forever. The job
+            # would never enter `_completed_at`, never be evicted, and
+            # leak across redeploys.
+            logger.warning("Job %s cancelled (likely server shutdown)", job_id)
+            elapsed = round(time.monotonic() - start_time, 2)
+            safe_error = "Job cancelled (server shutdown or task cancellation)"
+            self.job_store.update_job(
+                job_id,
+                status=JobStatus.FAILED,
+                error=safe_error,
+                duration_seconds=elapsed,
+            )
+            self.job_store.emit(job_id, "failed", {"job_id": job_id, "error": safe_error})
+            # Re-raise so the task scheduler sees the cancellation and
+            # propagates it correctly (this is the documented asyncio
+            # pattern for handling CancelledError — never silently swallow).
+            raise
+
         except Exception as exc:
             logger.exception("Job %s failed", job_id)
             # Sanitise BEFORE truncating: if the api_key straddles the 500-char

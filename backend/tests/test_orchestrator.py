@@ -894,3 +894,87 @@ async def test_persistent_failure_across_all_chunks_falls_back(
                 f"line {lm.line_id} fallback should preserve ocr_text exactly, "
                 f"got corrected={lm.corrected_text!r} vs ocr={lm.ocr_text!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# L10/B8 — `JobRunner.run` must mark the job FAILED when the task is
+# cancelled (e.g. SIGTERM during shutdown). Pre-fix the runner had only
+# `except TimeoutError` and `except Exception`; `asyncio.CancelledError`
+# extends `BaseException` (not `Exception`) in Python 3.8+, so it slipped
+# past both handlers. The job stayed in RUNNING forever, never entered
+# `_completed_at`, and was never evicted — unbounded `_jobs` growth
+# across SIGTERM/redeploy cycles.
+# ---------------------------------------------------------------------------
+
+
+class _NeverReturnsProvider:
+    """`complete_structured` awaits forever — lets the test cancel the
+    runner task while it's blocked on a 'pending LLM call'."""
+
+    async def list_models(self, api_key: str) -> list[ModelInfo]:
+        return [ModelInfo(id="mock-never", label="Mock never")]
+
+    async def complete_structured(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        # Sleep arbitrarily long; the test will cancel before this fires.
+        await asyncio.sleep(60)
+        return {"lines": []}
+
+
+@pytest.mark.asyncio
+async def test_runner_marks_job_failed_on_cancellation(tmp_path: Path):
+    """L10/B8 — cancelling the runner task (simulating SIGTERM shutdown
+    after the BackgroundTaskRegistry's 30 s grace period) must mark the
+    job FAILED so eviction can reclaim it. Pre-fix the job stayed
+    RUNNING forever; `_completed_at` was never populated for it; the
+    capacity sweep + TTL eviction both keyed off `_completed_at` so
+    the job leaked across redeploys.
+    """
+    from app.alto.parser import build_document_manifest
+    from app.jobs.runner import JobRunner
+    from app.schemas import JobStatus
+    from app.storage import init_job_dirs, output_dir, save_uploaded_files
+    from app.storage.output_writer import FilesystemOutputWriter
+
+    sample_xml = Path(__file__).parent.parent.parent / "examples" / "sample.xml"
+    store = JobStore()
+    job_id = store.create_job(Provider.OPENAI, "mock-never")
+    init_job_dirs(job_id)
+    saved, _ = save_uploaded_files(job_id, [(sample_xml.name, sample_xml.read_bytes())])
+    doc = build_document_manifest([(p, n) for n, p in saved.items()])
+    store.update_job(job_id, document_manifest=doc)
+
+    runner = JobRunner(job_store=store)
+    out_writer = FilesystemOutputWriter(output_dir(job_id))
+
+    task = asyncio.create_task(
+        runner.run(
+            job_id=job_id,
+            document_manifest=doc,
+            provider_name="openai",
+            api_key="fake",
+            model="mock-never",
+            output_writer=out_writer,
+            source_files={n: p for n, p in saved.items()},
+            provider=_NeverReturnsProvider(),
+            timeout_seconds=0,  # disable the wait_for timeout — we want cancellation
+        )
+    )
+
+    # Yield to the event loop so the task starts and reaches the
+    # `await asyncio.sleep(60)` inside the mock provider.
+    await asyncio.sleep(0.05)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    job = store.get_job(job_id)
+    assert job is not None, "job was unexpectedly evicted before assertion"
+    assert job.status == JobStatus.FAILED, (
+        f"runner did not mark job FAILED on cancellation — status is "
+        f"{job.status.value!r}. The job will never enter `_completed_at` "
+        f"and will leak across SIGTERM/redeploy cycles (B8)."
+    )
+    assert job.error is not None and "cancel" in job.error.lower(), (
+        f"job.error should mention cancellation, got {job.error!r}"
+    )
