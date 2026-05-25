@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import httpx
-
-from app.providers.base import call_llm, extract_chat_text
+from app.providers.base import call_llm, extract_chat_text, get_json
 from app.schemas import ModelInfo
 
 _BASE = "https://api.openai.com"
@@ -36,14 +34,10 @@ def _keep_model(model_id: str) -> bool:
 
 class OpenAIProvider:
     async def list_models(self, api_key: str) -> list[ModelInfo]:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{_BASE}/v1/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        data = await get_json(
+            url=f"{_BASE}/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
 
         models = []
         for m in data.get("data", []):

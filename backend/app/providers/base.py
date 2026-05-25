@@ -80,3 +80,30 @@ def extract_chat_text(data: dict[str, Any], provider_label: str) -> dict[str, An
     if not content:
         raise ValueError(f"{provider_label} response has empty content in choices[0].message")
     return json.loads(content)
+
+
+async def get_json(
+    *,
+    url: str,
+    headers: dict[str, str] | None = None,
+    params: dict[str, str] | None = None,
+    timeout: int = 15,
+) -> dict[str, Any]:
+    """Send a GET and return decoded JSON, raising on HTTP errors.
+
+    Each provider's ``list_models`` used to inline the same six-line
+    ``async with httpx.AsyncClient() as client: resp = await
+    client.get(...) ; resp.raise_for_status() ; return resp.json()``
+    pattern. This helper centralises the client lifecycle and the
+    status check so a future tweak (timeouts, retries, instrumentation)
+    happens in one place.
+    """
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            url,
+            headers=headers or {},
+            params=params,
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()

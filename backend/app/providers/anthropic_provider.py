@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import httpx
-
-from app.providers.base import call_llm
+from app.providers.base import call_llm, get_json
 from app.schemas import ModelInfo
 
 _BASE = "https://api.anthropic.com"
@@ -23,14 +21,10 @@ class AnthropicProvider:
         }
 
     async def list_models(self, api_key: str) -> list[ModelInfo]:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{_BASE}/v1/models",
-                headers=self._headers(api_key),
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        data = await get_json(
+            url=f"{_BASE}/v1/models",
+            headers=self._headers(api_key),
+        )
 
         models = []
         for m in data.get("data", []):

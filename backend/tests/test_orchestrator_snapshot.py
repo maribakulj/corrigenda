@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from lxml import etree
 
 from app.alto.parser import build_document_manifest
 from app.jobs.orchestrator import run_job
@@ -138,3 +139,91 @@ def test_snapshot_x0000002_xml():
     """Large corpus — detects subtler rewriter changes that the tiny
     sample might miss (cross-block hyphenation, many chunks, etc.)."""
     assert _run_and_capture(X0000002_XML) == X0000002_SNAPSHOT
+
+
+# ---------------------------------------------------------------------------
+# Semantic asserts (audit A6)
+#
+# A SHA256 snapshot trips on any byte-level change, including cosmetic
+# tweaks (attribute order, whitespace) that have no behavioural impact.
+# These structural asserts survive that kind of churn — when the
+# SHA256 must change for a legitimate reason, these checks still
+# guarantee no real invariant was broken.
+# ---------------------------------------------------------------------------
+
+
+def _structural_facts(xml_path: Path) -> dict[str, Any]:
+    """Run the pipeline against `xml_path` and return structural facts
+    extracted from the rewritten ALTO bytes."""
+    store = JobStore()
+    job_id = store.create_job(Provider.OPENAI, "mock")
+    with tempfile.TemporaryDirectory() as td:
+        out_dir = Path(td)
+        doc = build_document_manifest([(xml_path, xml_path.name)])
+        asyncio.run(
+            run_job(
+                job_id=job_id,
+                document_manifest=doc,
+                provider_name="openai",
+                api_key="fake-key",
+                model="mock",
+                output_dir=out_dir,
+                source_files={xml_path.name: xml_path},
+                provider=_IdentityProvider(),
+                job_store_override=store,
+            )
+        )
+        out_xml = next(out_dir.glob("*_corrected.xml"))
+        out_bytes = out_xml.read_bytes()
+
+    # Parse the SOURCE for comparison + the OUTPUT for assertions.
+    src_root = etree.fromstring(xml_path.read_bytes())
+    out_root = etree.fromstring(out_bytes)
+    ns = "{http://www.loc.gov/standards/alto/ns-v3#}"
+
+    def textline_ids(root: etree._Element) -> list[str]:
+        return [tl.get("ID") or "" for tl in root.iter(f"{ns}TextLine")]
+
+    def coord_map(root: etree._Element) -> dict[str, tuple[str | None, ...]]:
+        return {
+            tl.get("ID") or "": (
+                tl.get("HPOS"),
+                tl.get("VPOS"),
+                tl.get("WIDTH"),
+                tl.get("HEIGHT"),
+            )
+            for tl in root.iter(f"{ns}TextLine")
+        }
+
+    src_ids = textline_ids(src_root)
+    out_ids = textline_ids(out_root)
+    return {
+        "textline_ids_preserved": src_ids == out_ids,
+        "textline_count": len(out_ids),
+        "coords_preserved": coord_map(src_root) == coord_map(out_root),
+        "hyp_count": len(list(out_root.iter(f"{ns}HYP"))),
+        "src_hyp_count": len(list(src_root.iter(f"{ns}HYP"))),
+    }
+
+
+def test_semantic_sample_xml():
+    """Structural invariants on sample.xml — survives cosmetic rewriter
+    changes that would only trip the SHA256 snapshot."""
+    facts = _structural_facts(SAMPLE_XML)
+    assert facts["textline_ids_preserved"], "TextLine IDs must round-trip"
+    assert facts["coords_preserved"], "TextLine coordinates must round-trip"
+    assert facts["textline_count"] == 10
+    # sample.xml has one explicit hyphen pair (TL4 → TL5) → 1 HYP in source
+    assert facts["src_hyp_count"] == facts["hyp_count"], (
+        "rewriter must preserve the HYP element count from the source"
+    )
+
+
+@pytest.mark.skipif(not X0000002_XML.exists(), reason="X0000002.xml not in examples/")
+def test_semantic_x0000002_xml():
+    """Structural invariants on the large corpus."""
+    facts = _structural_facts(X0000002_XML)
+    assert facts["textline_ids_preserved"]
+    assert facts["coords_preserved"]
+    assert facts["textline_count"] == 566
+    assert facts["src_hyp_count"] == facts["hyp_count"]

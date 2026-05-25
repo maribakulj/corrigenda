@@ -11,55 +11,77 @@ from app.jobs import store as store_module
 from app.jobs.store import JobStore
 from app.schemas import JobStatus, Provider
 
+
+def _patched_clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
+    """Replace ``store_module.time.monotonic`` with a monotonically
+    increasing fake clock that the test can advance by exact seconds.
+
+    Removes the flaky ``time.sleep(0.01)`` pattern from the eviction
+    tests (audit A12): no real wall-clock dependency, deterministic
+    even on a slow CI runner.
+    """
+    clock = Clock()
+    monkeypatch.setattr(store_module.time, "monotonic", clock.now)
+    return clock
+
+
+class Clock:
+    def __init__(self) -> None:
+        self._t = 1000.0
+
+    def now(self) -> float:
+        return self._t
+
+    def advance(self, seconds: float) -> None:
+        self._t += seconds
+
+
 # ---------------------------------------------------------------------------
 # Eviction by TTL
 # ---------------------------------------------------------------------------
 
 
-def test_completed_job_evicted_after_ttl():
+def test_completed_job_evicted_after_ttl(monkeypatch):
     """Once a job is COMPLETED and TTL elapses, the next create_job evicts it."""
+    clock = _patched_clock(monkeypatch)
     store = JobStore(ttl_seconds=0)  # 0 = evict on any subsequent tick
 
     old_id = store.create_job(Provider.OPENAI, "test")
     store.update_job(old_id, status=JobStatus.COMPLETED)
     assert store.get_job(old_id) is not None
 
-    # create_job() runs _evict_stale at the top. With TTL=0 and at least
-    # one tick of monotonic clock advance, the completed job is purged.
-    import time
-
-    time.sleep(0.01)  # ensure now > completed_at
+    # create_job() runs _evict_stale at the top. With TTL=0 and any
+    # forward tick on the clock, the completed job is purged.
+    clock.advance(0.01)
     new_id = store.create_job(Provider.OPENAI, "next")
 
     assert store.get_job(old_id) is None, "completed job should be evicted"
     assert store.get_job(new_id) is not None, "fresh job remains"
 
 
-def test_running_job_not_evicted_by_ttl():
+def test_running_job_not_evicted_by_ttl(monkeypatch):
     """Only jobs in a terminal state are subject to TTL eviction."""
+    clock = _patched_clock(monkeypatch)
     store = JobStore(ttl_seconds=0)
 
     running_id = store.create_job(Provider.OPENAI, "test")
     # Don't mark terminal — leave as default (QUEUED)
 
-    import time
-
-    time.sleep(0.01)
+    clock.advance(0.01)
     _ = store.create_job(Provider.OPENAI, "another")
 
     assert store.get_job(running_id) is not None
 
 
-def test_failed_job_also_evicted():
+def test_failed_job_also_evicted(monkeypatch):
     """JobStatus.FAILED triggers eviction same as COMPLETED."""
+    clock = _patched_clock(monkeypatch)
     store = JobStore(ttl_seconds=0)
 
     failed_id = store.create_job(Provider.OPENAI, "test")
     store.update_job(failed_id, status=JobStatus.FAILED, error="boom")
 
-    import time
-
-    time.sleep(0.01)
+    clock.advance(0.01)
     _ = store.create_job(Provider.OPENAI, "trigger")
 
     assert store.get_job(failed_id) is None
@@ -100,6 +122,7 @@ def test_eviction_cleans_disk(tmp_path, monkeypatch):
     from app import storage as storage_mod
 
     monkeypatch.setattr(storage_mod, "_BASE_DIR", tmp_path)
+    clock = _patched_clock(monkeypatch)
 
     store = JobStore(ttl_seconds=0)
     jid = store.create_job(Provider.OPENAI, "test")
@@ -108,9 +131,7 @@ def test_eviction_cleans_disk(tmp_path, monkeypatch):
     assert job_path.exists()
 
     store.update_job(jid, status=JobStatus.COMPLETED)
-    import time
-
-    time.sleep(0.01)
+    clock.advance(0.01)
     _ = store.create_job(Provider.OPENAI, "trigger")
 
     assert store.get_job(jid) is None
