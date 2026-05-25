@@ -15,7 +15,8 @@ from sse_starlette.sse import EventSourceResponse
 from app.alto.parser import build_document_manifest
 from app.api.deps import get_job_store
 from app.api.rate_limit import limiter
-from app.jobs.orchestrator import run_job
+from app.jobs.orchestrator import _JOB_TIMEOUT_SECONDS
+from app.jobs.runner import JobRunner
 from app.protocols import JobStore
 from app.schemas import (
     CreateJobResponse,
@@ -33,6 +34,7 @@ from app.storage import (
     output_dir,
     save_uploaded_files,
 )
+from app.storage.output_writer import FilesystemOutputWriter
 
 router = APIRouter()
 
@@ -139,21 +141,29 @@ async def create_job(
 
     out_dir = output_dir(job_id)
 
+    # Drive the correction through the modern `JobRunner` API directly
+    # rather than the legacy `app.jobs.orchestrator.run_job` wrapper.
+    # The wrapper stays in place for the half-dozen test files that
+    # still call it (test_orchestrator.py, test_trace.py, etc.) but
+    # production code goes through the typed seam.
+    runner = JobRunner(job_store=store)
+    output_writer_instance = FilesystemOutputWriter(out_dir)
+
     # Spawn correction through the per-app registry so the task is
     # strongly referenced (prevents GC mid-run) AND so the lifespan
     # handler can drain it on SIGTERM. Crash logging is centralised
     # in BackgroundTaskRegistry._on_done.
     request.app.state.tasks.spawn(
-        run_job(
+        runner.run(
             job_id=job_id,
             document_manifest=doc_manifest,
             provider_name=provider,
             api_key=api_key,
             model=model,
-            output_dir=out_dir,
+            output_writer=output_writer_instance,
             source_files={name: path for name, path in saved.items()},
             provider=provider_instance,
-            job_store_override=store,
+            timeout_seconds=_JOB_TIMEOUT_SECONDS,
         ),
         name=f"run_job:{job_id}",
     )

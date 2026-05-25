@@ -170,14 +170,18 @@ class JobStore:
     def _remove_job(self, job_id: str) -> None:
         """Pop a job + its subscribers + its completion timestamp.
 
-        Caller must hold ``self._lock``. The filesystem cleanup is done
-        outside the critical section — it only touches disk and never
-        re-enters the store.
+        Caller MUST hold ``self._lock`` — currently invoked only from
+        ``_evict_stale``, which is itself called from ``create_job``
+        under the lock. We don't re-acquire it here even though RLock
+        would tolerate it: doing so would (a) violate the documented
+        contract and (b) confuse future maintainers about the
+        ownership model. The filesystem cleanup below intentionally
+        runs OUTSIDE the lock since it touches disk and never re-enters
+        the store.
         """
-        with self._lock:
-            self._jobs.pop(job_id, None)
-            self._subscribers.pop(job_id, None)
-            self._completed_at.pop(job_id, None)
+        self._jobs.pop(job_id, None)
+        self._subscribers.pop(job_id, None)
+        self._completed_at.pop(job_id, None)
         # Clean up disk storage for evicted jobs (best-effort, no lock).
         try:
             from app.storage import cleanup_job

@@ -1,6 +1,6 @@
 # Remediation status — alto-llm-corrector
 
-Last updated: 2026-05-25 (session L5)
+Last updated: 2026-05-25 (session L6)
 Branch: `claude/vibrant-pascal-STfnR`
 
 Roadmap reference: voir conversation (sections 5 et 6 du plan validé).
@@ -14,8 +14,8 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 | L2          | done         | `2148bcd`   | health/ready observation-only + off-loop |
 | L3          | done         | `6218dd4`   | ProxyHeadersMiddleware + R2 decision documented |
 | L4          | done         | `610ccce`   | pipeline retry classification + event payload tests (+9 tests net) |
-| L5          | done         | (this push) | alto-core release readiness — docstrings, smoke unified, CHANGELOG clarified |
-| L6          | not started  | —           | architecture cleanup (A1, A2, A3, A9) |
+| L5          | done         | `5412560`   | alto-core release readiness — docstrings, smoke unified, CHANGELOG clarified |
+| L6          | done         | (this push) | architecture cleanup — 0 prod consumer of legacy run_job; double-lock removed |
 | L7          | not started  | —           | release pipeline (P5, P6, P7) |
 | L8          | not started  | —           | backlog (T1a-d, R3, R4, R5, A4, A6) — optional |
 
@@ -43,6 +43,10 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 - **B6** — 3 divergent inline smoke scripts (ci.yml job alto-core-build, publish-alto-core.yml, scripts/release-alto-core.sh) replaced by calls to `packages/alto-core/_smoke_imports.py`. That single script iterates `alto_core.__all__` directly so any drift between the public API and the smoke check is now structurally impossible.
 - **P3** — `Programming Language :: Python :: 3.13` classifier added to `packages/alto-core/pyproject.toml` (`requires-python = ">=3.11"` already permitted 3.13) (L5).
 - **P8** — `test_top_level_public_api_is_importable` extended with the 5 missing symbols (`LineTrace`, `LLMLineInput`, `LLMLineOutput`, `ChunkPlannerConfig`, `LineStatus`). Plus new `test_all_matches_top_level_attrs` iterating `alto_core.__all__` directly so future additions are auto-checked (L5).
+- **A1** — Production code (`app/api/jobs.py`) no longer imports `run_job` from the compat orchestrator (L6). Drives `JobRunner` + `FilesystemOutputWriter` directly. The 6 legacy test files (`test_orchestrator.py`, `test_orchestrator_snapshot.py`, `test_trace.py`, `test_integration.py`, `test_line_acceptance.py`, `test_api.py`) keep `from app.jobs.orchestrator import run_job` — that wrapper stays in place as the typed seam they expect. Verified: `grep "from app.jobs.orchestrator" backend/app/` returns 0.
+- **A2** — `app/jobs/runner.py` imports `CorrectionPipeline` and `sanitize_error` directly from `alto_core` (top-level re-export) instead of going through the local `app.jobs.correction_pipeline` shim — backend native code no longer self-uses its own compat layer (L6).
+- **A3** — `JobStore._remove_job` no longer re-acquires `self._lock` (L6). The caller (`_evict_stale` invoked from `create_job` under the lock) already holds it; the redundant `with self._lock:` violated the documented contract. Docstring tightened to reflect the invariant. RLock support for re-entrance preserved an invisible bug behind correct behaviour; removing it makes the contract enforceable by reading the code.
+- **A9** — Reframed during L6: `app/jobs/correction_pipeline.py` is the only shim with an explicit `__all__`, so its `noqa: F401` was *redundant* — ruff's RUF100 rule removed it on commit. The audit had the asymmetry backwards: the *other 7 shims* are the ones that drift (they use `# noqa: F401` because they lack an explicit `__all__`). Promoting them to `__all__` would be the consistent fix, but it's a refactor outside L6's "correction minimale" scope. Closing A9 with the observation that no change is needed on `correction_pipeline.py` (it already uses the better pattern). A new follow-up `NB2` is logged below.
 
 ## In progress
 
@@ -54,7 +58,7 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 
 ## Remaining
 
-- A1, A2, A3, A9, P5, P6, P7, T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6.
+- P5, P6, P7, T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6.
 
 ## New bugs discovered
 
@@ -62,6 +66,7 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
   - `postcss` < safe: XSS via unescaped `</style>` ([GHSA-qx2v-qp2m-jg93](https://github.com/advisories/GHSA-qx2v-qp2m-jg93)), moderate.
   - `vite` ≤ 6.4.1: path traversal + arbitrary file read via dev server WebSocket ([GHSA-4w7w-66w2-5vf9](https://github.com/advisories/GHSA-4w7w-66w2-5vf9), [GHSA-p9ff-h696-f583](https://github.com/advisories/GHSA-p9ff-h696-f583)), high.
   - These existed before L1 — not introduced by size-limit. Both are dev-only (`npm audit --omit=dev` reports 0). Proposed lot: new mini-lot **L9** (security bumps) after L8, or fold into L8 if scope permits. Decision pending.
+- **NB2** (L6) — 7 of the 8 backend shims (`app/alto/parser.py`, `rewriter.py`, `hyphenation.py`, `_norm.py`, `app/jobs/chunk_planner.py`, `validator.py`, `line_acceptance.py`) use `# noqa: F401  re-export` instead of declaring an explicit `__all__` like `correction_pipeline.py` does. The latter is the better pattern: it makes the re-export surface a first-class object linters can reason about, and it's robust against ruff's RUF100 (which strips redundant `noqa` comments). Migrating the 7 stragglers is a tiny, mechanical refactor — proposed for L8 if scope permits, otherwise a separate housekeeping commit.
 
 ## Tests added
 

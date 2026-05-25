@@ -15,7 +15,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.jobs.correction_pipeline import CorrectionPipeline, sanitize_error
+from alto_core import CorrectionPipeline, sanitize_error
+
 from app.jobs.observers import CompositeObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore, OutputWriter
 from app.schemas import DocumentManifest, JobStatus
