@@ -73,18 +73,15 @@ jobs:
         # dependencies, or import-time errors. (We skip `twine check`
         # because it rejects PEP 639's `license-file` metadata field
         # that hatchling emits — false positive on wheel quality.)
+        #
+        # _smoke_imports.py is the single source of truth shared with
+        # the publish workflow and scripts/release-alto-core.sh — it
+        # iterates `alto_core.__all__` so any drift trips here. See
+        # roadmap L5 / B6.
         run: |
           python -m venv /tmp/wheel-smoke
           /tmp/wheel-smoke/bin/pip install dist/*.whl
-          /tmp/wheel-smoke/bin/python -c "
-          from alto_core import (
-              CorrectionPipeline, BaseProvider, PipelineObserver, OutputWriter,
-              parse_alto_file, build_document_manifest, rewrite_alto_file,
-              DocumentManifest, LineManifest, HyphenRole,
-          )
-          import alto_core
-          print(f'alto-core {alto_core.__version__} wheel installed + importable')
-          "
+          /tmp/wheel-smoke/bin/python _smoke_imports.py
       - name: Upload distribution artifacts
         uses: actions/upload-artifact@v4
         with:

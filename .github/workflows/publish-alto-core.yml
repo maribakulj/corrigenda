@@ -52,19 +52,12 @@ jobs:
 
       - name: Smoke-install the wheel
         # Catch packaging regressions before they reach the index.
-        # Same check as scripts/release-alto-core.sh.
+        # _smoke_imports.py is shared with the CI build job and
+        # scripts/release-alto-core.sh — see roadmap L5 / B6.
         run: |
           python -m venv /tmp/wheel-smoke
           /tmp/wheel-smoke/bin/pip install dist/*.whl
-          /tmp/wheel-smoke/bin/python -c "
-          from alto_core import (
-              CorrectionPipeline, BaseProvider, PipelineObserver, OutputWriter,
-              parse_alto_file, build_document_manifest, rewrite_alto_file,
-              DocumentManifest, LineManifest, HyphenRole, sanitize_error,
-          )
-          import alto_core
-          print(f'smoke ok: alto-core {alto_core.__version__}')
-          "
+          /tmp/wheel-smoke/bin/python _smoke_imports.py
 
       - name: Publish to TestPyPI (Trusted Publishing OIDC)
         if: inputs.target == 'testpypi'

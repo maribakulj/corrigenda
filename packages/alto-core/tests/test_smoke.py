@@ -45,13 +45,21 @@ def test_subpackages_importable():
 
 def test_top_level_public_api_is_importable():
     """The README and ARCHITECTURE.md promise a single import surface.
-    If a future refactor drops one of these re-exports, this test trips."""
+    If a future refactor drops one of these re-exports, this test trips.
+
+    The list MUST stay in sync with ``alto_core.__all__`` (less
+    ``__version__`` which is checked separately in
+    ``test_top_level_import``). The shared smoke script
+    ``packages/alto-core/_smoke_imports.py`` iterates ``__all__``
+    directly to enforce the same contract from CI/release tooling.
+    """
     from alto_core import (
         OUTPUT_JSON_SCHEMA,
         SYSTEM_PROMPT,
         BaseProvider,
         BlockManifest,
         ChunkGranularity,
+        ChunkPlannerConfig,
         CorrectionPipeline,
         CorrectionResult,
         DocumentManifest,
@@ -59,6 +67,10 @@ def test_top_level_public_api_is_importable():
         JobManifest,
         JobStatus,
         LineManifest,
+        LineStatus,
+        LineTrace,
+        LLMLineInput,
+        LLMLineOutput,
         ModelInfo,
         OutputWriter,
         PageManifest,
@@ -94,10 +106,97 @@ def test_top_level_public_api_is_importable():
             HyphenRole,
             JobManifest,
             JobStatus,
+            LineStatus,
             ChunkGranularity,
+            ChunkPlannerConfig,
             Provider,
             ModelInfo,
+            LineTrace,
+            LLMLineInput,
+            LLMLineOutput,
         )
+    )
+
+
+def test_all_matches_top_level_attrs():
+    """Roadmap L5 (P8) — ``alto_core.__all__`` must reflect what's
+    actually accessible on the package object. A symbol listed in
+    ``__all__`` but missing from the module would silently break
+    ``from alto_core import *`` downstream.
+    """
+    import alto_core
+
+    for name in alto_core.__all__:
+        assert hasattr(alto_core, name), (
+            f"{name!r} is listed in alto_core.__all__ but not present "
+            f"on the alto_core module — broken __init__.py re-export"
+        )
+
+
+def test_changelog_added_symbols_are_importable():
+    """Roadmap L5 (B5) — every symbol the CHANGELOG promises in its
+    ``### Added`` section must be importable from the documented path.
+
+    The CHANGELOG groups symbols under sub-module headings like
+    ``alto_core.alto`` / ``alto_core.pipeline``; this test pins the
+    promise so a future rename or move breaks the test before it
+    breaks a PyPI consumer. The map below is the canonical list — when
+    you change the CHANGELOG, sync this map (one line per move).
+
+    NB this test does NOT assert that every listed symbol is a
+    top-level re-export. The roadmap explicitly clarifies in the
+    CHANGELOG that some symbols are sub-module only; that's checked
+    by ``test_top_level_public_api_is_importable`` for the top-level
+    set, and HERE for the broader sub-module set.
+    """
+    import importlib
+
+    # (module path, [symbols expected on that module]).
+    # Source of truth: packages/alto-core/CHANGELOG.md ### Added section.
+    expected: list[tuple[str, list[str]]] = [
+        # alto_core.alto
+        ("alto_core.alto.parser", ["parse_alto_file", "build_document_manifest"]),
+        (
+            "alto_core.alto.rewriter",
+            ["rewrite_alto_file", "extract_output_texts", "RewriterMetrics"],
+        ),
+        (
+            "alto_core.alto.hyphenation",
+            [
+                "enrich_chunk_lines",
+                "reconcile_hyphen_pair",
+                "ReconcileMetrics",
+                "classify_reconcile_outcome",
+                "should_stay_in_same_chunk",
+            ],
+        ),
+        # alto_core.pipeline
+        (
+            "alto_core.pipeline.correction_pipeline",
+            ["CorrectionPipeline", "CorrectionResult", "sanitize_error"],
+        ),
+        ("alto_core.pipeline.chunk_planner", ["plan_page", "downgrade_granularity"]),
+        ("alto_core.pipeline.validator", ["validate_llm_response"]),
+        (
+            "alto_core.pipeline.line_acceptance",
+            ["check_line", "check_adjacent_duplicates", "AcceptanceResult"],
+        ),
+        # alto_core.protocols
+        ("alto_core.protocols", ["BaseProvider", "PipelineObserver", "OutputWriter"]),
+        ("alto_core.protocols.provider", ["OUTPUT_JSON_SCHEMA", "SYSTEM_PROMPT"]),
+    ]
+
+    missing: list[str] = []
+    for module_path, symbols in expected:
+        mod = importlib.import_module(module_path)
+        for name in symbols:
+            if not hasattr(mod, name):
+                missing.append(f"{module_path}.{name}")
+
+    assert not missing, (
+        "CHANGELOG.md promises these symbols but they are not importable "
+        f"from their documented path: {missing}. Either fix the import "
+        f"path, fix the CHANGELOG, or update the expected map in this test."
     )
 
 

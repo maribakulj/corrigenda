@@ -1,6 +1,6 @@
 # Remediation status — alto-llm-corrector
 
-Last updated: 2026-05-25 (session L4)
+Last updated: 2026-05-25 (session L5)
 Branch: `claude/vibrant-pascal-STfnR`
 
 Roadmap reference: voir conversation (sections 5 et 6 du plan validé).
@@ -13,8 +13,8 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 | L1          | done         | `f0270ed`   | size-limit + preset-app added |
 | L2          | done         | `2148bcd`   | health/ready observation-only + off-loop |
 | L3          | done         | `6218dd4`   | ProxyHeadersMiddleware + R2 decision documented |
-| L4          | done         | (this push) | pipeline retry classification + event payload tests (+9 tests net) |
-| L5          | not started  | —           | alto-core release readiness (B5, A5, B6, P3, P8) |
+| L4          | done         | `610ccce`   | pipeline retry classification + event payload tests (+9 tests net) |
+| L5          | done         | (this push) | alto-core release readiness — docstrings, smoke unified, CHANGELOG clarified |
 | L6          | not started  | —           | architecture cleanup (A1, A2, A3, A9) |
 | L7          | not started  | —           | release pipeline (P5, P6, P7) |
 | L8          | not started  | —           | backlog (T1a-d, R3, R4, R5, A4, A6) — optional |
@@ -38,6 +38,11 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
   - `test_retry_event_payload_shape` verifies `chunk_id`, `attempt: int >= 1`, `error: str` with `len <= 120`.
 - **T0c** — `CompositeObserver` exception isolation now covered (L4): `test_composite_observer_isolates_failing_observer` + helpers for empty-list noop + registration-order verification (3 tests).
 - **T0d** — multi-chunk persistent fallback now covered (L4): `test_persistent_failure_across_all_chunks_falls_back` proves status=COMPLETED + fallbacks ≥ 1 + every line's `corrected_text == ocr_text`.
+- **A5** — 14 public Pydantic models (5 enums `JobStatus` / `LineStatus` / `ChunkGranularity` / `Provider` / `HyphenRole` + 9 BaseModels `Coords` / `LineManifest` / `BlockManifest` / `PageManifest` / `DocumentManifest` / `ChunkPlannerConfig` / `JobManifest` / `LLMLineInput` / `LLMLineOutput` / `ModelInfo`) now each carry a one-line docstring. PyPI consumers get IDE help/intellisense out of the box (L5).
+- **B5** — `CHANGELOG.md` ### Added section restructured (L5). Each bullet is now tagged `*(top-level)*` or `*(sub-module only)*`. Lead note explicitly states: `from alto_core import RewriterMetrics` will raise `ImportError`; the canonical path is `from alto_core.alto.rewriter import RewriterMetrics`. New test `test_changelog_added_symbols_are_importable` pins the sub-module promise (parses the expected import-path map + asserts importability).
+- **B6** — 3 divergent inline smoke scripts (ci.yml job alto-core-build, publish-alto-core.yml, scripts/release-alto-core.sh) replaced by calls to `packages/alto-core/_smoke_imports.py`. That single script iterates `alto_core.__all__` directly so any drift between the public API and the smoke check is now structurally impossible.
+- **P3** — `Programming Language :: Python :: 3.13` classifier added to `packages/alto-core/pyproject.toml` (`requires-python = ">=3.11"` already permitted 3.13) (L5).
+- **P8** — `test_top_level_public_api_is_importable` extended with the 5 missing symbols (`LineTrace`, `LLMLineInput`, `LLMLineOutput`, `ChunkPlannerConfig`, `LineStatus`). Plus new `test_all_matches_top_level_attrs` iterating `alto_core.__all__` directly so future additions are auto-checked (L5).
 
 ## In progress
 
@@ -49,7 +54,7 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 
 ## Remaining
 
-- A5, B5, B6, P3, P8, A1, A2, A3, A9, P5, P6, P7, T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6.
+- A1, A2, A3, A9, P5, P6, P7, T1a, T1b, T1c, T1d, R3, R4, R5, A4, A6.
 
 ## New bugs discovered
 
@@ -78,6 +83,9 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
   - `test_composite_observer_with_no_observers_is_a_noop` (T0c, defensive).
   - `test_composite_observer_calls_observers_in_registration_order` (T0c, order contract).
   - DELETED `test_create_job_endpoint_has_rate_limit_attached` (B4, bidon).
+- L5 (+2 alto-core tests):
+  - `test_all_matches_top_level_attrs` (P8 — iterates `__all__`, future-proof).
+  - `test_changelog_added_symbols_are_importable` (B5 — pins sub-module import-path promises).
 
 ## Tests count evolution
 
@@ -86,6 +94,7 @@ Convention : 1 session = 1 lot, même identifiant (L1 → L8).
 - Après L2: 331 backend + 4 alto-core + 12 frontend = 347 total (+2).
 - Après L3: 332 backend + 4 alto-core + 12 frontend = 348 total (+1).
 - Après L4: 341 backend + 4 alto-core + 12 frontend = 357 total (+10 added, -1 deleted = +9 net).
+- Après L5: 341 backend + 6 alto-core + 12 frontend = 359 total (+2 alto-core).
 
 ## Coverage evolution
 

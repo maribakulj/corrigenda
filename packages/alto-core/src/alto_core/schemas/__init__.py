@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field
 
 
 class JobStatus(str, Enum):
+    """Lifecycle state of a correction job, surfaced to API clients."""
+
     QUEUED = "queued"
     STARTED = "started"
     RUNNING = "running"
@@ -19,6 +21,8 @@ class JobStatus(str, Enum):
 
 
 class LineStatus(str, Enum):
+    """Per-line outcome after the pipeline has visited a TextLine."""
+
     PENDING = "pending"
     CORRECTED = "corrected"
     FALLBACK = "fallback"
@@ -26,6 +30,8 @@ class LineStatus(str, Enum):
 
 
 class ChunkGranularity(str, Enum):
+    """Granularity tier used by the chunk planner — PAGE → BLOCK → WINDOW → LINE on downgrade."""
+
     PAGE = "page"
     BLOCK = "block"
     WINDOW = "window"
@@ -33,6 +39,8 @@ class ChunkGranularity(str, Enum):
 
 
 class Provider(str, Enum):
+    """Identifier for an LLM vendor. Each enum value maps to one ``BaseProvider`` implementation."""
+
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     MISTRAL = "mistral"
@@ -40,6 +48,14 @@ class Provider(str, Enum):
 
 
 class HyphenRole(str, Enum):
+    """Position of a line within a hyphenated pair.
+
+    ``NONE`` for ordinary lines, ``PART1`` carries the left fragment +
+    hyphen (last line of pair), ``PART2`` carries the right fragment
+    (first line of next pair), ``BOTH`` is ``PART2`` of the previous
+    pair AND ``PART1`` of the next one (chained hyphenation).
+    """
+
     NONE = "none"
     PART1 = "HypPart1"  # last line of pair: carries left fragment + hyphen
     PART2 = "HypPart2"  # first line of pair: carries right fragment
@@ -52,6 +68,8 @@ class HyphenRole(str, Enum):
 
 
 class Coords(BaseModel):
+    """ALTO geometry box — pixels in the source image's coordinate system."""
+
     hpos: int
     vpos: int
     width: int
@@ -64,6 +82,15 @@ class Coords(BaseModel):
 
 
 class LineManifest(BaseModel):
+    """A single ALTO ``TextLine`` enriched with correction + hyphenation state.
+
+    Carries the OCR text, the corrected text once the pipeline has
+    visited it, the line's place in the global reading order, and any
+    hyphenation links to its partner line(s). Mutated in place during
+    a pipeline run; callers read ``corrected_text`` and ``status``
+    once the job completes.
+    """
+
     line_id: str
     page_id: str
     block_id: str
@@ -100,6 +127,8 @@ class LineManifest(BaseModel):
 
 
 class BlockManifest(BaseModel):
+    """An ALTO ``TextBlock`` with its coordinates and the line IDs it contains."""
+
     block_id: str
     page_id: str
     block_order: int
@@ -108,6 +137,8 @@ class BlockManifest(BaseModel):
 
 
 class PageManifest(BaseModel):
+    """An ALTO ``Page``: source file, geometry, and the blocks and lines it owns."""
+
     page_id: str
     source_file: str
     page_index: int
@@ -119,6 +150,8 @@ class PageManifest(BaseModel):
 
 
 class DocumentManifest(BaseModel):
+    """A multi-page document: the top-level structure the pipeline consumes."""
+
     document_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     source_files: list[str]
     pages: list[PageManifest]
@@ -134,6 +167,8 @@ class DocumentManifest(BaseModel):
 
 
 class ChunkPlannerConfig(BaseModel):
+    """Tunables for the chunk planner — character + line budgets per LLM request."""
+
     max_input_chars_per_request: int = 12000
     max_lines_per_request: int = 80
     line_window_size: int = 12
@@ -162,6 +197,8 @@ class ChunkPlan(BaseModel):
 
 
 class JobManifest(BaseModel):
+    """Server-side record of a correction job — status, counters, and trace data."""
+
     job_id: str
     provider: Provider
     model: str
@@ -185,6 +222,8 @@ class JobManifest(BaseModel):
 
 
 class LLMLineInput(BaseModel):
+    """One line worth of context sent to the LLM (OCR text + neighbours + hyphen hints)."""
+
     line_id: str
     prev_text: str | None = None
     ocr_text: str
@@ -208,6 +247,8 @@ class LLMUserPayload(BaseModel):
 
 
 class LLMLineOutput(BaseModel):
+    """One corrected line returned by the LLM — paired by ``line_id`` with its input."""
+
     line_id: str
     corrected_text: str
 
@@ -222,6 +263,8 @@ class LLMResponse(BaseModel):
 
 
 class ModelInfo(BaseModel):
+    """An LLM model description as returned by ``BaseProvider.list_models``."""
+
     id: str
     label: str
     supports_structured_output: bool = True

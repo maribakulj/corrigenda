@@ -64,20 +64,21 @@ python -m build
 echo "==> Built dist/:"
 ls -lh dist/
 
-# Smoke-install the wheel into an isolated venv and exercise the public API.
+# Smoke-install the wheel into an isolated venv and exercise the
+# public API. _smoke_imports.py is the single source of truth shared
+# with .github/workflows/{ci,publish-alto-core}.yml — see roadmap
+# L5 / B6. A two-step run keeps the version-equality check here in
+# bash (the smoke script itself stays consumer-portable, it doesn't
+# know about the release variable VERSION).
 SMOKE_VENV="$(mktemp -d)/venv"
 python -m venv "${SMOKE_VENV}"
 "${SMOKE_VENV}/bin/pip" install --quiet dist/*.whl
-"${SMOKE_VENV}/bin/python" - <<EOF
-from alto_core import (
-    CorrectionPipeline, BaseProvider, PipelineObserver, OutputWriter,
-    parse_alto_file, build_document_manifest, rewrite_alto_file,
-    DocumentManifest, LineManifest, HyphenRole, sanitize_error,
-)
-import alto_core
-assert alto_core.__version__ == "${VERSION}"
-print(f"smoke ok: alto-core {alto_core.__version__} installs + imports")
-EOF
+"${SMOKE_VENV}/bin/python" _smoke_imports.py
+INSTALLED_VERSION=$("${SMOKE_VENV}/bin/python" -c "import alto_core; print(alto_core.__version__)")
+if [[ "${INSTALLED_VERSION}" != "${VERSION}" ]]; then
+    echo "ERROR: built wheel reports version ${INSTALLED_VERSION}, expected ${VERSION}" >&2
+    exit 1
+fi
 rm -rf "${SMOKE_VENV%/venv}"
 
 if [[ -z "${TARGET}" ]]; then
