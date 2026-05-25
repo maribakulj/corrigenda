@@ -56,7 +56,17 @@ jobs:
           echo "Version coherence OK: __init__.py == CHANGELOG.md == ${VERSION}"
 
   alto-core-tests:
+    # Matrix the test suite across every Python version alto-core's
+    # `requires-python` and Trove classifiers claim to support. Without
+    # this, the 3.12/3.13 classifiers in pyproject.toml were unverified
+    # promises and a 3.12-only regression would only surface to PyPI
+    # consumers. `fail-fast: false` so a single broken version doesn't
+    # mask the others' status.
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
     defaults:
       run:
         working-directory: packages/alto-core
@@ -64,7 +74,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install alto-core (editable) + pytest
         # Ship pytest-asyncio so future async tests in alto-core don't
@@ -78,7 +88,15 @@ jobs:
   alto-core-build:
     # Catch packaging regressions (broken classifiers, missing files in
     # the wheel/sdist) here, before they bite us at PyPI release time.
+    # Matrix mirrors `alto-core-tests` so the wheel smoke-install is
+    # exercised under every supported Python — a 3.13-only metadata
+    # incompatibility (eg. a hatchling plugin) would otherwise sail
+    # past CI and break consumers downstream.
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
     defaults:
       run:
         working-directory: packages/alto-core
@@ -86,7 +104,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install build tooling
         run: pip install build
@@ -108,6 +126,11 @@ jobs:
           /tmp/wheel-smoke/bin/pip install dist/*.whl
           /tmp/wheel-smoke/bin/python _smoke_imports.py
       - name: Upload distribution artifacts
+        # Only one matrix leg uploads to avoid name collisions on
+        # actions/upload-artifact@v4 (which errors on duplicate names).
+        # The 3.11 build is the canonical release artifact — the other
+        # legs only need to prove the wheel builds and imports cleanly.
+        if: matrix.python-version == '3.11'
         uses: actions/upload-artifact@v4
         with:
           name: alto-core-dist
