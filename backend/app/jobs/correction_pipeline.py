@@ -41,6 +41,7 @@ from app.schemas import (
     LineManifest,
     LineStatus,
     LineTrace,
+    LLMResponse,
     LLMUserPayload,
     PageManifest,
 )
@@ -511,42 +512,41 @@ class CorrectionPipeline:
     # Per-chunk LLM call + reconciliation
     # ------------------------------------------------------------------
 
-    async def _run_chunk(
+    async def _call_with_retry(
         self,
         *,
-        job_id: str,
         chunk: ChunkRequest,
-        line_by_id: dict[str, LineManifest],
+        chunk_lines: list[LineManifest],
+        hyphen_pairs: dict[str, str],
+        all_lines_by_id: dict[str, LineManifest],
         api_key: str,
         model: str,
-        provider_name: str,
-        traces: dict[str, LineTrace] | None = None,
-        cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
-    ) -> int:
-        """Process one chunk through the LLM. Returns hyphen pairs reconciled."""
-        chunk_lines = [line_by_id[lid] for lid in chunk.line_ids if lid in line_by_id]
-        if not chunk_lines:
-            return 0
+        traces: dict[str, LineTrace] | None,
+    ) -> LLMResponse | None:
+        """Call the LLM provider with retries; return a validated response.
 
-        hyphen_pairs = _build_hyphen_pairs(chunk_lines)
-        all_lines_by_id = line_by_id
+        On success: returns the validated LLMResponse.
+        On exhaustion: applies the OCR fallback to every line in
+        ``chunk_lines`` (corrected_text / status / trace), emits a
+        ``warning`` SSE event, increments ``self._fallback_count`` and
+        returns ``None``. The caller must short-circuit on ``None``.
 
-        self.observer.on_event(
-            "chunk_started",
-            {
-                "chunk_id": chunk.chunk_id,
-                "granularity": chunk.granularity.value,
-                "line_count": len(chunk_lines),
-            },
-        )
-
+        Retry strategy (see test_retry_classification for the pinned
+        contract):
+          - Up to ``DEFAULT_MAX_ATTEMPTS`` attempts.
+          - Temperature ramp 0.0 → 0.3 → 0.5, pinned at 0.0 after a
+            HyphenIntegrityError (which suggests the LLM mis-handled the
+            hyphen pair — a lower temperature is more likely to stick to
+            the source).
+          - Backoff: 0s for hyphen violations (first occurrence),
+            ``attempt * 2`` seconds for non-ValueError (HTTP, runtime),
+            ``attempt`` seconds for any other ValueError. Each retry
+            emits a ``retry`` SSE event with the classification tag.
+        """
         max_attempts = self.DEFAULT_MAX_ATTEMPTS
         hyphen_violation = False
 
         for attempt in range(1, max_attempts + 1):
-            # Retry temperature strategy: deterministic first, then more
-            # diverse to escape bad patterns. Hyphen violations always
-            # at 0.0 for maximum precision.
             if hyphen_violation or attempt == 1:
                 temperature = 0.0
             elif attempt == 2:
@@ -604,7 +604,7 @@ class CorrectionPipeline:
                     {lm.line_id: lm.ocr_text for lm in chunk_lines},
                     hyphen_subs if hyphen_subs else None,
                 )
-                hyphen_violation = False
+                return response
 
             except Exception as exc:
                 msg = sanitize_error(str(exc), api_key)
@@ -659,56 +659,99 @@ class CorrectionPipeline:
                         fallback_reason=f"all_attempts_exhausted: {msg[:120]}",
                     )
                 self._fallback_count += 1
-                return 0
+                return None
 
-            # --- Success: apply corrections ---
-            text_by_id: dict[str, str] = {o.line_id: o.corrected_text for o in response.lines}
+        # Unreachable: every iteration either returns or continues.
+        return None
 
-            reconciled_count = _reconcile_pairs(
-                chunk_lines, line_by_id, text_by_id, cross_page_partners
+    async def _run_chunk(
+        self,
+        *,
+        job_id: str,
+        chunk: ChunkRequest,
+        line_by_id: dict[str, LineManifest],
+        api_key: str,
+        model: str,
+        provider_name: str,
+        traces: dict[str, LineTrace] | None = None,
+        cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
+    ) -> int:
+        """Process one chunk through the LLM. Returns hyphen pairs reconciled."""
+        chunk_lines = [line_by_id[lid] for lid in chunk.line_ids if lid in line_by_id]
+        if not chunk_lines:
+            return 0
+
+        hyphen_pairs = _build_hyphen_pairs(chunk_lines)
+        all_lines_by_id = line_by_id
+
+        self.observer.on_event(
+            "chunk_started",
+            {
+                "chunk_id": chunk.chunk_id,
+                "granularity": chunk.granularity.value,
+                "line_count": len(chunk_lines),
+            },
+        )
+
+        response = await self._call_with_retry(
+            chunk=chunk,
+            chunk_lines=chunk_lines,
+            hyphen_pairs=hyphen_pairs,
+            all_lines_by_id=all_lines_by_id,
+            api_key=api_key,
+            model=model,
+            traces=traces,
+        )
+        if response is None:
+            # All attempts exhausted; _call_with_retry already applied the
+            # OCR fallback and the warning event. Nothing left to do here.
+            return 0
+
+        text_by_id: dict[str, str] = {o.line_id: o.corrected_text for o in response.lines}
+
+        reconciled_count = _reconcile_pairs(
+            chunk_lines, line_by_id, text_by_id, cross_page_partners
+        )
+
+        # Apply remaining lines via line_acceptance policy
+        _apply_line_acceptance(chunk_lines, text_by_id, all_lines_by_id, traces)
+
+        # Adjacent duplicate detection (post-acceptance pass)
+        accepted_lines = [
+            (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text) for lm in chunk_lines
+        ]
+        dup_reverts = check_adjacent_duplicates(accepted_lines)
+        for lm in chunk_lines:
+            if lm.line_id in dup_reverts:
+                lm.corrected_text = lm.ocr_text
+                lm.status = LineStatus.FALLBACK
+
+        # Trace: projected_text + validation_status
+        for lm in chunk_lines:
+            _set_trace(
+                traces,
+                lm,
+                projected_text=(
+                    lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
+                ),
+                validation_status=lm.status.value,
             )
+            # Only set fallback_reason for adjacent-duplicate reverts when
+            # an earlier reason hasn't already pinned the cause.
+            if traces is not None and lm.line_id in dup_reverts:
+                trace = traces.get(_trace_key(lm))
+                if trace is not None and not trace.fallback_reason:
+                    trace.fallback_reason = dup_reverts[lm.line_id]
 
-            # Apply remaining lines via line_acceptance policy
-            _apply_line_acceptance(chunk_lines, text_by_id, all_lines_by_id, traces)
-
-            # Adjacent duplicate detection (post-acceptance pass)
-            accepted_lines = [
-                (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text) for lm in chunk_lines
-            ]
-            dup_reverts = check_adjacent_duplicates(accepted_lines)
-            for lm in chunk_lines:
-                if lm.line_id in dup_reverts:
-                    lm.corrected_text = lm.ocr_text
-                    lm.status = LineStatus.FALLBACK
-
-            # Trace: projected_text + validation_status
-            for lm in chunk_lines:
-                _set_trace(
-                    traces,
-                    lm,
-                    projected_text=(
-                        lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
-                    ),
-                    validation_status=lm.status.value,
-                )
-                # Only set fallback_reason for adjacent-duplicate reverts when
-                # an earlier reason hasn't already pinned the cause.
-                if traces is not None and lm.line_id in dup_reverts:
-                    trace = traces.get(_trace_key(lm))
-                    if trace is not None and not trace.fallback_reason:
-                        trace.fallback_reason = dup_reverts[lm.line_id]
-
-            self.observer.on_event(
-                "chunk_completed",
-                {
-                    "chunk_id": chunk.chunk_id,
-                    "line_count": len(chunk_lines),
-                    "hyphen_pairs_reconciled": reconciled_count,
-                },
-            )
-            return reconciled_count
-
-        return 0
+        self.observer.on_event(
+            "chunk_completed",
+            {
+                "chunk_id": chunk.chunk_id,
+                "line_count": len(chunk_lines),
+                "hyphen_pairs_reconciled": reconciled_count,
+            },
+        )
+        return reconciled_count
 
     # ------------------------------------------------------------------
     # Output writing (rewriter + trace assembly)
