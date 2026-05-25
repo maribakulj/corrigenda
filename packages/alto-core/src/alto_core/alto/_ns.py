@@ -28,6 +28,24 @@ def _tag(local: str, ns: str) -> str:
     return f"{{{ns}}}{local}" if ns else local
 
 
+def _int_attr(el: etree._Element, name: str, default: int = 0) -> int:
+    """Read an integer attribute, tolerating MISSING and EMPTY values.
+
+    Pre-L10 the alto-core parser used ``int(el.get(name, 0))`` which
+    fails on ``WIDTH=""`` (legitimate output from some ALTO
+    producers) because `get(name, 0)` returns the empty string for
+    present-but-empty attrs — the default only fires for MISSING
+    attrs (L10/B3).
+
+    Non-integer values still raise ValueError as before — only the
+    empty-string case is normalised to the default.
+    """
+    raw = el.get(name)
+    if raw is None or raw == "":
+        return default
+    return int(raw)
+
+
 def make_safe_parser() -> etree.XMLParser:
     """Return an lxml parser hardened against XXE / SSRF / entity-amplification.
 

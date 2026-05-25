@@ -5,7 +5,7 @@ from pathlib import Path
 
 from lxml import etree
 
-from alto_core.alto._ns import _detect_namespace, _tag, make_safe_parser
+from alto_core.alto._ns import _detect_namespace, _int_attr, _tag, make_safe_parser
 from alto_core.schemas import (
     BlockManifest,
     Coords,
@@ -260,8 +260,8 @@ def parse_alto_file(
 
     for page_idx, page_el in enumerate(layout.findall(_tag("Page", ns))):
         page_id = page_el.get("ID", f"PAGE_{page_index_offset + page_idx}")
-        page_width = int(page_el.get("WIDTH", 0))
-        page_height = int(page_el.get("HEIGHT", 0))
+        page_width = _int_attr(page_el, "WIDTH")
+        page_height = _int_attr(page_el, "HEIGHT")
 
         blocks: list[BlockManifest] = []
         lines: list[LineManifest] = []
@@ -273,10 +273,10 @@ def parse_alto_file(
         for tb in container.findall(_tag("TextBlock", ns)):
             block_id = tb.get("ID", f"TB_{page_id}_{block_order}")
             block_coords = Coords(
-                hpos=int(tb.get("HPOS", 0)),
-                vpos=int(tb.get("VPOS", 0)),
-                width=int(tb.get("WIDTH", 0)),
-                height=int(tb.get("HEIGHT", 0)),
+                hpos=_int_attr(tb, "HPOS"),
+                vpos=_int_attr(tb, "VPOS"),
+                width=_int_attr(tb, "WIDTH"),
+                height=_int_attr(tb, "HEIGHT"),
             )
             line_ids: list[str] = []
             line_order_in_block = 0
@@ -284,10 +284,10 @@ def parse_alto_file(
             for tl in tb.findall(_tag("TextLine", ns)):
                 line_id = tl.get("ID", f"TL_{block_id}_{line_order_in_block}")
                 coords = Coords(
-                    hpos=int(tl.get("HPOS", 0)),
-                    vpos=int(tl.get("VPOS", 0)),
-                    width=int(tl.get("WIDTH", 0)),
-                    height=int(tl.get("HEIGHT", 0)),
+                    hpos=_int_attr(tl, "HPOS"),
+                    vpos=_int_attr(tl, "VPOS"),
+                    width=_int_attr(tl, "WIDTH"),
+                    height=_int_attr(tl, "HEIGHT"),
                 )
                 ocr_text = _build_ocr_text(tl, ns)
 

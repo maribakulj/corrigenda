@@ -42,6 +42,19 @@ def validate_llm_response(
         "hyphen_integrity_violation".
     """
     # --- Basic structure ---
+    # L10/B4 — guard against non-dict input UPFRONT. Pre-fix the
+    # first line was `if "lines" not in raw` which raised
+    # `TypeError: argument of type 'NoneType' is not iterable` on
+    # None / list / int / bool. The orchestrator's retry classifier
+    # only catches `(ValueError, json.JSONDecodeError)`, so a
+    # provider returning None silently bypassed all 3 retry attempts
+    # AND skipped the OCR fallback. Re-raising as ValueError puts
+    # the response back on the standard retry path.
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"LLM response is not a JSON object (got {type(raw).__name__})"
+        )
+
     if "lines" not in raw:
         raise ValueError("Missing key 'lines' in LLM response")
 
@@ -76,7 +89,12 @@ def validate_llm_response(
 
         seen_ids.add(line_id)
 
-        if not isinstance(corrected_text, str) or corrected_text == "":
+        # L10/R3 — `corrected_text == ""` accepted whitespace-only
+        # values ("   ", "\t", NBSP). The rewriter would then write
+        # `CONTENT="   "` and silently obliterate the original word.
+        # `.strip()` catches every whitespace-only case in one check
+        # (ASCII spaces + Unicode whitespace incl. NBSP).
+        if not isinstance(corrected_text, str) or corrected_text.strip() == "":
             raise ValueError(f"corrected_text for {line_id!r} is empty or missing")
         if "\n" in corrected_text or "\r" in corrected_text:
             raise ValueError(

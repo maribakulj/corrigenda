@@ -8,7 +8,7 @@ from pathlib import Path
 from lxml import etree
 
 from alto_core.alto._norm import clean_content, nfc
-from alto_core.alto._ns import _detect_namespace, _tag, make_safe_parser
+from alto_core.alto._ns import _detect_namespace, _int_attr, _tag, make_safe_parser
 from alto_core.schemas import HyphenRole, LineManifest, PageManifest
 
 # ---------------------------------------------------------------------------
@@ -332,10 +332,10 @@ def _rebuild_normal_line(
 
     _clear_line(el, ns)
 
-    hpos = int(el.get("HPOS", 0))
-    vpos = int(el.get("VPOS", 0))
-    width = int(el.get("WIDTH", 0))
-    height = int(el.get("HEIGHT", 0))
+    hpos = _int_attr(el, "HPOS")
+    vpos = _int_attr(el, "VPOS")
+    width = _int_attr(el, "WIDTH")
+    height = _int_attr(el, "HEIGHT")
 
     tokens = _tokenize(corrected)
     if not tokens:
@@ -393,10 +393,10 @@ def _rebuild_hyp_part1(
 
     _clear_line(el, ns)
 
-    hpos = int(el.get("HPOS", 0))
-    vpos = int(el.get("VPOS", 0))
-    width = int(el.get("WIDTH", 0))
-    height = int(el.get("HEIGHT", 0))
+    hpos = _int_attr(el, "HPOS")
+    vpos = _int_attr(el, "VPOS")
+    width = _int_attr(el, "WIDTH")
+    height = _int_attr(el, "HEIGHT")
 
     hyp_width = max(1, round(width * 0.04))
     text_width = max(1, width - hyp_width)
@@ -477,10 +477,10 @@ def _rebuild_hyp_part2(
 
     _clear_line(el, ns)
 
-    hpos = int(el.get("HPOS", 0))
-    vpos = int(el.get("VPOS", 0))
-    width = int(el.get("WIDTH", 0))
-    height = int(el.get("HEIGHT", 0))
+    hpos = _int_attr(el, "HPOS")
+    vpos = _int_attr(el, "VPOS")
+    width = _int_attr(el, "WIDTH")
+    height = _int_attr(el, "HEIGHT")
 
     tokens = _tokenize(corrected)
     if not tokens:
