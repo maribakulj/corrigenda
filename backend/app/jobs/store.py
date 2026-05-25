@@ -53,14 +53,6 @@ class JobStore:
         if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
             self._completed_at.setdefault(job_id, time.monotonic())
 
-    def increment_counter(self, job_id: str, field: str, delta: int = 1) -> None:
-        """Atomically read-increment-write a numeric counter on a job."""
-        job = self._jobs.get(job_id)
-        if job is None:
-            return
-        current = getattr(job, field, 0) or 0
-        setattr(job, field, current + delta)
-
     # ------------------------------------------------------------------
     # SSE
     # ------------------------------------------------------------------

@@ -42,8 +42,8 @@ class Provider(str, Enum):
 
 class HyphenRole(str, Enum):
     NONE = "none"
-    PART1 = "HypPart1"  # last line of pair: carries left fragment + hyphen
-    PART2 = "HypPart2"  # first line of pair: carries right fragment
+    PART1 = "HypPart1"  # first (top) line of pair: carries left fragment + trailing hyphen
+    PART2 = "HypPart2"  # second (bottom) line of pair: carries right fragment
     BOTH = "HypBoth"  # PART2 of previous pair AND PART1 of next pair (chained)
 
 
@@ -74,8 +74,6 @@ class LineManifest(BaseModel):
     ocr_text: str
     prev_line_id: str | None = None
     next_line_id: str | None = None
-    expected: bool = True
-    received: bool = False
     corrected_text: str | None = None
     status: LineStatus = LineStatus.PENDING
 
