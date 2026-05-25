@@ -1,4 +1,9 @@
-"""Validator for LLM structured responses."""
+"""Validator for LLM structured responses.
+
+Includes the pre-retry pair-drift check (``_check_pair_drift``). See
+``app.jobs.migration_guards`` for the full matrix of text-migration
+guards across the three pipeline stages (validate / reconcile / accept).
+"""
 
 from __future__ import annotations
 
