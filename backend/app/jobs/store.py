@@ -31,6 +31,18 @@ _MAX_COMPLETED_JOBS = 200
 
 
 class JobStore:
+    # L10/F10 — per-job SSE subscriber cap. Each subscriber owns a
+    # 500-slot `asyncio.Queue` allocated by `subscribe()`. Without a
+    # cap, an attacker can open thousands of SSE connections to one
+    # job_id and pin ~500 events × N queues × event_size in memory —
+    # a cheap memory-DoS on the single-worker server (no auth: the
+    # job_id is the only "secret" and is often visible in operator
+    # logs anyway). 10 concurrent SSE subscribers per job is well
+    # above any legitimate UX (a job has 1 maker plus maybe a few
+    # observers); legitimate consumers that lose their slot can
+    # poll `/api/jobs/{id}` instead.
+    MAX_SUBSCRIBERS_PER_JOB: int = 10
+
     def __init__(self, ttl_seconds: int = _DEFAULT_TTL_SECONDS) -> None:
         self._jobs: dict[str, JobManifest] = {}
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
@@ -105,8 +117,27 @@ class JobStore:
     def subscribe(self, job_id: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=500)
         with self._lock:
-            self._subscribers.setdefault(job_id, []).append(q)
+            subs = self._subscribers.setdefault(job_id, [])
+            if len(subs) >= self.MAX_SUBSCRIBERS_PER_JOB:
+                # Caller (typically the SSE route handler) should
+                # pre-check via `subscriber_count(job_id)` and 503
+                # before reaching this path; the raise here is the
+                # belt-and-suspenders defence against TOCTOU between
+                # the pre-check and this acquire.
+                raise RuntimeError(
+                    f"subscriber cap reached for job {job_id} (max {self.MAX_SUBSCRIBERS_PER_JOB})"
+                )
+            subs.append(q)
         return q
+
+    def subscriber_count(self, job_id: str) -> int:
+        """Current number of active subscribers for ``job_id``. The SSE
+        route handler reads this BEFORE calling `subscribe()` so it
+        can return 503 cleanly (rather than racing with the cap-raise
+        inside an async generator, which would fire after the
+        response headers had started to flush)."""
+        # Single dict.get + len is atomic in CPython; no lock needed.
+        return len(self._subscribers.get(job_id, []))
 
     def unsubscribe(self, job_id: str, queue: asyncio.Queue) -> None:
         with self._lock:
@@ -131,8 +162,21 @@ class JobStore:
 
         Keepalive ping is sent every 30 s in the normal path; the
         generator exits on a 'completed' or 'failed' event.
+
+        Subscriber-cap handling (L10/F10): if the per-job cap is
+        already exhausted, `subscribe()` raises RuntimeError; we
+        translate that into a single synthetic ``error`` event so the
+        client sees a clean refusal instead of a generic 500 / silent
+        disconnect.
         """
-        queue = self.subscribe(job_id)
+        try:
+            queue = self.subscribe(job_id)
+        except RuntimeError as exc:
+            yield SSEEvent(
+                event="error",
+                data={"reason": "subscriber_cap_reached", "message": str(exc)},
+            )
+            return
         try:
             # Re-check status AFTER subscribing. Three cases:
             #   - Terminal event landed BEFORE we subscribed → status is

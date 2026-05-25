@@ -294,6 +294,96 @@ async def test_stream_events_does_not_lose_terminal_during_subscribe_race(monkey
 
 
 # ---------------------------------------------------------------------------
+# Subscriber cap (L10/F10) — prevent SSE-connection-flood DoS
+# ---------------------------------------------------------------------------
+
+
+def test_subscribe_rejects_beyond_per_job_cap():
+    """L10/F10 — `JobStore.subscribe` was unbounded: an attacker could
+    open thousands of SSE connections to one job_id, each owning a
+    500-slot `asyncio.Queue`. With ~thousand subscribers × 500 events
+    × event size, this is a cheap memory-DoS on the single-worker
+    server (no auth required since job_id is the only "secret").
+
+    The fix caps the per-job subscriber list at `JobStore.MAX_SUBSCRIBERS_PER_JOB`
+    and raises `RuntimeError` when exceeded. The SSE route handler
+    catches that and returns 503.
+    """
+    store = JobStore()
+    jid = store.create_job(Provider.OPENAI, "test")
+
+    queues = []
+    cap = JobStore.MAX_SUBSCRIBERS_PER_JOB
+    for _ in range(cap):
+        queues.append(store.subscribe(jid))
+    assert len(queues) == cap
+
+    with pytest.raises(RuntimeError, match="subscriber cap"):
+        store.subscribe(jid)
+
+
+def test_subscriber_count_reports_current_size():
+    """Companion of the cap test — the SSE route handler reads
+    `subscriber_count(job_id)` to decide whether to 503 BEFORE
+    calling subscribe (avoiding the after-headers exception path).
+    """
+    store = JobStore()
+    jid = store.create_job(Provider.OPENAI, "test")
+    assert store.subscriber_count(jid) == 0
+
+    q1 = store.subscribe(jid)
+    q2 = store.subscribe(jid)
+    assert store.subscriber_count(jid) == 2
+
+    store.unsubscribe(jid, q1)
+    assert store.subscriber_count(jid) == 1
+
+    store.unsubscribe(jid, q2)
+    assert store.subscriber_count(jid) == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_events_yields_synthetic_error_when_cap_exhausted():
+    """L10/F10 — when `subscribe()` raises because the cap is exhausted,
+    `stream_events` must yield a clean synthetic ``error`` event and
+    return, NOT propagate the RuntimeError (which would surface as a
+    generic 500 / silent disconnect to the SSE client AFTER headers
+    had started flushing).
+    """
+    store = JobStore()
+    jid = store.create_job(Provider.OPENAI, "test")
+
+    # Fill the cap with live subscribers.
+    _filler = [store.subscribe(jid) for _ in range(JobStore.MAX_SUBSCRIBERS_PER_JOB)]
+
+    events = []
+    async for ev in store.stream_events(jid):
+        events.append(ev)
+    # Generator must terminate (single synthetic event), not hang.
+    assert len(events) == 1
+    assert events[0].event == "error"
+    assert events[0].data.get("reason") == "subscriber_cap_reached"
+
+
+def test_subscribe_cap_recovers_after_unsubscribe():
+    """Cap is on CURRENT subscribers, not cumulative — unsubscribing
+    frees a slot so a new subscriber can take it. Otherwise a job
+    that's had MAX subscribers over its lifetime would be permanently
+    unsubscribable."""
+    store = JobStore()
+    jid = store.create_job(Provider.OPENAI, "test")
+    cap = JobStore.MAX_SUBSCRIBERS_PER_JOB
+
+    queues = [store.subscribe(jid) for _ in range(cap)]
+    with pytest.raises(RuntimeError):
+        store.subscribe(jid)
+
+    store.unsubscribe(jid, queues[0])
+    # Slot freed — must accept a fresh subscriber.
+    store.subscribe(jid)
+
+
+# ---------------------------------------------------------------------------
 # Locking contract
 # ---------------------------------------------------------------------------
 
