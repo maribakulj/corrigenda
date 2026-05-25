@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 
 interface ApiKeyInputProps {
   value: string
@@ -8,12 +8,22 @@ interface ApiKeyInputProps {
 
 export function ApiKeyInput({ value, onChange, disabled }: ApiKeyInputProps) {
   const [visible, setVisible] = useState(false)
+  // useId() gives a stable, unique label/input link without colliding
+  // across multiple instances on the same page — also makes the input
+  // queryable via getByLabelText() in tests.
+  const inputId = useId()
 
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-slate-400 font-mono text-xs uppercase tracking-wider">API Key</label>
+      <label
+        htmlFor={inputId}
+        className="text-slate-400 font-mono text-xs uppercase tracking-wider"
+      >
+        API Key
+      </label>
       <div className="relative">
         <input
+          id={inputId}
           type={visible ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
