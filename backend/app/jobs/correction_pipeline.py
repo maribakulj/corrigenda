@@ -623,9 +623,11 @@ class CorrectionPipeline:
                 for rl in raw_lines:
                     if not isinstance(rl, dict):
                         continue
-                    lm = lm_by_id.get(rl.get("line_id", ""))
-                    if lm is not None:
-                        _set_trace(traces, lm, model_corrected_text=rl.get("corrected_text", ""))
+                    target = lm_by_id.get(rl.get("line_id", ""))
+                    if target is not None:
+                        _set_trace(
+                            traces, target, model_corrected_text=rl.get("corrected_text", "")
+                        )
 
                 hyphen_subs: dict[str, str] = {}
                 for lm in chunk_lines:
