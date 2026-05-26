@@ -16,7 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.alto.parser import build_document_manifest
 from app.api.deps import get_job_store
-from app.jobs.runner import DEFAULT_JOB_TIMEOUT_SECONDS, JobRunner
+from app.jobs.orchestrator import run_job
 from app.protocols import JobStore
 from app.schemas import (
     CreateJobResponse,
@@ -146,9 +146,8 @@ async def create_job(
                 exc,
             )
 
-    runner = JobRunner(job_store=store)
     task = asyncio.create_task(
-        runner.run(
+        run_job(
             job_id=job_id,
             document_manifest=doc_manifest,
             provider_name=provider,
@@ -157,7 +156,7 @@ async def create_job(
             output_dir=out_dir,
             source_files={name: path for name, path in saved.items()},
             provider=provider_instance,
-            timeout_seconds=DEFAULT_JOB_TIMEOUT_SECONDS,
+            job_store_override=store,
         )
     )
     task.add_done_callback(_on_task_done)

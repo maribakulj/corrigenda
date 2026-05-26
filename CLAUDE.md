@@ -42,10 +42,10 @@ docker build -t alto-corrector . # HF Spaces single container
 The correction flow is: **Parse → Chunk → Enrich → LLM Call → Validate → Reconcile → Rewrite**
 
 1. `alto/parser.py` — Parses ALTO XML (v2/v3/v4), extracts pages/blocks/lines into `PageManifest` structures, detects inter-line hyphenation (explicit via SUBS_TYPE/HYP and heuristic via trailing dash)
-2. `jobs/chunk_planner.py` — Splits lines into LLM-sized chunks using adaptive granularity: PAGE → BLOCK → WINDOW → LINE. Hyphen pairs are atomic and must never be split across chunks. `downgrade_granularity` and `plan_page(force_granularity=...)` are exposed for a planned retry-with-finer-granularity strategy (not yet wired into the pipeline)
+2. `jobs/chunk_planner.py` — Splits lines into LLM-sized chunks using adaptive granularity: PAGE → BLOCK → WINDOW → LINE. Hyphen pairs are atomic and must never be split across chunks
 3. `alto/hyphenation.py` — **Hyphenation Reconciler** (central module). Enriches chunks with hyphenation metadata before LLM call (`enrich_chunk_lines`), then reconciles corrected text back onto physical line pairs after LLM response (`reconcile_hyphen_pair`). Core invariant: the app decides, the LLM informs — lines are never merged or moved
 4. `jobs/validator.py` — Validates LLM JSON responses (line count, IDs, no newlines). Extra check: hyphen pairs must not have been merged by the LLM
-5. `jobs/correction_pipeline.py` — Main engine. Drives the chunk pipeline with retry logic: 3 attempts per chunk with a temperature ramp (0.0 → 0.3 → 0.5), then fallback to OCR source text. `jobs/orchestrator.py` is a thin backward-compat wrapper around `JobRunner` in `jobs/runner.py`.
+5. `jobs/orchestrator.py` — Main engine. Runs the chunk pipeline with retry logic (3 attempts per chunk, then granularity downgrade, then fallback to OCR source text)
 6. `alto/rewriter.py` — Rewrites ALTO XML with corrected text, reconstructing HYP/SUBS_* elements for hyphen pairs. Never modifies TextLine geometry attributes (ID, HPOS, VPOS, WIDTH, HEIGHT)
 
 ### LLM Providers (`providers/`)
