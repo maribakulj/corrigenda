@@ -331,7 +331,7 @@ def _disambiguate_page_ids(
 
     Multiple ALTO files commonly declare the same Page ID (``"Page1"``,
     ``"P1"``…) — a per-scan workflow practically guarantees this.
-    Without disambiguation, the orchestrator's cross-page hyphen partner
+    Without disambiguation, the pipeline's cross-page hyphen partner
     lookup picks the wrong page, intra-page hyphen pair_page_id refs
     become ambiguous, and the trace/diff/layout endpoints emit duplicate
     page_id values to the frontend.
