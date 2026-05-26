@@ -14,19 +14,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from alto_core.alto.hyphenation import (
+    reconcile_hyphen_pair,
+)
+from alto_core.alto.parser import parse_alto_file
 
 # `_extract_text_from_line` is a private rewriter helper; the backend
 # re-export shim no longer surfaces private symbols (Stage 3 of audit
 # remediation). Import directly from alto-core when a test legitimately
 # needs the private.
-from alto_core.alto.rewriter import _extract_text_from_line
+from alto_core.alto.rewriter import _extract_text_from_line, rewrite_alto_file
 from lxml import etree
 
-from app.alto.hyphenation import (
-    reconcile_hyphen_pair,
-)
-from app.alto.parser import parse_alto_file
-from app.alto.rewriter import rewrite_alto_file
 from app.schemas import HyphenRole
 
 NS = "http://www.loc.gov/standards/alto/ns-v3#"

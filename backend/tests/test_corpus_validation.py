@@ -17,15 +17,15 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from lxml import etree
-
-from app.alto.hyphenation import (
+from alto_core.alto.hyphenation import (
     ReconcileMetrics,
     classify_reconcile_outcome,
     reconcile_hyphen_pair,
 )
-from app.alto.parser import parse_alto_file
-from app.alto.rewriter import RewriterMetrics, rewrite_alto_file
+from alto_core.alto.parser import parse_alto_file
+from alto_core.alto.rewriter import RewriterMetrics, rewrite_alto_file
+from lxml import etree
+
 from app.schemas import HyphenRole
 
 NS = "http://www.loc.gov/standards/alto/ns-v3#"

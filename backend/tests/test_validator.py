@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from alto_core.pipeline.validator import validate_llm_response
 
-from app.jobs.validator import validate_llm_response
 from app.schemas import LLMResponse
 
 # ---------------------------------------------------------------------------

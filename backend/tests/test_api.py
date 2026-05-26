@@ -448,7 +448,8 @@ def test_download_not_ready(client: TestClient):
 
 def test_download_single_xml(client: TestClient):
     """Complete a job synchronously then download the output XML."""
-    from app.alto.parser import build_document_manifest
+    from alto_core.alto.parser import build_document_manifest
+
     from app.jobs.orchestrator import run_job
     from app.storage import init_job_dirs, output_dir, save_uploaded_files
 

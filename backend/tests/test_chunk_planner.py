@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from alto_core.pipeline.chunk_planner import downgrade_granularity, plan_page
 
-from app.jobs.chunk_planner import downgrade_granularity, plan_page
 from app.schemas import (
     BlockManifest,
     ChunkGranularity,
@@ -428,7 +428,7 @@ def test_corpus_chains_never_split():
     if not X0000002_PATH.exists():
         pytest.skip("X0000002.xml not available")
 
-    from app.alto.parser import parse_alto_file
+    from alto_core.alto.parser import parse_alto_file
 
     pages, _ = parse_alto_file(X0000002_PATH, "X0000002.xml")
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.jobs.correction_pipeline import sanitize_error as _sanitize_error
+from alto_core.pipeline.correction_pipeline import sanitize_error as _sanitize_error
 
 # ---------------------------------------------------------------------------
 # Regex-based stripping

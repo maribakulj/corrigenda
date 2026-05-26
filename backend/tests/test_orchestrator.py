@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from alto_core.alto.parser import build_document_manifest, parse_alto_file
 from lxml import etree
 
-from app.alto.parser import build_document_manifest, parse_alto_file
 from app.jobs.orchestrator import run_job
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider, SSEEvent
@@ -302,7 +302,7 @@ async def test_cross_page_hyphen_reconciled_through_colliding_ids(tmp_path: Path
     and silently picked the local file (causing self-pairing or wrong
     pairing). With the qualified (page_id, line_id) lookup the right
     partner is resolved and the pair survives the pipeline."""
-    from app.alto.parser import build_document_manifest
+    from alto_core.alto.parser import build_document_manifest
 
     body_a = """\
 <TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="60">
@@ -440,7 +440,7 @@ async def test_run_job_general_exception_marks_failed(
 ):
     """A non-timeout exception escaping the pipeline must mark the job
     as FAILED with a sanitized error (no api_key leak)."""
-    from app.jobs.correction_pipeline import CorrectionPipeline
+    from alto_core.pipeline.correction_pipeline import CorrectionPipeline
 
     store, job_id = _make_store_and_job()
 
@@ -929,7 +929,8 @@ async def test_runner_marks_job_failed_on_cancellation(tmp_path: Path):
     capacity sweep + TTL eviction both keyed off `_completed_at` so
     the job leaked across redeploys.
     """
-    from app.alto.parser import build_document_manifest
+    from alto_core.alto.parser import build_document_manifest
+
     from app.jobs.runner import JobRunner
     from app.schemas import JobStatus
     from app.storage import init_job_dirs, output_dir, save_uploaded_files

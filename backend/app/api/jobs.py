@@ -9,12 +9,12 @@ import zipfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+from alto_core.alto.parser import build_document_manifest
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from sse_starlette.sse import EventSourceResponse
 from starlette.background import BackgroundTask
 
-from app.alto.parser import build_document_manifest
 from app.api.deps import get_job_store
 from app.api.rate_limit import limiter
 from app.jobs import orchestrator as _orch

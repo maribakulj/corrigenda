@@ -5,7 +5,8 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-from app.alto.parser import build_document_manifest, parse_alto_file
+from alto_core.alto.parser import build_document_manifest, parse_alto_file
+
 from app.schemas import HyphenRole
 
 # ---------------------------------------------------------------------------

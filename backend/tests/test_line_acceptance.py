@@ -6,12 +6,12 @@ import asyncio
 from pathlib import Path
 
 import pytest
-
-from app.alto.parser import build_document_manifest, parse_alto_file
-from app.jobs.line_acceptance import (
+from alto_core.alto.parser import build_document_manifest, parse_alto_file
+from alto_core.pipeline.line_acceptance import (
     check_adjacent_duplicates,
     check_line,
 )
+
 from app.jobs.orchestrator import run_job
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider

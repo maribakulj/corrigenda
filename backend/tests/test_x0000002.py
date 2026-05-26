@@ -15,14 +15,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
-from app.alto.hyphenation import (
+from alto_core.alto.hyphenation import (
     ReconcileMetrics,
     classify_reconcile_outcome,
     reconcile_hyphen_pair,
 )
-from app.alto.parser import parse_alto_file
-from app.alto.rewriter import rewrite_alto_file
+from alto_core.alto.parser import parse_alto_file
+from alto_core.alto.rewriter import rewrite_alto_file
+
 from app.schemas import HyphenRole
 
 X0000002_PATH = Path(__file__).resolve().parent.parent.parent / "examples" / "X0000002.xml"

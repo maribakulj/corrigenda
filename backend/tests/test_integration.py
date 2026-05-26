@@ -11,10 +11,10 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from alto_core.alto.parser import build_document_manifest, parse_alto_file
 from fastapi.testclient import TestClient
 from lxml import etree
 
-from app.alto.parser import build_document_manifest, parse_alto_file
 from app.jobs.orchestrator import run_job
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider

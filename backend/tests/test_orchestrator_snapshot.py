@@ -23,9 +23,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from alto_core.alto.parser import build_document_manifest
 from lxml import etree
 
-from app.alto.parser import build_document_manifest
 from app.jobs.orchestrator import run_job
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider
