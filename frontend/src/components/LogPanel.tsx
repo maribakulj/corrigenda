@@ -6,16 +6,16 @@ interface LogPanelProps {
 }
 
 const TYPE_COLORS: Record<LogType, string> = {
-  info:    'text-slate-400',
+  info: 'text-slate-400',
   warning: 'text-amber-400',
-  error:   'text-red-400',
+  error: 'text-red-400',
   success: 'text-green-400',
 }
 
 const TYPE_ICONS: Record<LogType, string> = {
-  info:    '·',
+  info: '·',
   warning: '▲',
-  error:   '✕',
+  error: '✕',
   success: '✓',
 }
 

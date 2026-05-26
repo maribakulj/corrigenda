@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
-import asyncio
-import io
 import json
-import logging
+import os
+import tempfile
 import zipfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, Response
 from sse_starlette.sse import EventSourceResponse
+from starlette.background import BackgroundTask
 
 from app.alto.parser import build_document_manifest
 from app.api.deps import get_job_store
-from app.jobs.orchestrator import run_job
+from app.api.rate_limit import limiter
+from app.jobs import orchestrator as _orch
+from app.jobs.runner import JobRunner
 from app.protocols import JobStore
 from app.schemas import (
     CreateJobResponse,
@@ -34,10 +36,20 @@ from app.storage import (
     output_dir,
     save_uploaded_files,
 )
+from app.storage.output_writer import FilesystemOutputWriter
 
 router = APIRouter()
 
 _ALLOWED_UPLOAD_EXTENSIONS = {".xml", ".alto", ".zip"}
+
+# L10/B5 — per-file upload cap (inclusive). `await UploadFile.read()`
+# loads the full body into memory; without a cap a 100 GB upload would
+# OOM the single-worker process before any decoding. 100 MB is generous
+# for ALTO files (single-page is typically <1 MB; ZIPs with embedded
+# page scans can reach tens of MB) while bounding worst-case allocation.
+# Looked up dynamically inside `create_job` so tests can monkey-patch
+# the constant without re-importing the module.
+_MAX_UPLOAD_FILE_BYTES = 100 * 1024 * 1024  # 100 MiB
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +81,11 @@ def get_completed_job(
 
 
 @router.post("", response_model=CreateJobResponse)
+# Rate limited to throttle file uploads + spawned background tasks
+# against a single-worker server with bounded disk/CPU budget.
+@limiter.limit("20/minute")
 async def create_job(
+    request: Request,
     files: list[UploadFile] = File(...),
     provider: str = Form(...),
     api_key: str = Form(...),
@@ -90,13 +106,25 @@ async def create_job(
     # Validate provider
     try:
         provider_enum = Provider(provider)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider!r}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider!r}") from exc
 
-    # Read all file bytes
+    # Read all file bytes. Bounded by `_MAX_UPLOAD_FILE_BYTES` per file
+    # so a 100 GB upload yields a fast 413 instead of OOMing the
+    # process. We read `cap + 1` bytes and reject if the result is
+    # longer than `cap` (i.e. there was at least one more byte to read).
+    cap = _MAX_UPLOAD_FILE_BYTES
     file_tuples: list[tuple[str, bytes]] = []
     for f in files:
-        content = await f.read()
+        content = await f.read(cap + 1)
+        if len(content) > cap:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Uploaded file {f.filename!r} exceeds the per-file "
+                    f"limit ({cap} bytes). Split the upload or reduce its size."
+                ),
+            )
         file_tuples.append((f.filename or "upload.xml", content))
 
     # Create job and dirs
@@ -117,7 +145,7 @@ async def create_job(
     try:
         doc_manifest = build_document_manifest(file_pairs)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to parse files: {exc}")
+        raise HTTPException(status_code=400, detail=f"Failed to parse files: {exc}") from exc
 
     if doc_manifest.total_lines == 0:
         raise HTTPException(
@@ -136,30 +164,35 @@ async def create_job(
 
     out_dir = output_dir(job_id)
 
-    # Launch correction in background with crash tracking
-    def _on_task_done(task: asyncio.Task) -> None:
-        exc = task.exception()
-        if exc is not None:
-            logging.getLogger(__name__).error(
-                "Background job %s crashed: %s",
-                job_id,
-                exc,
-            )
+    # Drive the correction through the modern `JobRunner` API directly
+    # rather than the legacy `app.jobs.orchestrator.run_job` wrapper.
+    # The wrapper stays in place for the half-dozen test files that
+    # still call it (test_orchestrator.py, test_trace.py, etc.) but
+    # production code goes through the typed seam.
+    runner = JobRunner(job_store=store)
+    output_writer_instance = FilesystemOutputWriter(out_dir)
 
-    task = asyncio.create_task(
-        run_job(
+    # Spawn correction through the per-app registry so the task is
+    # strongly referenced (prevents GC mid-run) AND so the lifespan
+    # handler can drain it on SIGTERM. Crash logging is centralised
+    # in BackgroundTaskRegistry._on_done.
+    request.app.state.tasks.spawn(
+        runner.run(
             job_id=job_id,
             document_manifest=doc_manifest,
             provider_name=provider,
             api_key=api_key,
             model=model,
-            output_dir=out_dir,
+            output_writer=output_writer_instance,
             source_files={name: path for name, path in saved.items()},
             provider=provider_instance,
-            job_store_override=store,
-        )
+            # Lookup is dynamic (not a snapshot) so `monkeypatch.setattr(
+            # app.jobs.orchestrator, "_JOB_TIMEOUT_SECONDS", ...)` in tests —
+            # and any future runtime tunable — actually takes effect.
+            timeout_seconds=_orch._JOB_TIMEOUT_SECONDS,
+        ),
+        name=f"run_job:{job_id}",
     )
-    task.add_done_callback(_on_task_done)
 
     return CreateJobResponse(job_id=job_id)
 
@@ -238,25 +271,42 @@ async def download_job(
         )
 
     if len(out_files) == 1:
+        # FileResponse streams the file in 64 KB chunks instead of
+        # holding the full body in memory (the old `xml_path.read_bytes()`
+        # buffered up to 500 MB per request × N concurrent downloads).
         xml_path = out_files[0]
-        return Response(
-            content=xml_path.read_bytes(),
+        return FileResponse(
+            xml_path,
             media_type="application/xml",
-            headers={"Content-Disposition": f'attachment; filename="{xml_path.name}"'},
+            filename=xml_path.name,
         )
 
-    # Multiple files → ZIP in memory
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for p in out_files:
-            zf.write(p, arcname=p.name)
-    buf.seek(0)
-
+    # L10/F8 — multi-file: build the ZIP on disk in a NamedTemporaryFile,
+    # then FileResponse streams it back. Previously we materialised the
+    # whole archive in `io.BytesIO()` and shipped `.getvalue()` as a
+    # bytes blob; on a 500 MB job × a handful of concurrent downloads
+    # that's multi-GB resident memory. The tempfile is cleaned up via
+    # a BackgroundTask that fires AFTER the response is fully sent.
     zip_name = f"job_{job_id}_corrected.zip"
-    return Response(
-        content=buf.getvalue(),
+    with tempfile.NamedTemporaryFile(suffix=".zip", prefix="alto_dl_", delete=False) as tmp:
+        tmp_path = tmp.name
+    # The `with` block closed the file handle but `delete=False` means
+    # the file persists on disk for `FileResponse` to read.
+    try:
+        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for p in out_files:
+                zf.write(p, arcname=p.name)
+    except Exception:
+        # If we crash building the ZIP, the BackgroundTask hasn't been
+        # attached yet — clean up by hand so we don't leak the tempfile.
+        os.unlink(tmp_path)
+        raise
+
+    return FileResponse(
+        tmp_path,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
+        filename=zip_name,
+        background=BackgroundTask(os.unlink, tmp_path),
     )
 
 
@@ -291,7 +341,12 @@ async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
     modified_lines = 0
     hyphen_pairs = 0
 
-    assert job.document_manifest is not None  # guaranteed by get_completed_job
+    # get_completed_job already 404s if document_manifest is None, but
+    # an `assert` here would disappear under `python -O` (bandit B101).
+    # Keep a real runtime guard instead so the contract holds in any
+    # interpreter mode.
+    if job.document_manifest is None:
+        raise HTTPException(status_code=500, detail="Job has no document_manifest.")
     for page in job.document_manifest.pages:
         lines_out = []
         for lm in page.lines:
@@ -341,7 +396,8 @@ async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
 async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
     """Return structural layout data (blocks + lines with ALTO coordinates)."""
     pages_out = []
-    assert job.document_manifest is not None  # guaranteed by get_completed_job
+    if job.document_manifest is None:
+        raise HTTPException(status_code=500, detail="Job has no document_manifest.")
     for page in job.document_manifest.pages:
         line_by_id = {lm.line_id: lm for lm in page.lines}
 

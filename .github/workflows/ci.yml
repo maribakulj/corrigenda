@@ -6,7 +6,144 @@ on:
   pull_request:
     branches: [main]
 
+# Minimal default permissions for every job. Override per-job only if a
+# step needs to write (none today).
+permissions:
+  contents: read
+
+# Cancel in-flight CI when a newer commit is pushed to the same ref.
+# Saves CI minutes; the only thing that matters is the latest state.
+# Per-ref grouping keeps PRs and pushes to other branches independent.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  alto-core-lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/alto-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install ruff
+        run: pip install ruff==0.15.14
+      - name: ruff check
+        run: ruff check src/
+      - name: ruff format --check
+        run: ruff format --check src/
+      - name: Version coherence (__init__.py ↔ CHANGELOG.md)
+        # Roadmap L7 / P5 — bumping `__version__` without a matching
+        # CHANGELOG entry was caught only at release-script time
+        # (scripts/release-alto-core.sh:55-59); now CI blocks the
+        # commit. The check accepts both `## [X.Y.Z]` and
+        # `## [X.Y.Z] — date` heading shapes already used in the file.
+        # The regex's optional `(?::\s*[^=]+)?` clause tolerates a future
+        # type annotation (e.g. `__version__: Final[str] = "..."`); without
+        # it, adding a type hint would silently strand CI on the prior
+        # branch where it could not find a match.
+        run: |
+          VERSION=$(python -c "
+          import re, pathlib
+          init = pathlib.Path('src/alto_core/__init__.py').read_text()
+          m = re.search(r\"__version__\\s*(?::\\s*[^=]+)?=\\s*['\\\"]([^'\\\"]+)['\\\"]\", init)
+          if not m:
+              raise SystemExit('__version__ not found in src/alto_core/__init__.py')
+          print(m.group(1))
+          ")
+          echo "Detected __version__: ${VERSION}"
+          if ! grep -E "^## \\[${VERSION}\\]" CHANGELOG.md > /dev/null; then
+            echo "::error file=CHANGELOG.md::__version__ is '${VERSION}' but CHANGELOG.md has no '## [${VERSION}]' heading. Bump the changelog before merging."
+            exit 1
+          fi
+          echo "Version coherence OK: __init__.py == CHANGELOG.md == ${VERSION}"
+
+  alto-core-tests:
+    # Matrix the test suite across every Python version alto-core's
+    # `requires-python` and Trove classifiers claim to support. Without
+    # this, the 3.12/3.13 classifiers in pyproject.toml were unverified
+    # promises and a 3.12-only regression would only surface to PyPI
+    # consumers. `fail-fast: false` so a single broken version doesn't
+    # mask the others' status.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    defaults:
+      run:
+        working-directory: packages/alto-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install alto-core (editable) + pytest
+        # Ship pytest-asyncio so future async tests in alto-core don't
+        # quietly error-out with "asyncio mode not installed".
+        run: |
+          pip install -e .
+          pip install pytest pytest-asyncio
+      - name: pytest
+        run: pytest tests/
+
+  alto-core-build:
+    # Catch packaging regressions (broken classifiers, missing files in
+    # the wheel/sdist) here, before they bite us at PyPI release time.
+    # Matrix mirrors `alto-core-tests` so the wheel smoke-install is
+    # exercised under every supported Python — a 3.13-only metadata
+    # incompatibility (eg. a hatchling plugin) would otherwise sail
+    # past CI and break consumers downstream.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    defaults:
+      run:
+        working-directory: packages/alto-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install build tooling
+        run: pip install build
+      - name: Build wheel + sdist
+        run: python -m build
+      - name: Verify wheel is installable + importable
+        # Smoke-install the wheel into a fresh venv and exercise the
+        # public API. Catches missing files in the wheel, broken
+        # dependencies, or import-time errors. (We skip `twine check`
+        # because it rejects PEP 639's `license-file` metadata field
+        # that hatchling emits — false positive on wheel quality.)
+        #
+        # _smoke_imports.py is the single source of truth shared with
+        # the publish workflow and scripts/release-alto-core.sh — it
+        # iterates `alto_core.__all__` so any drift trips here. See
+        # roadmap L5 / B6.
+        run: |
+          python -m venv /tmp/wheel-smoke
+          /tmp/wheel-smoke/bin/pip install dist/*.whl
+          /tmp/wheel-smoke/bin/python _smoke_imports.py
+      - name: Upload distribution artifacts
+        # Only one matrix leg uploads to avoid name collisions on
+        # actions/upload-artifact@v4 (which errors on duplicate names).
+        # The 3.11 build is the canonical release artifact — the other
+        # legs only need to prove the wheel builds and imports cleanly.
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: alto-core-dist
+          path: packages/alto-core/dist/
+          if-no-files-found: error
+
   backend-lint:
     runs-on: ubuntu-latest
     defaults:
@@ -26,41 +163,45 @@ jobs:
         run: ruff format --check .
 
   backend-types:
+    # Block on alto-core tests: the shims forward to it, so any breakage
+    # there would surface as confusing mypy errors here.
+    needs: [alto-core-tests]
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt -r requirements-dev.txt
-          pip install mypy==1.15.0
+      - name: Install alto-core (editable, sibling package)
+        run: pip install -e packages/alto-core
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt -r requirements-dev.txt
       - name: mypy
+        working-directory: backend
         run: mypy --explicit-package-bases app
 
   backend-tests:
+    # Block on alto-core tests so a flaky backend run doesn't mask a
+    # broken core package.
+    needs: [alto-core-tests]
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     env:
-      PYTHONPATH: .
+      PYTHONPATH: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt -r requirements-dev.txt
-          pip install pytest-cov
+      - name: Install alto-core (editable, sibling package)
+        run: pip install -e packages/alto-core
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt -r requirements-dev.txt
       - name: pytest + coverage gate (80%)
+        working-directory: backend
         run: pytest --cov=app --cov-report=term --cov-report=xml
       - name: Upload coverage
         if: always()
@@ -69,6 +210,28 @@ jobs:
           name: coverage-xml
           path: backend/coverage.xml
           if-no-files-found: ignore
+
+  backend-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install alto-core + backend deps + security tools
+        # alto-core lives next door; install editable so backend imports
+        # resolve. Audit the resolved environment after install
+        # (pip-audit -r doesn't understand editable lines).
+        run: |
+          pip install -e packages/alto-core
+          pip install -r backend/requirements.txt
+          pip install bandit[toml]==1.9.4 pip-audit==2.10.0
+      - name: bandit (static analysis)
+        working-directory: backend
+        run: bandit -r app -c pyproject.toml
+      - name: pip-audit (dependency CVEs in resolved env)
+        run: pip-audit --strict
 
   frontend:
     runs-on: ubuntu-latest
@@ -84,7 +247,17 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: ESLint
+        run: npm run lint
+      - name: Prettier (check)
+        run: npm run format:check
       - name: Type check
         run: npx tsc --noEmit
+      - name: Tests (Vitest)
+        run: npm run test
       - name: Build
         run: npm run build
+      - name: Bundle size budget
+        # Trips when the JS bundle > 75 KB gzipped OR CSS > 10 KB.
+        # Today's baseline is ~57 KB + ~4 KB, giving ~30% headroom.
+        run: npx size-limit

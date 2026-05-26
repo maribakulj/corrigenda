@@ -3,6 +3,24 @@ on:
   push:
     branches: [main]
 
+# Minimum-required permissions for this workflow. The actual mirror
+# happens via a separate HF_TOKEN secret; the workflow only needs to
+# READ the repository contents to push them elsewhere. Without an
+# explicit block, GitHub falls back to the repo-level default
+# (potentially `contents: write`), giving this workflow more power
+# than it uses (L10/R4).
+permissions:
+  contents: read
+
+# Serialise concurrent runs: two PRs merging in quick succession would
+# both try to force-push to the same HF Space. Whichever finishes
+# second wins and the first push's commit metadata vanishes upstream.
+# `cancel-in-progress: false` lets the first run complete so the
+# second sees a clean state (rather than a half-pushed mirror).
+concurrency:
+  group: hf-sync-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest

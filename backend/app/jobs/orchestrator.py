@@ -20,6 +20,7 @@ from pathlib import Path
 from app.jobs.runner import JobRunner
 from app.protocols import BaseProvider, JobStore
 from app.schemas import DocumentManifest
+from app.storage.output_writer import FilesystemOutputWriter
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +63,16 @@ async def run_job(
             "instance explicitly, or call JobRunner directly."
         )
     runner = JobRunner(job_store=job_store_override)
+    # JobRunner takes an OutputWriter Protocol now (audit A2); construct
+    # the filesystem-backed default here so the legacy `output_dir`
+    # signature still works for callers that haven't migrated yet.
     await runner.run(
         job_id=job_id,
         document_manifest=document_manifest,
         provider_name=provider_name,
         api_key=api_key,
         model=model,
-        output_dir=output_dir,
+        output_writer=FilesystemOutputWriter(output_dir),
         source_files=source_files,
         provider=provider,
         timeout_seconds=_JOB_TIMEOUT_SECONDS,

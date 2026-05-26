@@ -10,16 +10,34 @@ RUN npm run build
 FROM python:3.11-slim
 WORKDIR /app
 
-# Install Python dependencies.
-# The comment line in requirements.txt includes a date so that any change
-# (e.g. adding/updating a package) invalidates this Docker layer cache.
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Two-step Python install:
+#   1. alto-core (sibling package) — editable, absolute path so cwd
+#      doesn't matter.
+#   2. backend requirements.txt — alto-core no longer lives in there
+#      since Stage 6 of the audit remediation (decoupled to avoid the
+#      cwd-relative `-e ../packages/alto-core` failure mode).
+COPY packages/alto-core /app/packages/alto-core
+RUN pip install --no-cache-dir -e /app/packages/alto-core
 
-COPY backend/app/ ./app/
-COPY --from=frontend-builder /frontend/dist ./static/
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+
+COPY backend/app/ /app/backend/app/
+COPY --from=frontend-builder /frontend/dist /app/static/
 
 ENV JOB_STORAGE_DIR=/tmp/app-jobs
+ENV PYTHONPATH=/app/backend
+# TRUSTED_PROXIES=* is HF SPACES SPECIFIC. The HF edge proxy strips
+# the incoming X-Forwarded-For and re-emits its own, so "trust any
+# upstream" is safe in that context. Anyone reusing this Dockerfile
+# OUTSIDE of HF Spaces (self-hosted, custom k8s, behind a reverse
+# proxy that does NOT sanitise X-Forwarded-For) MUST override this
+# env var to either "127.0.0.1" (safe baseline) or the explicit
+# proxy IP. Leaving the wildcard in a non-HF deployment lets any
+# unauthenticated caller spoof X-Forwarded-For to bypass per-IP
+# rate limits — making /api/providers/models a free
+# credential-spray oracle (see L10/F5).
+ENV TRUSTED_PROXIES=*
 
 # Create non-root user and ensure storage dir is writable
 RUN useradd --create-home appuser && mkdir -p /tmp/app-jobs && chown appuser /tmp/app-jobs
@@ -32,4 +50,28 @@ EXPOSE 7860
 # Docker's health state ("starting" → "healthy") instead of its own probe,
 # which blocks the "Building" → "Running" transition indefinitely.
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]
+# Single worker on purpose: JobStore is in-process state, multi-worker
+# would shard it across processes (job created on worker N invisible
+# from worker M, SSE clients connecting to the wrong worker would
+# never see updates). When a distributed JobStore lands (Redis,
+# Postgres), bump `--workers` and `--limit-concurrency` together.
+#
+# `--limit-concurrency` caps the queue of in-flight requests so a slow
+# LLM call doesn't accumulate connections indefinitely; surplus
+# requests return 503 quickly. `--timeout-keep-alive` matches the SSE
+# keepalive interval used by stream_events.
+#
+# Proxy-header handling lives in the Python middleware stack
+# (backend/app/main.py installs ProxyHeadersMiddleware with the
+# configurable TRUSTED_PROXIES env var). Previously we ALSO passed
+# `--proxy-headers --forwarded-allow-ips=*` to uvicorn so the same
+# rewrite happened twice; the second pass was a no-op but it
+# silently widened trust to "any upstream", overriding whatever
+# TRUSTED_PROXIES might be set to. Single layer is enough and keeps
+# TRUSTED_PROXIES as the sole authority on which proxies to trust.
+CMD ["uvicorn", "app.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "7860", \
+     "--workers", "1", \
+     "--limit-concurrency", "100", \
+     "--timeout-keep-alive", "60"]

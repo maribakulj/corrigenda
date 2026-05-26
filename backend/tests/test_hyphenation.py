@@ -896,7 +896,9 @@ def test_reconcile_explicit_accepts_nfd_join_against_nfc_subs():
 
 def test_boundary_word_diverged_invariant_to_normalization_form():
     """Comparing OCR 'café' (NFC) to corrected 'café' (NFD) must NOT flag divergence."""
-    from app.alto.hyphenation import _part2_boundary_word_diverged
+    # Private helper of the reconciler — pulled from alto-core directly
+    # since the backend re-export shim no longer surfaces privates.
+    from alto_core.alto.hyphenation import _part2_boundary_word_diverged
 
     nfc_text = "café au lait"
     nfd_text = unicodedata.normalize("NFD", "café") + " au lait"

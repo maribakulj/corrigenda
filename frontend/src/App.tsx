@@ -42,7 +42,13 @@ export default function App() {
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null)
 
   // Models
-  const { models, loading: modelsLoading, error: modelsError, loadModels, reset: resetModels } = useModels()
+  const {
+    models,
+    loading: modelsLoading,
+    error: modelsError,
+    loadModels,
+    reset: resetModels,
+  } = useModels()
 
   // SSE stream
   const { logs, progress, status, isRunning } = useJobStream(jobId)
@@ -60,14 +66,18 @@ export default function App() {
       setDiffLoading(true)
       fetchDiff(jobId)
         .then(setDiffData)
-        .catch(() => { /* non-critical */ })
+        .catch(() => {
+          /* non-critical */
+        })
         .finally(() => setDiffLoading(false))
     }
     if (!layoutData && !layoutLoading) {
       setLayoutLoading(true)
       fetchLayout(jobId)
         .then(setLayoutData)
-        .catch(() => { /* non-critical */ })
+        .catch(() => {
+          /* non-critical */
+        })
         .finally(() => setLayoutLoading(false))
     }
   }, [isDone, jobId, diffData, diffLoading, layoutData, layoutLoading])
@@ -85,7 +95,9 @@ export default function App() {
         }
         setTraceByLineId(map)
       })
-      .catch(() => { /* non-critical */ })
+      .catch(() => {
+        /* non-critical */
+      })
       .finally(() => setTraceLoading(false))
   }, [debugMode, isDone, jobId, traceData, traceLoading])
 
@@ -139,7 +151,7 @@ export default function App() {
     setDebugMode(false)
     resetModels()
     setSelectedModel(null)
-    setResetKey((k) => k + 1)  // Force FileUpload to remount and clear internal state
+    setResetKey((k) => k + 1) // Force FileUpload to remount and clear internal state
   }
 
   // Extract stats from the success log entry when completed
@@ -167,9 +179,7 @@ export default function App() {
             <h1 className="font-serif text-xl font-bold text-slate-100 tracking-tight">
               ALTO LLM Corrector
             </h1>
-            <p className="font-mono text-xs text-slate-500 mt-0.5">
-              Post-OCR correction via LLM
-            </p>
+            <p className="font-mono text-xs text-slate-500 mt-0.5">Post-OCR correction via LLM</p>
           </div>
           <div className="flex items-center gap-2">
             {isDone && (
@@ -199,13 +209,21 @@ export default function App() {
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
-
         {/* 1. File Upload */}
         <section>
           <h2 className="font-serif text-base font-semibold text-slate-300 mb-3 flex items-center gap-2">
             <span className="font-mono text-amber-500 text-xs">01</span>
             Upload ALTO files
           </h2>
+          {/* Volatile-storage warning — jobs live in /tmp on this server. */}
+          <div
+            role="note"
+            className="mb-3 rounded border border-amber-700/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-200/80"
+          >
+            <span className="font-semibold text-amber-300">Note&nbsp;:</span> les fichiers et les
+            jobs ne sont pas persistants. Un redémarrage du serveur (ou un redéploiement) efface
+            tout. Téléchargez le résultat dès qu&apos;il est prêt.
+          </div>
           <FileUpload key={resetKey} onFilesChange={setFiles} disabled={isRunning || isDone} />
         </section>
 
@@ -218,14 +236,14 @@ export default function App() {
           <div className="space-y-3">
             <ProviderSelector
               value={provider}
-              onChange={(p) => { setProvider(p); setSelectedModel(null); resetModels() }}
+              onChange={(p) => {
+                setProvider(p)
+                setSelectedModel(null)
+                resetModels()
+              }}
               disabled={isRunning || isDone}
             />
-            <ApiKeyInput
-              value={apiKey}
-              onChange={setApiKey}
-              disabled={isRunning || isDone}
-            />
+            <ApiKeyInput value={apiKey} onChange={setApiKey} disabled={isRunning || isDone} />
             {modelsError && (
               <p className="font-mono text-xs text-red-400 bg-red-900/20 border border-red-800/40 rounded px-3 py-2">
                 {modelsError}
@@ -267,8 +285,17 @@ export default function App() {
               </>
             ) : (
               <>
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="w-5 h-5"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
+                    clipRule="evenodd"
+                  />
                 </svg>
                 Start correction
               </>
@@ -357,7 +384,6 @@ export default function App() {
             )}
           </section>
         )}
-
       </main>
 
       {/* 8. Layout viewer — wider container for dual side-by-side panels */}

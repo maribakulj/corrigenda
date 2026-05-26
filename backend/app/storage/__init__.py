@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import zipfile
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _BASE_DIR = Path(os.environ.get("JOB_STORAGE_DIR", "/tmp/app-jobs"))
 
@@ -214,15 +217,26 @@ def link_alto_to_images(
         # Strategy 1: read sourceImageInformation/fileName from ALTO XML
         image_key: str | None = None
         try:
-            _parser = etree.XMLParser(resolve_entities=False, no_network=True)
-            tree = etree.parse(str(alto_path), _parser)
+            # Single source of truth for the hardened parser: shared
+            # with alto_core.alto.parser / rewriter — see
+            # alto_core.alto._ns.make_safe_parser docstring.
+            from alto_core.alto._ns import make_safe_parser
+
+            tree = etree.parse(str(alto_path), make_safe_parser())
             for el in tree.findall(".//{*}fileName"):
                 fname = (el.text or "").strip()
                 if fname:
                     image_key = Path(fname).stem.lower()
                     break
         except Exception:
-            pass
+            # Falls back to the ALTO stem below. Logging the parse
+            # failure helps diagnose why an image link is missing for
+            # a given source file.
+            logger.debug(
+                "ALTO image-link parse failed for %s; falling back to filename stem",
+                alto_path,
+                exc_info=True,
+            )
 
         # Strategy 2: fallback to ALTO filename stem
         if not image_key or image_key not in saved_images:
@@ -247,3 +261,20 @@ def cleanup_job(job_id: str) -> None:
     d = job_dir(job_id)
     if d.exists():
         shutil.rmtree(d)
+
+
+# Public surface declared explicitly so `from app.storage import *` and
+# static analysers don't expose the helper imports (Path, etree, zipfile,
+# logging, ...) sitting at module top-level.
+__all__ = [
+    "cleanup_job",
+    "get_image_files",
+    "get_output_files",
+    "images_dir",
+    "init_job_dirs",
+    "input_dir",
+    "job_dir",
+    "link_alto_to_images",
+    "output_dir",
+    "save_uploaded_files",
+]

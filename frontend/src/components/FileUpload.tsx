@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 
 interface FileUploadProps {
   onFilesChange: (files: File[]) => void
@@ -24,37 +24,45 @@ export function FileUpload({ onFilesChange, disabled }: FileUploadProps) {
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  function updateFiles(next: File[]) {
-    setFiles(next)
-    onFilesChange(next)
-  }
-
+  // Functional setState lets these handlers read the current `files`
+  // without capturing it in a closure — so they don't need `useCallback`
+  // and the parent's `onFilesChange` is called exactly once per change
+  // with the up-to-date list. The earlier `useCallback([files, ...])`
+  // chain was eslint-clean but produced a new identity on every `files`
+  // change anyway, so the memoisation gave nothing.
   function addFiles(incoming: FileList | null) {
     if (!incoming) return
     const valid = Array.from(incoming).filter(isAllowed)
-    const merged = [...files]
-    for (const f of valid) {
-      if (!merged.some((existing) => existing.name === f.name)) {
-        merged.push(f)
+    setFiles((prev) => {
+      const merged = [...prev]
+      for (const f of valid) {
+        if (!merged.some((existing) => existing.name === f.name)) {
+          merged.push(f)
+        }
       }
-    }
-    updateFiles(merged)
+      onFilesChange(merged)
+      return merged
+    })
   }
 
   function removeFile(index: number) {
-    updateFiles(files.filter((_, i) => i !== index))
+    setFiles((prev) => {
+      const next = prev.filter((_, i) => i !== index)
+      onFilesChange(next)
+      return next
+    })
   }
 
-  const onDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault()
-      setDragging(false)
-      if (!disabled) addFiles(e.dataTransfer.files)
-    },
-    [files, disabled],
-  )
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragging(false)
+    if (!disabled) addFiles(e.dataTransfer.files)
+  }
 
-  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setDragging(true) }
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragging(true)
+  }
   const onDragLeave = () => setDragging(false)
 
   return (
@@ -67,10 +75,11 @@ export function FileUpload({ onFilesChange, disabled }: FileUploadProps) {
         onDragLeave={onDragLeave}
         className={[
           'border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors',
-          disabled ? 'opacity-40 cursor-not-allowed border-slate-600' :
-          dragging
-            ? 'border-amber-400 bg-amber-500/10'
-            : 'border-slate-600 hover:border-amber-500/60 hover:bg-slate-800/50',
+          disabled
+            ? 'opacity-40 cursor-not-allowed border-slate-600'
+            : dragging
+              ? 'border-amber-400 bg-amber-500/10'
+              : 'border-slate-600 hover:border-amber-500/60 hover:bg-slate-800/50',
         ].join(' ')}
       >
         <div className="text-3xl mb-2">📄</div>

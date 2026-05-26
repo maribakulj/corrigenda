@@ -19,20 +19,42 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.14
     hooks:
+      # Run on both backend/ and packages/alto-core/ so local commits
+      # surface alto-core lint issues before CI does.
       - id: ruff-check
         args: [--fix]
-        files: ^backend/
+        files: ^(backend|packages/alto-core)/
       - id: ruff-format
-        files: ^backend/
+        files: ^(backend|packages/alto-core)/
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.15.0
     hooks:
       - id: mypy
         files: ^backend/app/
+        # NOTE: this hook runs in an isolated sandbox and cannot reach
+        # the in-tree alto-core sibling package, so it ignores
+        # `from alto_core.X import Y` imports (via mypy's
+        # `ignore_missing_imports = true` in pyproject.toml). CI's
+        # `backend-types` job installs alto-core editable and catches
+        # those imports for real. Run that job locally with:
+        #   pip install -e packages/alto-core
+        #   cd backend && mypy --explicit-package-bases app
         args: [--config-file=backend/pyproject.toml, --explicit-package-bases]
         additional_dependencies:
           - pydantic>=2.0
-          - lxml>=5.0
+          - lxml>=6.1
           - httpx>=0.27
           - fastapi>=0.115
+
+  # Frontend formatter — runs on the .ts/.tsx/.json/.css/.md tracked
+  # by the frontend's .prettierrc. ESLint is run only in CI (its
+  # plugin set is heavy and the local feedback loop via the IDE is
+  # already there for most contributors).
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v3.1.0
+    hooks:
+      - id: prettier
+        files: ^frontend/src/.*\.(ts|tsx|json|css|md)$
+        additional_dependencies:
+          - prettier@3.8.3

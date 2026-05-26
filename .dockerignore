@@ -28,6 +28,13 @@ frontend/dist
 **/.coverage
 **/coverage.xml
 
+# alto-core build/test artefacts (image needs the installed package,
+# not its tests or wheel cache)
+packages/alto-core/tests
+packages/alto-core/dist
+packages/alto-core/build
+packages/alto-core/*.egg-info
+
 # Docker itself
 Dockerfile
 docker-compose*.yml

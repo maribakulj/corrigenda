@@ -36,7 +36,6 @@ ignore = [
     "UP042",  # replace-str-enum — `class X(str, Enum)` is fine; StrEnum changes serialisation
     "RUF002", # ambiguous-unicode-character-docstring — false positives on French
     "RUF003", # ambiguous-unicode-character-comment — idem
-    "B904",   # raise-without-from — chain origin not always useful in our handlers
     "B905",   # zip-without-explicit-strict — adds noise without catching real bugs here
     "E402",   # module-import-not-at-top — used intentionally for late imports
     "SIM105", # suppressible-exception — `try/except: pass` is sometimes clearer
@@ -82,16 +81,18 @@ warn_return_any = false
 no_implicit_optional = true
 check_untyped_defs = false
 ignore_missing_imports = true
-# Pure-domain modules: keep them strictly typed
+# `app.alto`, `app.jobs.chunk_planner/validator/line_acceptance/correction_pipeline`,
+# `app.protocols`, and `app.schemas` are re-export shims forwarding to
+# alto-core. mypy needs implicit_reexport=true to chase `from X import *`
+# through them without requiring an `__all__` in the alto-core modules.
+implicit_reexport = true
+# Pure-domain modules now live in alto-core; the shims point there.
 [[tool.mypy.overrides]]
 module = [
-    "app.alto.*",
-    "app.jobs.correction_pipeline",
     "app.jobs.runner",
-    "app.protocols.*",
     "app.storage.output_writer",
 ]
-disallow_untyped_defs = false  # promote to true once existing gaps are closed
+disallow_untyped_defs = true  # these two modules are fully annotated; keep them so
 warn_return_any = true
 
 # Tests don't need strict typing
@@ -106,16 +107,19 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-filterwarnings = [
-    "ignore::DeprecationWarning",
-]
+# Surface DeprecationWarnings so upstream API changes (alto-core, FastAPI,
+# Pydantic, ...) reach us early instead of breaking suddenly. Switch to
+# "error" once the baseline is clean.
 
 # ---------------------------------------------------------------------------
 # coverage
 # ---------------------------------------------------------------------------
 
 [tool.coverage.run]
-source = ["app"]
+# Measure both packages: app.* (HTTP + adapters living in backend) and
+# alto_core.* (pure pipeline now extracted). Restricting to `app` alone
+# would only see the re-export shims and undercount real coverage.
+source = ["app", "alto_core"]
 branch = true
 omit = [
     "tests/*",
@@ -132,3 +136,20 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "if __name__ == .__main__.:",
 ]
+
+# ---------------------------------------------------------------------------
+# bandit — security static analysis
+# ---------------------------------------------------------------------------
+
+[tool.bandit]
+exclude_dirs = ["tests", "build", "dist", ".venv", "venv"]
+# Skipped checks (with justification):
+#   B101  asserts used as guards for mypy after FastAPI Depends — invariant
+#         is enforced by the dependency, the assert is documentation that
+#         happens to type-narrow; we never rely on it for security.
+#   B108  /tmp/app-jobs is the documented default for HF Spaces; the path
+#         is configurable via $JOB_STORAGE_DIR and each job gets its own
+#         subdir, so directory-traversal risk is bounded.
+#   B110  try/except: pass in best-effort cleanup paths (subscriber queue
+#         eviction, dirent stat) — failures here are non-fatal by design.
+skips = ["B101", "B108", "B110"]

@@ -127,8 +127,10 @@ Créer `app/protocols/` (futur `alto_core/protocols/`) avec :
 | `backend/app/alto/parser.py` | `packages/alto-core/src/alto_core/alto/parser.py` |
 | `backend/app/alto/rewriter.py` | `packages/alto-core/src/alto_core/alto/rewriter.py` |
 | `backend/app/alto/hyphenation.py` | `packages/alto-core/src/alto_core/alto/hyphenation.py` |
-| `backend/app/alto/_norm.py` | `packages/alto-core/src/alto_core/alto/_norm.py` |
-| `backend/app/alto/_ns.py` | `packages/alto-core/src/alto_core/alto/_ns.py` |
+| `backend/app/alto/_norm.py` ⚠ | `packages/alto-core/src/alto_core/alto/_norm.py` |
+| `backend/app/alto/_ns.py` ⚠ | `packages/alto-core/src/alto_core/alto/_ns.py` |
+
+> ⚠ Shim backend supprimé après extraction (`618be08`, L8 corrective wave). Seule la version alto-core subsiste — cf. REMEDIATION_STATUS.md / S6.
 | `backend/app/jobs/chunk_planner.py` | `packages/alto-core/src/alto_core/pipeline/chunk_planner.py` |
 | `backend/app/jobs/validator.py` | `packages/alto-core/src/alto_core/pipeline/validator.py` |
 | `backend/app/jobs/line_acceptance.py` | `packages/alto-core/src/alto_core/pipeline/line_acceptance.py` |

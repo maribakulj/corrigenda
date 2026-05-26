@@ -74,9 +74,19 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
     let cancelled = false
     const MAX_RETRIES = 3
     const EVENTS = [
-      'queued', 'started', 'document_parsed', 'page_started',
-      'chunk_planned', 'chunk_started', 'chunk_completed',
-      'retry', 'warning', 'page_completed', 'completed', 'failed', 'keepalive',
+      'queued',
+      'started',
+      'document_parsed',
+      'page_started',
+      'chunk_planned',
+      'chunk_started',
+      'chunk_completed',
+      'retry',
+      'warning',
+      'page_completed',
+      'completed',
+      'failed',
+      'keepalive',
     ]
 
     function handleEvent(eventName: string, rawData: string) {
@@ -108,18 +118,24 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
             lines_total: ev.total_lines,
             hyphen_pairs_total: ev.hyphen_pairs,
           }))
-          setLogs((l) => appendLog(l,
-            makeLog(
-              'info',
-              `Document parsed — ${ev.total_pages} page(s), ${ev.total_lines} lines, ${ev.hyphen_pairs} hyphen pair(s)`,
+          setLogs((l) =>
+            appendLog(
+              l,
+              makeLog(
+                'info',
+                `Document parsed — ${ev.total_pages} page(s), ${ev.total_lines} lines, ${ev.hyphen_pairs} hyphen pair(s)`,
+              ),
             ),
-          ))
+          )
           break
 
         case 'page_started':
-          setLogs((l) => appendLog(l,
-            makeLog('info', `Page ${ev.page_index + 1} started (${ev.line_count} lines)`),
-          ))
+          setLogs((l) =>
+            appendLog(
+              l,
+              makeLog('info', `Page ${ev.page_index + 1} started (${ev.line_count} lines)`),
+            ),
+          )
           break
 
         case 'chunk_completed':
@@ -128,28 +144,34 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
             lines_done: p.lines_done + ev.line_count,
             hyphen_pairs_reconciled: p.hyphen_pairs_reconciled + ev.hyphen_pairs_reconciled,
           }))
-          setLogs((l) => appendLog(l,
-            makeLog(
-              'info',
-              `Chunk done — ${ev.line_count} lines corrected${ev.hyphen_pairs_reconciled ? `, ${ev.hyphen_pairs_reconciled} hyphen pair(s)` : ''}`,
+          setLogs((l) =>
+            appendLog(
+              l,
+              makeLog(
+                'info',
+                `Chunk done — ${ev.line_count} lines corrected${ev.hyphen_pairs_reconciled ? `, ${ev.hyphen_pairs_reconciled} hyphen pair(s)` : ''}`,
+              ),
             ),
-          ))
+          )
           break
 
         case 'page_completed':
           setProgress((p) => ({ ...p, pages_done: p.pages_done + 1 }))
-          setLogs((l) => appendLog(l,
-            makeLog(
-              'info',
-              `Page ${ev.page_index + 1} completed — ${ev.corrections} correction(s)`,
+          setLogs((l) =>
+            appendLog(
+              l,
+              makeLog(
+                'info',
+                `Page ${ev.page_index + 1} completed — ${ev.corrections} correction(s)`,
+              ),
             ),
-          ))
+          )
           break
 
         case 'retry':
-          setLogs((l) => appendLog(l,
-            makeLog('warning', `Retry (attempt ${ev.attempt}) — ${ev.error}`),
-          ))
+          setLogs((l) =>
+            appendLog(l, makeLog('warning', `Retry (attempt ${ev.attempt}) — ${ev.error}`)),
+          )
           break
 
         case 'warning':
@@ -163,12 +185,15 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
             lines_done: ev.total_lines,
             hyphen_pairs_reconciled: ev.hyphen_pairs_total,
           }))
-          setLogs((l) => appendLog(l,
-            makeLog(
-              'success',
-              `Completed — ${ev.lines_modified} line(s) modified, ${ev.hyphen_pairs_total} hyphen pair(s), ${ev.duration_seconds.toFixed(1)}s`,
+          setLogs((l) =>
+            appendLog(
+              l,
+              makeLog(
+                'success',
+                `Completed — ${ev.lines_modified} line(s) modified, ${ev.hyphen_pairs_total} hyphen pair(s), ${ev.duration_seconds.toFixed(1)}s`,
+              ),
             ),
-          ))
+          )
           esRef.current?.close()
           break
 
@@ -194,7 +219,9 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
         if (s === 'completed' || s === 'failed') return
 
         if (retryCountRef.current >= MAX_RETRIES) {
-          setLogs((l) => appendLog(l, makeLog('error', 'Connection to server lost after multiple retries')))
+          setLogs((l) =>
+            appendLog(l, makeLog('error', 'Connection to server lost after multiple retries')),
+          )
           setStatus('failed')
           return
         }
@@ -202,9 +229,15 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
         retryCountRef.current += 1
         const attempt = retryCountRef.current
         const delay = attempt * 2000
-        setLogs((l) => appendLog(l, makeLog('warning',
-          `Connection lost — reconnecting in ${delay / 1000}s (attempt ${attempt}/${MAX_RETRIES})`,
-        )))
+        setLogs((l) =>
+          appendLog(
+            l,
+            makeLog(
+              'warning',
+              `Connection lost — reconnecting in ${delay / 1000}s (attempt ${attempt}/${MAX_RETRIES})`,
+            ),
+          ),
+        )
 
         retryTimeoutRef.current = setTimeout(() => {
           retryTimeoutRef.current = null

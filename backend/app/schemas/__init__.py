@@ -1,301 +1,72 @@
-from __future__ import annotations
-
-import uuid
-from enum import Enum
-from typing import Any
-
-from pydantic import BaseModel, Field
-
-# ---------------------------------------------------------------------------
-# Enums
-# ---------------------------------------------------------------------------
-
-
-class JobStatus(str, Enum):
-    QUEUED = "queued"
-    STARTED = "started"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class LineStatus(str, Enum):
-    PENDING = "pending"
-    CORRECTED = "corrected"
-    FALLBACK = "fallback"
-    FAILED = "failed"
-
-
-class ChunkGranularity(str, Enum):
-    PAGE = "page"
-    BLOCK = "block"
-    WINDOW = "window"
-    LINE = "line"
-
-
-class Provider(str, Enum):
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
-    MISTRAL = "mistral"
-    GOOGLE = "google"
-
-
-class HyphenRole(str, Enum):
-    NONE = "none"
-    PART1 = "HypPart1"  # last line of pair: carries left fragment + hyphen
-    PART2 = "HypPart2"  # first line of pair: carries right fragment
-    BOTH = "HypBoth"  # PART2 of previous pair AND PART1 of next pair (chained)
-
-
-# ---------------------------------------------------------------------------
-# Geometry
-# ---------------------------------------------------------------------------
-
-
-class Coords(BaseModel):
-    hpos: int
-    vpos: int
-    width: int
-    height: int
-
-
-# ---------------------------------------------------------------------------
-# Core line / block / page / document models
-# ---------------------------------------------------------------------------
-
-
-class LineManifest(BaseModel):
-    line_id: str
-    page_id: str
-    block_id: str
-    line_order_global: int
-    line_order_in_block: int
-    coords: Coords
-    ocr_text: str
-    prev_line_id: str | None = None
-    next_line_id: str | None = None
-    expected: bool = True
-    received: bool = False
-    corrected_text: str | None = None
-    status: LineStatus = LineStatus.PENDING
-
-    # Hyphenation fields
-    # For PART1: pair_line_id = forward partner (the PART2 line)
-    # For PART2: pair_line_id = backward partner (the PART1 line)
-    # For BOTH:  pair_line_id = backward partner, forward_* = forward partner
-    #
-    # pair_page_id / forward_pair_page_id qualify the partner reference so
-    # cross-page lookups stay correct when two ALTO files share TextLine IDs
-    # (e.g. both call their first line "TL1"). When None, the partner is
-    # presumed intra-page and the bare line_id lookup is authoritative.
-    hyphen_role: HyphenRole = HyphenRole.NONE
-    hyphen_pair_line_id: str | None = None
-    hyphen_pair_page_id: str | None = None
-    hyphen_subs_content: str | None = None
-    hyphen_source_explicit: bool = False
-    # Forward link fields — used only when role == BOTH (chained hyphenation)
-    hyphen_forward_pair_id: str | None = None
-    hyphen_forward_pair_page_id: str | None = None
-    hyphen_forward_subs_content: str | None = None
-    hyphen_forward_explicit: bool = False
-
-
-class BlockManifest(BaseModel):
-    block_id: str
-    page_id: str
-    block_order: int
-    coords: Coords
-    line_ids: list[str]
-
-
-class PageManifest(BaseModel):
-    page_id: str
-    source_file: str
-    page_index: int
-    page_width: int
-    page_height: int
-    blocks: list[BlockManifest]
-    lines: list[LineManifest]
-    status: JobStatus = JobStatus.QUEUED
-
-
-class DocumentManifest(BaseModel):
-    document_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    source_files: list[str]
-    pages: list[PageManifest]
-    total_pages: int
-    total_blocks: int
-    total_lines: int
-    status: JobStatus = JobStatus.QUEUED
-
-
-# ---------------------------------------------------------------------------
-# Chunk planning
-# ---------------------------------------------------------------------------
-
-
-class ChunkPlannerConfig(BaseModel):
-    max_input_chars_per_request: int = 12000
-    max_lines_per_request: int = 80
-    line_window_size: int = 12
-    line_window_overlap: int = 1
-
-
-class ChunkRequest(BaseModel):
-    chunk_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    document_id: str
-    page_id: str
-    block_id: str | None = None
-    granularity: ChunkGranularity
-    line_ids: list[str]
-    attempt: int = 0
-
-
-class ChunkPlan(BaseModel):
-    page_id: str
-    chunks: list[ChunkRequest]
-    granularity: ChunkGranularity
-
-
-# ---------------------------------------------------------------------------
-# Job
-# ---------------------------------------------------------------------------
-
-
-class JobManifest(BaseModel):
-    job_id: str
-    provider: Provider
-    model: str
-    status: JobStatus = JobStatus.QUEUED
-    document_manifest: DocumentManifest | None = None
-    total_lines: int = 0
-    lines_modified: int = 0
-    chunks_total: int = 0
-    retries: int = 0
-    fallbacks: int = 0
-    duration_seconds: float | None = None
-    error: str | None = None
-    images: dict[str, str] = Field(default_factory=dict)
-    # Line traces (Sprint 5bis) — keyed by line_id
-    line_traces: dict[str, LineTrace] = Field(default_factory=dict)
-
-
-# ---------------------------------------------------------------------------
-# LLM payload models
-# ---------------------------------------------------------------------------
-
-
-class LLMLineInput(BaseModel):
-    line_id: str
-    prev_text: str | None = None
-    ocr_text: str
-    next_text: str | None = None
-    # Hyphenation fields — absent when hyphen_role == NONE
-    hyphenation_role: str | None = None
-    hyphen_candidate: bool | None = None
-    hyphen_join_with_next: bool | None = None
-    hyphen_join_with_prev: bool | None = None
-    backward_join_candidate: str | None = None
-    forward_join_candidate: str | None = None
-
-
-class LLMUserPayload(BaseModel):
-    task: str = "correct_ocr_lines"
-    granularity: ChunkGranularity
-    document_id: str
-    page_id: str
-    block_id: str | None = None
-    lines: list[LLMLineInput]
-
-
-class LLMLineOutput(BaseModel):
-    line_id: str
-    corrected_text: str
-
-
-class LLMResponse(BaseModel):
-    lines: list[LLMLineOutput]
-
-
-# ---------------------------------------------------------------------------
-# Provider / model info
-# ---------------------------------------------------------------------------
-
-
-class ModelInfo(BaseModel):
-    id: str
-    label: str
-    supports_structured_output: bool = True
-    context_window: int | None = None
-
-
-class ListModelsRequest(BaseModel):
-    provider: Provider
-    api_key: str
-
-
-class ListModelsResponse(BaseModel):
-    provider: Provider
-    models: list[ModelInfo]
-
-
-# ---------------------------------------------------------------------------
-# API response models
-# ---------------------------------------------------------------------------
-
-
-class CreateJobResponse(BaseModel):
-    job_id: str
-
-
-class JobStatusResponse(BaseModel):
-    job_id: str
-    status: JobStatus
-    total_lines: int = 0
-    lines_modified: int = 0
-    chunks_total: int = 0
-    retries: int = 0
-    fallbacks: int = 0
-    duration_seconds: float | None = None
-    error: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# SSE
-# ---------------------------------------------------------------------------
-
-
-class SSEEvent(BaseModel):
-    event: str
-    data: dict[str, Any] = Field(default_factory=dict)
-
-
-# ---------------------------------------------------------------------------
-# Line trace (Sprint 5bis — observability)
-# ---------------------------------------------------------------------------
-
-
-class LineTrace(BaseModel):
-    """Full text trace for a single line through the correction pipeline."""
-
-    line_id: str
-    page_id: str
-    source_ocr_text: str
-    model_input_text: str | None = None  # ocr_text sent to LLM
-    model_corrected_text: str | None = None  # raw LLM output before any post-processing
-    projected_text: str | None = None  # text retained after validation/reconciliation/fallback
-    output_alto_text: str | None = None  # text re-extracted from the output ALTO XML
-
-    # Diagnostic metadata
-    hyphen_role: str | None = None
-    rewriter_path: str | None = None  # untouched / subs_only / fast_path / slow_path
-    validation_status: str | None = None  # corrected / fallback / failed
-    fallback_reason: str | None = None
-
-
-class JobTrace(BaseModel):
-    """Collection of line traces for a complete job."""
-
-    job_id: str
-    total_lines: int = 0
-    lines: list[LineTrace] = Field(default_factory=list)
+"""Backend's schema surface.
+
+Domain models come from the pure ``alto_core.schemas`` package. HTTP
+DTOs (request/response payloads, SSE events) live next door in
+:mod:`app.schemas.http` — they're server-layer concerns, not domain.
+
+This module re-exports both groups so existing
+``from app.schemas import X`` call sites keep working.
+"""
+
+from alto_core.schemas import (
+    BlockManifest,
+    ChunkGranularity,
+    ChunkPlan,
+    ChunkPlannerConfig,
+    ChunkRequest,
+    Coords,
+    DocumentManifest,
+    HyphenRole,
+    JobManifest,
+    JobStatus,
+    JobTrace,
+    LineManifest,
+    LineStatus,
+    LineTrace,
+    LLMLineInput,
+    LLMLineOutput,
+    LLMResponse,
+    LLMUserPayload,
+    ModelInfo,
+    PageManifest,
+    Provider,
+)
+
+from app.schemas.http import (
+    CreateJobResponse,
+    JobStatusResponse,
+    ListModelsRequest,
+    ListModelsResponse,
+    SSEEvent,
+)
+
+__all__ = [
+    # Domain (alto-core)
+    "BlockManifest",
+    "ChunkGranularity",
+    "ChunkPlan",
+    "ChunkPlannerConfig",
+    "ChunkRequest",
+    "Coords",
+    # HTTP DTOs (backend-local)
+    "CreateJobResponse",
+    "DocumentManifest",
+    "HyphenRole",
+    "JobManifest",
+    "JobStatus",
+    "JobStatusResponse",
+    "JobTrace",
+    "LLMLineInput",
+    "LLMLineOutput",
+    "LLMResponse",
+    "LLMUserPayload",
+    "LineManifest",
+    "LineStatus",
+    "LineTrace",
+    "ListModelsRequest",
+    "ListModelsResponse",
+    "ModelInfo",
+    "PageManifest",
+    "Provider",
+    "SSEEvent",
+]

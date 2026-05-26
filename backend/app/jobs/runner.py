@@ -15,15 +15,16 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.jobs.correction_pipeline import CorrectionPipeline, sanitize_error
-from app.protocols import BaseProvider, JobStore
+from alto_core import CorrectionPipeline, sanitize_error
+
+from app.jobs.observers import CompositeObserver, LoggingObserver
+from app.protocols import BaseProvider, JobStore, OutputWriter
 from app.schemas import DocumentManifest, JobStatus
-from app.storage.output_writer import FilesystemOutputWriter
 
 logger = logging.getLogger(__name__)
 
 
-class _JobStoreObserver:
+class JobStoreObserver:
     """Adapt a JobStore to the PipelineObserver Protocol for a single job."""
 
     def __init__(self, job_store: JobStore, job_id: str) -> None:
@@ -48,13 +49,16 @@ class JobRunner:
         provider_name: str,
         api_key: str,
         model: str,
-        output_dir: Path,
+        output_writer: OutputWriter,
         source_files: dict[str, Path],
         provider: BaseProvider | None = None,
         timeout_seconds: int = 1800,
     ) -> None:
         """Run a job end-to-end. Updates the JobStore as side effect.
 
+        `output_writer`: injected sink for the corrected ALTO + trace.
+        The caller chooses the implementation (filesystem, S3, in-memory
+        for tests, ...) — the runner stays oblivious of where outputs land.
         `source_files`: mapping of source_name → xml_path on disk.
         `provider`: injected provider (for testing); if None, resolved
         from the global registry via `app.providers.get_provider`.
@@ -66,7 +70,6 @@ class JobRunner:
 
             provider = get_provider(Provider(provider_name))
 
-        output_writer = FilesystemOutputWriter(output_dir)
         start_time = time.monotonic()
 
         try:
@@ -126,6 +129,30 @@ class JobRunner:
             )
             self.job_store.emit(job_id, "failed", {"job_id": job_id, "error": safe_error})
 
+        except asyncio.CancelledError:
+            # L10/B8 — SIGTERM during shutdown cancels the runner task
+            # via `BackgroundTaskRegistry.shutdown()` past the 30 s grace
+            # deadline. `CancelledError` extends `BaseException` (not
+            # `Exception`) in Python 3.8+, so without this handler it
+            # slipped past both `except TimeoutError` and `except
+            # Exception` — leaving the job in RUNNING forever. The job
+            # would never enter `_completed_at`, never be evicted, and
+            # leak across redeploys.
+            logger.warning("Job %s cancelled (likely server shutdown)", job_id)
+            elapsed = round(time.monotonic() - start_time, 2)
+            safe_error = "Job cancelled (server shutdown or task cancellation)"
+            self.job_store.update_job(
+                job_id,
+                status=JobStatus.FAILED,
+                error=safe_error,
+                duration_seconds=elapsed,
+            )
+            self.job_store.emit(job_id, "failed", {"job_id": job_id, "error": safe_error})
+            # Re-raise so the task scheduler sees the cancellation and
+            # propagates it correctly (this is the documented asyncio
+            # pattern for handling CancelledError — never silently swallow).
+            raise
+
         except Exception as exc:
             logger.exception("Job %s failed", job_id)
             # Sanitise BEFORE truncating: if the api_key straddles the 500-char
@@ -156,7 +183,7 @@ class JobRunner:
         api_key: str,
         model: str,
         provider_name: str,
-        output_writer: FilesystemOutputWriter,
+        output_writer: OutputWriter,
         source_files: dict[str, Path],
     ) -> tuple[int, int]:
         """Drive the pure pipeline and persist its counters back."""
@@ -170,18 +197,25 @@ class JobRunner:
             total_lines=document_manifest.total_lines,
         )
 
+        # Fan events out to the job store (for SSE clients) and to the
+        # standard logger (for operators). ADR-006: alto-core never
+        # logs by itself — adapters here own the routing.
         pipeline = CorrectionPipeline(
             provider=provider,
-            observer=_JobStoreObserver(self.job_store, job_id),
+            observer=CompositeObserver(
+                [JobStoreObserver(self.job_store, job_id), LoggingObserver()]
+            ),
             output_writer=output_writer,
         )
+        # `run_id` is alto-core's generic identifier; we feed it the
+        # server-side `job_id` so trace.json correlates with the API.
         result = await pipeline.run(
-            job_id=job_id,
             document_manifest=document_manifest,
             api_key=api_key,
             model=model,
             provider_name=provider_name,
             source_files=source_files,
+            run_id=job_id,
         )
 
         self.job_store.update_job(

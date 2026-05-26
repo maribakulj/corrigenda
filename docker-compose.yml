@@ -1,6 +1,10 @@
 services:
   backend:
-    build: ./backend
+    build:
+      # Build context is the repo root so the Dockerfile can reach the
+      # sibling packages/alto-core directory.
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     env_file:

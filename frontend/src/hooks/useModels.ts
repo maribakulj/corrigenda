@@ -24,9 +24,7 @@ export function useModels(): UseModelsReturn {
     setState({ models: [], loading: true, error: null })
     listModels(provider, apiKey)
       .then((models) => setState({ models, loading: false, error: null }))
-      .catch((err: Error) =>
-        setState({ models: [], loading: false, error: err.message })
-      )
+      .catch((err: Error) => setState({ models: [], loading: false, error: err.message }))
   }
 
   function reset(): void {

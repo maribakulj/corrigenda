@@ -5,13 +5,29 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import httpx
-
-from app.providers.base import call_llm
+from app.providers.base import call_llm, get_json
 from app.schemas import ModelInfo
 
 _BASE = "https://generativelanguage.googleapis.com"
 _EXCLUDE_KEYWORDS = ("embed", "aqa", "attribute")
+
+# L10/B2 — Gemini supports both the ?key=... URL parameter and the
+# x-goog-api-key request header. The URL form surfaces the key in
+# every httpx.HTTPStatusError repr (which is then echoed by
+# app/api/providers.py error handlers and emitted to logs by httpx).
+# The header form keeps the key out of URL/query-string surfaces.
+_API_KEY_HEADER = "x-goog-api-key"
+
+
+def _auth_headers(api_key: str, *, extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Return headers with the Gemini API key set via the recommended
+    header transport. Merges in any caller-provided extras (e.g.
+    ``Content-Type`` for POSTs).
+    """
+    headers: dict[str, str] = {_API_KEY_HEADER: api_key}
+    if extra:
+        headers.update(extra)
+    return headers
 
 
 def _keep_model(model: dict[str, Any]) -> bool:
@@ -25,14 +41,10 @@ def _keep_model(model: dict[str, Any]) -> bool:
 
 class GoogleProvider:
     async def list_models(self, api_key: str) -> list[ModelInfo]:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{_BASE}/v1beta/models",
-                params={"key": api_key},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        data = await get_json(
+            url=f"{_BASE}/v1beta/models",
+            headers=_auth_headers(api_key),
+        )
 
         models = []
         for m in data.get("models", []):
@@ -79,10 +91,9 @@ class GoogleProvider:
         url = f"{_BASE}/v1beta/models/{model}:generateContent"
         data = await call_llm(
             url=url,
-            headers={"Content-Type": "application/json"},
+            headers=_auth_headers(api_key, extra={"Content-Type": "application/json"}),
             body=body,
             fallback_body=fallback_body,
-            params={"key": api_key},
         )
 
         candidates = data.get("candidates")
