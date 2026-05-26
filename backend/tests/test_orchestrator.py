@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from alto_core.alto.parser import build_document_manifest, parse_alto_file
+from alto_core.pipeline.validator import HyphenIntegrityError
 from lxml import etree
 
 from app.jobs.runner import JobRunner
@@ -564,7 +565,7 @@ class _OneHyphenViolationThenOK:
     async def complete_structured(self, **kwargs):
         self.call_count += 1
         if self.call_count == 1:
-            raise ValueError("hyphen_integrity_violation: TL5 corrupted")
+            raise HyphenIntegrityError("hyphen_integrity_violation: TL5 corrupted")
         lines_out = [
             {"line_id": line_in["line_id"], "corrected_text": line_in["ocr_text"]}
             for line_in in kwargs["user_payload"].get("lines", [])

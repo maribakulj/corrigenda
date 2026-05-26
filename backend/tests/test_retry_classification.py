@@ -28,6 +28,7 @@ from typing import Any
 
 import pytest
 from alto_core.alto.parser import build_document_manifest
+from alto_core.pipeline.validator import HyphenIntegrityError
 
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
@@ -158,7 +159,9 @@ async def test_hyphen_violation_keeps_temperature_zero_on_retry(
     NOT the normal ramp. The classifier pins temperature low to give
     the LLM the best chance of producing the same deterministic output
     minus the bug."""
-    provider = _ScriptedProvider([ValueError("hyphen_integrity_violation: drift detected")])
+    provider = _ScriptedProvider(
+        [HyphenIntegrityError("hyphen_integrity_violation: drift detected")]
+    )
     _events, _store, _job_id = await _run_and_collect(tmp_path, provider)
 
     # First two complete_structured calls hit the first chunk:
@@ -185,7 +188,7 @@ async def test_second_hyphen_violation_falls_into_linear_backoff(
 
     Without this latch the LLM could trigger an infinite-zero-backoff
     storm on a deterministically broken prompt."""
-    hyp_exc = ValueError("hyphen_integrity_violation: PART2 collapsed")
+    hyp_exc = HyphenIntegrityError("hyphen_integrity_violation: PART2 collapsed")
     provider = _ScriptedProvider([hyp_exc, hyp_exc])
     events, store, job_id = await _run_and_collect(tmp_path, provider)
 

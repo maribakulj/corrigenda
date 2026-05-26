@@ -30,7 +30,7 @@ from alto_core.alto.hyphenation import enrich_chunk_lines, reconcile_hyphen_pair
 from alto_core.alto.rewriter import extract_output_texts, rewrite_alto_file
 from alto_core.pipeline.chunk_planner import plan_page
 from alto_core.pipeline.line_acceptance import check_adjacent_duplicates, check_line
-from alto_core.pipeline.validator import validate_llm_response
+from alto_core.pipeline.validator import HyphenIntegrityError, validate_llm_response
 from alto_core.protocols import BaseProvider, OutputWriter, PipelineObserver
 from alto_core.protocols.provider import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 from alto_core.schemas import (
@@ -544,13 +544,12 @@ class CorrectionPipeline:
                 msg = sanitize_error(str(exc), api_key)
                 # Classify the exception to pick the right policy.
                 # alto-core stays http-library-agnostic — we duck-type
-                # on class name rather than importing httpx. A future
-                # cleanup would define ProviderTransientError in
-                # alto_core.protocols.provider for providers to raise.
+                # on transient HTTP class names rather than importing
+                # httpx. A future cleanup would define a
+                # ``ProviderTransientError`` in alto_core.protocols
+                # for providers to raise.
                 exc_class = type(exc).__name__
-                is_hyphen_violation = isinstance(
-                    exc, ValueError
-                ) and "hyphen_integrity_violation" in str(exc)
+                is_hyphen_violation = isinstance(exc, HyphenIntegrityError)
                 is_transient_http = exc_class in {
                     "HTTPStatusError",
                     "TimeoutException",
