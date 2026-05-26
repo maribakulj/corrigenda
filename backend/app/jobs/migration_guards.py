@@ -1,0 +1,137 @@
+"""Centralised matrix of text-migration guards across the pipeline.
+
+The LLM occasionally tries to move text between OCR lines — completing a
+hyphenated word into PART1, absorbing a neighbour into a line, dropping
+PART2 because it "looks redundant". Three stages of the pipeline guard
+against this, each with its own thresholds and its own remedy:
+
+  +----------+--------------------+--------------------+-------------------+
+  | Stage    | Module             | Scope              | Action on hit     |
+  +----------+--------------------+--------------------+-------------------+
+  | A.       | jobs/validator.py  | Hyphen pair        | Raise             |
+  | Validate | _check_pair_drift  | (PART1+PART2)      | HyphenIntegrity-  |
+  | (pre-   |                    | word counts        | Error → retry at  |
+  | retry)   |                    |                    | temp 0.0          |
+  +----------+--------------------+--------------------+-------------------+
+  | B.       | jobs/              | Hyphen pair        | Fall back to OCR  |
+  | Recon-   | migration_guards   | (PART1+PART2)      | for both sides;   |
+  | cile     | part1_text_*       | word counts +      | neutralise        |
+  |          | part2_text_*       | char-length        | SUBS_CONTENT      |
+  |          | part2_boundary_*   | + boundary word    |                   |
+  +----------+--------------------+--------------------+-------------------+
+  | C.       | jobs/              | Single line vs.    | Fall back to OCR  |
+  | Accept   | line_acceptance.py | source +           | for that line;    |
+  | (post-  | check_line         | neighbours         | capture rejection |
+  | recon-   | check_adjacent_*   | (SequenceMatcher)  | reason            |
+  | cile)    |                    |                    |                   |
+  +----------+--------------------+--------------------+-------------------+
+
+The thresholds intentionally differ:
+
+  - Stage A is the *strictest* — a hyphen drift is suspicious enough to
+    retry the whole chunk before any fallback is applied.
+  - Stage B catches drift the LLM produced *intentionally* despite the
+    retry. The fallback preserves the OCR pair atomically.
+  - Stage C is a *line-level* safety net that fires regardless of
+    hyphen role: it catches absorption / neighbour migration that the
+    pair-level guards can't see.
+
+This module owns the pair-level helpers (stage B). Stage A and stage C
+live close to their callers (validator and line_acceptance) because the
+remedy is tightly coupled to the local control flow. Centralising the
+behaviours here would require moving HyphenIntegrityError out of
+validator.py and creating a circular import — not worth the cost.
+
+When tuning thresholds, look at all three stages: tightening one stage
+without adjusting the others can leak migrations through the gap.
+"""
+
+from __future__ import annotations
+
+from app.alto._norm import ncfold
+
+
+def part1_text_migrated(ocr_text: str, corrected_text: str) -> bool:
+    """Stage-B pair guard: PART1 side appears extended or pulled-from-PART2.
+
+    Returns True when any of:
+      - corrected word count exceeds OCR word count by more than 1
+        (text pulled in from the next line);
+      - last word grew by more than 3 characters
+        (word completion, e.g. ``"néces" → "nécessaires"``);
+      - overall character length grew by more than 40 % + 8.
+    """
+    ocr_bare = ocr_text.rstrip("-").rstrip()
+    corrected_bare = corrected_text.rstrip("-").rstrip(".")
+
+    ocr_words = ocr_bare.split()
+    corrected_words = corrected_bare.split()
+
+    if len(corrected_words) > len(ocr_words) + 1:
+        return True
+
+    if ocr_words and corrected_words:
+        ocr_last = ocr_words[-1].rstrip("-")
+        corrected_last = corrected_words[-1].rstrip("-")
+        if len(corrected_last) > len(ocr_last) + 3:
+            return True
+
+    if len(corrected_bare) > len(ocr_bare) * 1.4 + 8:
+        return True
+
+    return False
+
+
+def part2_text_migrated(ocr_text: str, corrected_text: str) -> bool:
+    """Stage-B pair guard: PART2 side appears collapsed or pulled-from-next.
+
+    Returns True when:
+      - corrected word count is less than 40 % of OCR
+        (text absorbed by PART1); or
+      - corrected word count exceeds OCR by more than
+        ``max(3, 40 % of OCR)`` (text pulled in from after PART2).
+    """
+    ocr_words = ocr_text.split()
+    corrected_words = corrected_text.split()
+
+    if ocr_words and len(corrected_words) < len(ocr_words) * 0.4:
+        return True
+
+    if len(corrected_words) > len(ocr_words) + max(3, int(len(ocr_words) * 0.4)):
+        return True
+
+    return False
+
+
+def part2_boundary_word_diverged(ocr_text: str, corrected_text: str) -> bool:
+    """Stage-B pair guard: PART2's first word lost its OCR continuity.
+
+    The first word of PART2 is the continuation of the hyphenated word
+    from PART1. If the LLM replaced it with an unrelated word, the
+    hyphen pair is semantically broken even when overall lengths line
+    up.
+
+    Minor OCR corrections (same first 2 chars, similar length) are
+    allowed.
+    """
+    ocr_words = ocr_text.split()
+    cor_words = corrected_text.split()
+
+    if not ocr_words or not cor_words:
+        return False  # empty cases handled by migration/empty checks
+
+    ocr_first = ncfold(ocr_words[0])
+    cor_first = ncfold(cor_words[0])
+
+    if ocr_first == cor_first:
+        return False
+
+    prefix_len = min(2, len(ocr_first), len(cor_first))
+    if (
+        prefix_len >= 2
+        and ocr_first[:prefix_len] == cor_first[:prefix_len]
+        and 0.5 <= len(cor_first) / max(1, len(ocr_first)) <= 2.0
+    ):
+        return False
+
+    return True

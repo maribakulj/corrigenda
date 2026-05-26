@@ -24,11 +24,16 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.alto.hyphenation import enrich_chunk_lines, reconcile_hyphen_pair
+from app.alto.hyphenation import (
+    ReconcileMetrics,
+    classify_reconcile_outcome,
+    enrich_chunk_lines,
+    reconcile_hyphen_pair,
+)
 from app.alto.rewriter import extract_output_texts, rewrite_alto_file
 from app.jobs.chunk_planner import plan_page
 from app.jobs.line_acceptance import check_adjacent_duplicates, check_line
-from app.jobs.validator import validate_llm_response
+from app.jobs.validator import HyphenIntegrityError, validate_llm_response
 from app.protocols import BaseProvider, OutputWriter, PipelineObserver
 from app.providers.base import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 from app.schemas import (
@@ -41,8 +46,10 @@ from app.schemas import (
     LineManifest,
     LineStatus,
     LineTrace,
+    LLMResponse,
     LLMUserPayload,
     PageManifest,
+    SSEEventType,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,6 +73,25 @@ def sanitize_error(msg: str, api_key: str | None = None) -> str:
 def _trace_key(lm: LineManifest) -> str:
     """Composite key for line traces, avoiding collisions across pages."""
     return f"{lm.page_id}:{lm.line_order_global}:{lm.line_id}"
+
+
+def _set_trace(
+    traces: dict[str, LineTrace] | None,
+    lm: LineManifest,
+    **fields: object,
+) -> None:
+    """Assign trace fields on the LineTrace keyed by `lm`, if traces are tracked.
+
+    Centralises the `if traces is not None: t = traces.get(...); if t is not None: ...`
+    pattern that was repeated six times throughout `_run_chunk`.
+    """
+    if traces is None:
+        return
+    trace = traces.get(_trace_key(lm))
+    if trace is None:
+        return
+    for name, value in fields.items():
+        setattr(trace, name, value)
 
 
 def _build_hyphen_pairs(lines: list[LineManifest]) -> dict[str, str]:
@@ -120,8 +146,14 @@ def _reconcile_one_pair(
     text_by_id: dict[str, str],
     *,
     is_forward: bool,
-) -> None:
-    """Apply reconcile_hyphen_pair and write results back onto the manifests."""
+) -> str:
+    """Apply reconcile_hyphen_pair and write results back onto the manifests.
+
+    Returns the outcome classification produced by
+    ``classify_reconcile_outcome``: ``"coherent"`` / ``"fallback"`` /
+    ``"neutralised"``. Counters in ``_reconcile_pairs`` aggregate this
+    into the per-job ReconcileMetrics observability event.
+    """
     corrected_p2 = text_by_id.get(part2.line_id, part2.ocr_text)
 
     if is_forward:
@@ -143,6 +175,16 @@ def _reconcile_one_pair(
             corrected_p2,
         )
 
+    outcome = classify_reconcile_outcome(
+        lm.ocr_text,
+        part2.ocr_text,
+        corrected_p1,
+        corrected_p2,
+        final_p1,
+        final_p2,
+        subs,
+    )
+
     lm.corrected_text = final_p1
     lm.status = LineStatus.CORRECTED
     part2.corrected_text = final_p2
@@ -153,6 +195,123 @@ def _reconcile_one_pair(
         lm.hyphen_forward_subs_content = subs
     else:
         lm.hyphen_subs_content = subs
+
+    return outcome
+
+
+def _reconcile_pairs(
+    chunk_lines: list[LineManifest],
+    line_by_id: dict[str, LineManifest],
+    text_by_id: dict[str, str],
+    cross_page_partners: dict[tuple[str, str], LineManifest] | None,
+) -> tuple[int, ReconcileMetrics]:
+    """Reconcile all hyphen pairs whose PART1 (or BOTH forward) side sits
+    in this chunk. Mutates the manifests in place via _reconcile_one_pair.
+
+    Two passes — one per source role — share the same body:
+      PART1 reconciles with its (backward) partner;
+      BOTH reconciles with its forward partner.
+    Order matters: a BOTH line can be PART2 of a preceding PART1 (handled
+    in pass 1 from the PART1 side) and PART1 of the next pair (handled in
+    pass 2 from the BOTH side). A shared `processed_part2` set prevents
+    double-reconciliation when the two passes land on the same partner.
+
+    Returns (pairs_reconciled, ReconcileMetrics). The metrics break the
+    count down by outcome (coherent / fallback / neutralised) for the
+    job-end reconcile_stats observability event.
+    """
+    reconciled = 0
+    metrics = ReconcileMetrics()
+    processed_part2: set[tuple[str, str]] = set()
+    passes = (
+        (HyphenRole.PART1, False, "hyphen_pair_line_id"),
+        (HyphenRole.BOTH, True, "hyphen_forward_pair_id"),
+    )
+    for role, is_forward, partner_attr in passes:
+        for lm in chunk_lines:
+            if lm.hyphen_role != role or not getattr(lm, partner_attr):
+                continue
+            part2 = _resolve_partner(
+                lm,
+                is_forward=is_forward,
+                line_by_id=line_by_id,
+                cross_page_partners=cross_page_partners,
+            )
+            if part2 is None:
+                logger.warning(
+                    "Hyphen partner %s not found for %s line %s "
+                    "(likely cross-page pair — skipping reconciliation)",
+                    getattr(lm, partner_attr),
+                    role.value,
+                    lm.line_id,
+                )
+                continue
+            part2_key = (part2.page_id, part2.line_id)
+            if part2_key in processed_part2:
+                continue
+            outcome = _reconcile_one_pair(lm, part2, text_by_id, is_forward=is_forward)
+            if outcome == "coherent":
+                metrics.coherent += 1
+            elif outcome == "fallback":
+                metrics.fallback += 1
+            elif outcome == "neutralised":
+                metrics.neutralised += 1
+            processed_part2.add(part2_key)
+            reconciled += 1
+    return reconciled, metrics
+
+
+def _apply_line_acceptance(
+    chunk_lines: list[LineManifest],
+    text_by_id: dict[str, str],
+    all_lines_by_id: dict[str, LineManifest],
+    traces: dict[str, LineTrace] | None,
+) -> None:
+    """Apply per-line acceptance policy to chunk lines not yet decided.
+
+    Lines whose ``corrected_text`` was already set by hyphen reconciliation
+    are skipped. For the others:
+      - Orphan-hyphen guard: a PART1/BOTH whose OCR ends with ``-`` but
+        whose corrected text doesn't still end with ``-`` is reverted to
+        OCR with ``fallback_reason="orphan_hyphen_completed"``.
+      - Otherwise ``check_line`` is consulted with neighbour OCR context;
+        rejected corrections are reverted to OCR with the rejection
+        reason captured in the trace.
+    """
+    for lm in chunk_lines:
+        if lm.corrected_text is not None:
+            continue
+        corrected = text_by_id.get(lm.line_id)
+        if corrected is None:
+            continue
+
+        if (
+            lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
+            and lm.ocr_text.rstrip().endswith("-")
+            and not corrected.rstrip().endswith("-")
+        ):
+            lm.corrected_text = lm.ocr_text
+            lm.status = LineStatus.FALLBACK
+            _set_trace(traces, lm, fallback_reason="orphan_hyphen_completed")
+            continue
+
+        prev_ocr = (
+            all_lines_by_id[lm.prev_line_id].ocr_text
+            if lm.prev_line_id and lm.prev_line_id in all_lines_by_id
+            else None
+        )
+        next_ocr = (
+            all_lines_by_id[lm.next_line_id].ocr_text
+            if lm.next_line_id and lm.next_line_id in all_lines_by_id
+            else None
+        )
+        result = check_line(lm.ocr_text, corrected, prev_ocr, next_ocr)
+        lm.corrected_text = result.text
+        if result.accepted:
+            lm.status = LineStatus.CORRECTED
+        else:
+            lm.status = LineStatus.FALLBACK
+            _set_trace(traces, lm, fallback_reason=result.reason)
 
 
 @dataclass
@@ -169,6 +328,7 @@ class CorrectionResult:
     retry_count: int
     fallback_count: int
     traces: dict[str, LineTrace]
+    reconcile_metrics: ReconcileMetrics
 
 
 class CorrectionPipeline:
@@ -195,6 +355,7 @@ class CorrectionPipeline:
         # Counters reset on every call to run()
         self._retry_count = 0
         self._fallback_count = 0
+        self._reconcile_metrics = ReconcileMetrics()
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -213,6 +374,7 @@ class CorrectionPipeline:
         """Run the full pipeline. Mutates `document_manifest.pages` in place."""
         self._retry_count = 0
         self._fallback_count = 0
+        self._reconcile_metrics = ReconcileMetrics()
 
         total_hyphen_pairs = sum(
             sum(1 for lm in page.lines if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH))
@@ -220,7 +382,7 @@ class CorrectionPipeline:
         )
 
         self.observer.on_event(
-            "document_parsed",
+            SSEEventType.DOCUMENT_PARSED,
             {
                 "total_pages": document_manifest.total_pages,
                 "total_lines": document_manifest.total_lines,
@@ -292,6 +454,7 @@ class CorrectionPipeline:
             retry_count=self._retry_count,
             fallback_count=self._fallback_count,
             traces=traces,
+            reconcile_metrics=self._reconcile_metrics,
         )
 
     # ------------------------------------------------------------------
@@ -316,7 +479,7 @@ class CorrectionPipeline:
             1 for lm in page.lines if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
         )
         self.observer.on_event(
-            "page_started",
+            SSEEventType.PAGE_STARTED,
             {
                 "page_id": page.page_id,
                 "page_index": page.page_index,
@@ -328,7 +491,7 @@ class CorrectionPipeline:
         plan = plan_page(page, document_id, self.config)
 
         self.observer.on_event(
-            "chunk_planned",
+            SSEEventType.CHUNK_PLANNED,
             {
                 "page_id": page.page_id,
                 "chunk_count": len(plan.chunks),
@@ -356,7 +519,7 @@ class CorrectionPipeline:
             except Exception as exc:
                 logger.exception("Chunk %s raised unexpectedly", chunk.chunk_id)
                 self.observer.on_event(
-                    "warning",
+                    SSEEventType.WARNING,
                     {
                         "chunk_id": chunk.chunk_id,
                         "message": str(exc)[:200],
@@ -371,7 +534,7 @@ class CorrectionPipeline:
             if lm.corrected_text is not None and lm.corrected_text != lm.ocr_text
         )
         self.observer.on_event(
-            "page_completed",
+            SSEEventType.PAGE_COMPLETED,
             {
                 "page_id": page.page_id,
                 "page_index": page.page_index,
@@ -386,42 +549,41 @@ class CorrectionPipeline:
     # Per-chunk LLM call + reconciliation
     # ------------------------------------------------------------------
 
-    async def _run_chunk(
+    async def _call_with_retry(
         self,
         *,
-        job_id: str,
         chunk: ChunkRequest,
-        line_by_id: dict[str, LineManifest],
+        chunk_lines: list[LineManifest],
+        hyphen_pairs: dict[str, str],
+        all_lines_by_id: dict[str, LineManifest],
         api_key: str,
         model: str,
-        provider_name: str,
-        traces: dict[str, LineTrace] | None = None,
-        cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
-    ) -> int:
-        """Process one chunk through the LLM. Returns hyphen pairs reconciled."""
-        chunk_lines = [line_by_id[lid] for lid in chunk.line_ids if lid in line_by_id]
-        if not chunk_lines:
-            return 0
+        traces: dict[str, LineTrace] | None,
+    ) -> LLMResponse | None:
+        """Call the LLM provider with retries; return a validated response.
 
-        hyphen_pairs = _build_hyphen_pairs(chunk_lines)
-        all_lines_by_id = line_by_id
+        On success: returns the validated LLMResponse.
+        On exhaustion: applies the OCR fallback to every line in
+        ``chunk_lines`` (corrected_text / status / trace), emits a
+        ``warning`` SSE event, increments ``self._fallback_count`` and
+        returns ``None``. The caller must short-circuit on ``None``.
 
-        self.observer.on_event(
-            "chunk_started",
-            {
-                "chunk_id": chunk.chunk_id,
-                "granularity": chunk.granularity.value,
-                "line_count": len(chunk_lines),
-            },
-        )
-
+        Retry strategy (see test_retry_classification for the pinned
+        contract):
+          - Up to ``DEFAULT_MAX_ATTEMPTS`` attempts.
+          - Temperature ramp 0.0 → 0.3 → 0.5, pinned at 0.0 after a
+            HyphenIntegrityError (which suggests the LLM mis-handled the
+            hyphen pair — a lower temperature is more likely to stick to
+            the source).
+          - Backoff: 0s for hyphen violations (first occurrence),
+            ``attempt * 2`` seconds for non-ValueError (HTTP, runtime),
+            ``attempt`` seconds for any other ValueError. Each retry
+            emits a ``retry`` SSE event with the classification tag.
+        """
         max_attempts = self.DEFAULT_MAX_ATTEMPTS
         hyphen_violation = False
 
         for attempt in range(1, max_attempts + 1):
-            # Retry temperature strategy: deterministic first, then more
-            # diverse to escape bad patterns. Hyphen violations always
-            # at 0.0 for maximum precision.
             if hyphen_violation or attempt == 1:
                 temperature = 0.0
             elif attempt == 2:
@@ -431,14 +593,11 @@ class CorrectionPipeline:
 
             enriched = enrich_chunk_lines(chunk_lines, all_lines_by_id)
 
-            if traces is not None:
-                enriched_by_id = {e.line_id: e for e in enriched}
-                for lm in chunk_lines:
-                    t = traces.get(_trace_key(lm))
-                    if t is not None:
-                        ei = enriched_by_id.get(lm.line_id)
-                        if ei is not None:
-                            t.model_input_text = ei.ocr_text
+            enriched_by_id = {e.line_id: e for e in enriched}
+            for lm in chunk_lines:
+                ei = enriched_by_id.get(lm.line_id)
+                if ei is not None:
+                    _set_trace(traces, lm, model_input_text=ei.ocr_text)
 
             payload = LLMUserPayload(
                 granularity=chunk.granularity,
@@ -459,17 +618,16 @@ class CorrectionPipeline:
                     temperature=temperature,
                 )
 
-                if traces is not None:
-                    lid_to_tkey = {lm.line_id: _trace_key(lm) for lm in chunk_lines}
-                    raw_lines = raw.get("lines", []) if isinstance(raw, dict) else []
-                    for rl in raw_lines:
-                        lid = rl.get("line_id", "") if isinstance(rl, dict) else ""
-                        rt = rl.get("corrected_text", "") if isinstance(rl, dict) else ""
-                        tkey = lid_to_tkey.get(lid)
-                        if tkey:
-                            t = traces.get(tkey)
-                            if t is not None:
-                                t.model_corrected_text = rt
+                lm_by_id = {lm.line_id: lm for lm in chunk_lines}
+                raw_lines = raw.get("lines", []) if isinstance(raw, dict) else []
+                for rl in raw_lines:
+                    if not isinstance(rl, dict):
+                        continue
+                    target = lm_by_id.get(rl.get("line_id", ""))
+                    if target is not None:
+                        _set_trace(
+                            traces, target, model_corrected_text=rl.get("corrected_text", "")
+                        )
 
                 hyphen_subs: dict[str, str] = {}
                 for lm in chunk_lines:
@@ -485,14 +643,12 @@ class CorrectionPipeline:
                     {lm.line_id: lm.ocr_text for lm in chunk_lines},
                     hyphen_subs if hyphen_subs else None,
                 )
-                hyphen_violation = False
+                return response
 
             except Exception as exc:
                 msg = sanitize_error(str(exc), api_key)
+                is_hyphen_violation = isinstance(exc, HyphenIntegrityError)
                 is_http_error = not isinstance(exc, ValueError)
-                is_hyphen_violation = isinstance(
-                    exc, ValueError
-                ) and "hyphen_integrity_violation" in str(exc)
 
                 if attempt < max_attempts:
                     if is_hyphen_violation and not hyphen_violation:
@@ -525,7 +681,7 @@ class CorrectionPipeline:
                     chunk.chunk_id,
                 )
                 self.observer.on_event(
-                    "warning",
+                    SSEEventType.WARNING,
                     {
                         "chunk_id": chunk.chunk_id,
                         "message": f"Fallback to OCR source: {msg[:120]}",
@@ -534,144 +690,110 @@ class CorrectionPipeline:
                 for lm in chunk_lines:
                     lm.corrected_text = lm.ocr_text
                     lm.status = LineStatus.FALLBACK
-                    if traces is not None:
-                        t = traces.get(_trace_key(lm))
-                        if t is not None:
-                            t.projected_text = lm.ocr_text
-                            t.validation_status = "fallback"
-                            t.fallback_reason = f"all_attempts_exhausted: {msg[:120]}"
+                    _set_trace(
+                        traces,
+                        lm,
+                        projected_text=lm.ocr_text,
+                        validation_status="fallback",
+                        fallback_reason=f"all_attempts_exhausted: {msg[:120]}",
+                    )
                 self._fallback_count += 1
-                return 0
+                return None
 
-            # --- Success: apply corrections ---
-            text_by_id: dict[str, str] = {o.line_id: o.corrected_text for o in response.lines}
+        # Unreachable: every iteration either returns or continues.
+        return None
 
-            reconciled_count = 0
-            processed_part2: set[tuple[str, str]] = set()
+    async def _run_chunk(
+        self,
+        *,
+        job_id: str,
+        chunk: ChunkRequest,
+        line_by_id: dict[str, LineManifest],
+        api_key: str,
+        model: str,
+        provider_name: str,
+        traces: dict[str, LineTrace] | None = None,
+        cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
+    ) -> int:
+        """Process one chunk through the LLM. Returns hyphen pairs reconciled."""
+        chunk_lines = [line_by_id[lid] for lid in chunk.line_ids if lid in line_by_id]
+        if not chunk_lines:
+            return 0
 
-            # Pass 1: PART1 → partner (partner may be PART2 or BOTH)
-            for lm in chunk_lines:
-                if lm.hyphen_role != HyphenRole.PART1 or not lm.hyphen_pair_line_id:
-                    continue
-                part2 = _resolve_partner(
-                    lm,
-                    is_forward=False,
-                    line_by_id=line_by_id,
-                    cross_page_partners=cross_page_partners,
-                )
-                if part2 is None:
-                    logger.warning(
-                        "Hyphen pair partner %s not found for PART1 %s "
-                        "(likely cross-page pair — skipping reconciliation)",
-                        lm.hyphen_pair_line_id,
-                        lm.line_id,
-                    )
-                    continue
-                part2_key = (part2.page_id, part2.line_id)
-                if part2_key in processed_part2:
-                    continue
-                _reconcile_one_pair(lm, part2, text_by_id, is_forward=False)
-                processed_part2.add(part2_key)
-                reconciled_count += 1
+        hyphen_pairs = _build_hyphen_pairs(chunk_lines)
+        all_lines_by_id = line_by_id
 
-            # Pass 2: BOTH → forward partner
-            for lm in chunk_lines:
-                if lm.hyphen_role != HyphenRole.BOTH or not lm.hyphen_forward_pair_id:
-                    continue
-                part2 = _resolve_partner(
-                    lm,
-                    is_forward=True,
-                    line_by_id=line_by_id,
-                    cross_page_partners=cross_page_partners,
-                )
-                if part2 is None:
-                    logger.warning(
-                        "Hyphen forward partner %s not found for BOTH %s "
-                        "(likely cross-page pair — skipping reconciliation)",
-                        lm.hyphen_forward_pair_id,
-                        lm.line_id,
-                    )
-                    continue
-                part2_key = (part2.page_id, part2.line_id)
-                if part2_key in processed_part2:
-                    continue
-                _reconcile_one_pair(lm, part2, text_by_id, is_forward=True)
-                processed_part2.add(part2_key)
-                reconciled_count += 1
+        self.observer.on_event(
+            SSEEventType.CHUNK_STARTED,
+            {
+                "chunk_id": chunk.chunk_id,
+                "granularity": chunk.granularity.value,
+                "line_count": len(chunk_lines),
+            },
+        )
 
-            # Apply remaining lines via line_acceptance policy
-            for lm in chunk_lines:
-                if lm.corrected_text is None:
-                    corrected = text_by_id.get(lm.line_id)
-                    if corrected is not None:
-                        if (
-                            lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
-                            and lm.ocr_text.rstrip().endswith("-")
-                            and not corrected.rstrip().endswith("-")
-                        ):
-                            lm.corrected_text = lm.ocr_text
-                            lm.status = LineStatus.FALLBACK
-                            if traces is not None:
-                                t = traces.get(_trace_key(lm))
-                                if t is not None:
-                                    t.fallback_reason = "orphan_hyphen_completed"
-                            continue
+        response = await self._call_with_retry(
+            chunk=chunk,
+            chunk_lines=chunk_lines,
+            hyphen_pairs=hyphen_pairs,
+            all_lines_by_id=all_lines_by_id,
+            api_key=api_key,
+            model=model,
+            traces=traces,
+        )
+        if response is None:
+            # All attempts exhausted; _call_with_retry already applied the
+            # OCR fallback and the warning event. Nothing left to do here.
+            return 0
 
-                        prev_ocr = (
-                            all_lines_by_id[lm.prev_line_id].ocr_text
-                            if lm.prev_line_id and lm.prev_line_id in all_lines_by_id
-                            else None
-                        )
-                        next_ocr = (
-                            all_lines_by_id[lm.next_line_id].ocr_text
-                            if lm.next_line_id and lm.next_line_id in all_lines_by_id
-                            else None
-                        )
-                        result = check_line(lm.ocr_text, corrected, prev_ocr, next_ocr)
-                        lm.corrected_text = result.text
-                        if result.accepted:
-                            lm.status = LineStatus.CORRECTED
-                        else:
-                            lm.status = LineStatus.FALLBACK
-                            if traces is not None:
-                                t = traces.get(_trace_key(lm))
-                                if t is not None:
-                                    t.fallback_reason = result.reason
+        text_by_id: dict[str, str] = {o.line_id: o.corrected_text for o in response.lines}
 
-            # Adjacent duplicate detection (post-acceptance pass)
-            accepted_lines = [
-                (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text) for lm in chunk_lines
-            ]
-            dup_reverts = check_adjacent_duplicates(accepted_lines)
-            for lm in chunk_lines:
-                if lm.line_id in dup_reverts:
-                    lm.corrected_text = lm.ocr_text
-                    lm.status = LineStatus.FALLBACK
+        reconciled_count, chunk_reconcile_metrics = _reconcile_pairs(
+            chunk_lines, line_by_id, text_by_id, cross_page_partners
+        )
+        self._reconcile_metrics.coherent += chunk_reconcile_metrics.coherent
+        self._reconcile_metrics.fallback += chunk_reconcile_metrics.fallback
+        self._reconcile_metrics.neutralised += chunk_reconcile_metrics.neutralised
 
-            # Trace: projected_text + validation_status
-            if traces is not None:
-                for lm in chunk_lines:
-                    t = traces.get(_trace_key(lm))
-                    if t is None:
-                        continue
-                    t.projected_text = (
-                        lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
-                    )
-                    t.validation_status = lm.status.value
-                    if lm.line_id in dup_reverts and not t.fallback_reason:
-                        t.fallback_reason = dup_reverts[lm.line_id]
+        # Apply remaining lines via line_acceptance policy
+        _apply_line_acceptance(chunk_lines, text_by_id, all_lines_by_id, traces)
 
-            self.observer.on_event(
-                "chunk_completed",
-                {
-                    "chunk_id": chunk.chunk_id,
-                    "line_count": len(chunk_lines),
-                    "hyphen_pairs_reconciled": reconciled_count,
-                },
+        # Adjacent duplicate detection (post-acceptance pass)
+        accepted_lines = [
+            (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text) for lm in chunk_lines
+        ]
+        dup_reverts = check_adjacent_duplicates(accepted_lines)
+        for lm in chunk_lines:
+            if lm.line_id in dup_reverts:
+                lm.corrected_text = lm.ocr_text
+                lm.status = LineStatus.FALLBACK
+
+        # Trace: projected_text + validation_status
+        for lm in chunk_lines:
+            _set_trace(
+                traces,
+                lm,
+                projected_text=(
+                    lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
+                ),
+                validation_status=lm.status.value,
             )
-            return reconciled_count
+            # Only set fallback_reason for adjacent-duplicate reverts when
+            # an earlier reason hasn't already pinned the cause.
+            if traces is not None and lm.line_id in dup_reverts:
+                trace = traces.get(_trace_key(lm))
+                if trace is not None and not trace.fallback_reason:
+                    trace.fallback_reason = dup_reverts[lm.line_id]
 
-        return 0
+        self.observer.on_event(
+            SSEEventType.CHUNK_COMPLETED,
+            {
+                "chunk_id": chunk.chunk_id,
+                "line_count": len(chunk_lines),
+                "hyphen_pairs_reconciled": reconciled_count,
+            },
+        )
+        return reconciled_count
 
     # ------------------------------------------------------------------
     # Output writing (rewriter + trace assembly)
@@ -693,7 +815,7 @@ class CorrectionPipeline:
             if not pages_for_file:
                 continue
 
-            xml_bytes, _metrics, rewriter_paths = rewrite_alto_file(
+            xml_bytes, metrics, rewriter_paths = rewrite_alto_file(
                 xml_path,
                 pages_for_file,
                 provider_name,
@@ -702,6 +824,16 @@ class CorrectionPipeline:
             self.output_writer.write_corrected(
                 source_stem=xml_path.stem,
                 xml_bytes=xml_bytes,
+            )
+            self.observer.on_event(
+                SSEEventType.REWRITER_STATS,
+                {
+                    "source_stem": xml_path.stem,
+                    "untouched": metrics.untouched,
+                    "subs_only": metrics.subs_only,
+                    "fast_path": metrics.fast_path,
+                    "slow_path": metrics.slow_path,
+                },
             )
 
             lid_to_tkey: dict[str, str] = {}

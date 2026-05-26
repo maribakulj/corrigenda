@@ -3,6 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.alto._norm import ncfold
+from app.jobs.migration_guards import (
+    part1_text_migrated as _part1_text_migrated,
+)
+from app.jobs.migration_guards import (
+    part2_boundary_word_diverged as _part2_boundary_word_diverged,
+)
+from app.jobs.migration_guards import (
+    part2_text_migrated as _part2_text_migrated,
+)
 from app.schemas import HyphenRole, LineManifest, LLMLineInput
 
 _SENTINEL = object()  # distinguishes "not passed" from None
@@ -106,97 +115,12 @@ def enrich_chunk_lines(
 
 
 # ---------------------------------------------------------------------------
-# Pair-coherence helpers
-# ---------------------------------------------------------------------------
-
-
-def _part1_text_migrated(ocr_text: str, corrected_text: str) -> bool:
-    """
-    Return True if corrected PART1 text looks like the LLM extended the
-    hyphenated word or pulled text from the next line.
-    """
-    ocr_bare = ocr_text.rstrip("-").rstrip()
-    corrected_bare = corrected_text.rstrip("-").rstrip(".")
-
-    ocr_words = ocr_bare.split()
-    corrected_words = corrected_bare.split()
-
-    # Word count increased significantly → text was pulled from next line
-    if len(corrected_words) > len(ocr_words) + 1:
-        return True
-
-    # Same or similar word count, but last word got much longer
-    # (word completion, e.g. "néces" → "nécessaires")
-    if ocr_words and corrected_words:
-        ocr_last = ocr_words[-1].rstrip("-")
-        corrected_last = corrected_words[-1].rstrip("-")
-        if len(corrected_last) > len(ocr_last) + 3:
-            return True
-
-    # Overall character length grew substantially
-    if len(corrected_bare) > len(ocr_bare) * 1.4 + 8:
-        return True
-
-    return False
-
-
-def _part2_text_migrated(ocr_text: str, corrected_text: str) -> bool:
-    """
-    Return True if corrected PART2 text is drastically different from
-    original, indicating cascade propagation from a shifted PART1.
-    """
-    ocr_words = ocr_text.split()
-    corrected_words = corrected_text.split()
-
-    # Dramatic shrinkage → content was absorbed by previous line
-    if ocr_words and len(corrected_words) < len(ocr_words) * 0.4:
-        return True
-
-    # Dramatic growth → text pulled from next line
-    if len(corrected_words) > len(ocr_words) + max(3, int(len(ocr_words) * 0.4)):
-        return True
-
-    return False
-
-
-def _part2_boundary_word_diverged(ocr_text: str, corrected_text: str) -> bool:
-    """
-    Return True if the first word of corrected PART2 is completely different
-    from the first word of OCR PART2.
-
-    The first word of PART2 is the continuation of the hyphenated word from
-    PART1.  If the LLM replaced it with an unrelated word (e.g. "saires" →
-    "urgentes"), the hyphen pair is semantically broken.
-
-    Minor OCR corrections (same first 2 chars, similar length) are allowed.
-    """
-    ocr_words = ocr_text.split()
-    cor_words = corrected_text.split()
-
-    if not ocr_words or not cor_words:
-        return False  # empty cases handled by migration/empty checks
-
-    ocr_first = ncfold(ocr_words[0])
-    cor_first = ncfold(cor_words[0])
-
-    if ocr_first == cor_first:
-        return False
-
-    # Accept minor corrections: first 2 chars match and length ratio reasonable
-    prefix_len = min(2, len(ocr_first), len(cor_first))
-    if (
-        prefix_len >= 2
-        and ocr_first[:prefix_len] == cor_first[:prefix_len]
-        and 0.5 <= len(cor_first) / max(1, len(ocr_first)) <= 2.0
-    ):
-        return False
-
-    return True
-
-
-# ---------------------------------------------------------------------------
 # Main reconciliation
 # ---------------------------------------------------------------------------
+#
+# Pair-coherence guards (_part1_text_migrated, _part2_text_migrated,
+# _part2_boundary_word_diverged) live in app.jobs.migration_guards. See
+# its module docstring for the full migration-guard matrix.
 
 
 def reconcile_hyphen_pair(

@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from lxml import etree
 
 from app.alto.parser import build_document_manifest, parse_alto_file
-from app.jobs.orchestrator import run_job
+from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider
 from app.storage import (
@@ -98,7 +98,7 @@ def _run_job_directly(
 
     out_dir = output_dir(job_id)
     _run(
-        run_job(
+        JobRunner(job_store=store).run(
             job_id=job_id,
             document_manifest=doc,
             provider_name="openai",
@@ -107,7 +107,6 @@ def _run_job_directly(
             output_dir=out_dir,
             source_files={n: p for n, p in saved.items()},
             provider=mock,
-            job_store_override=store,
         )
     )
 
@@ -121,8 +120,8 @@ def _make_client(
     """Return a TestClient with the given (or default) MockProvider injected.
 
     If `store` is provided, it replaces the app's default JobStore so
-    callers can share state between direct `run_job` calls and HTTP
-    requests against the client.
+    callers can share state between direct `JobRunner.run` calls and
+    HTTP requests against the client.
     """
     from app import providers as prov_module
     from app.main import create_app
@@ -272,7 +271,7 @@ def test_sse_events_order():
 
     try:
         _run(
-            run_job(
+            JobRunner(job_store=store).run(
                 job_id=job_id,
                 document_manifest=doc,
                 provider_name="openai",
@@ -281,7 +280,6 @@ def test_sse_events_order():
                 output_dir=output_dir(job_id),
                 source_files={n: p for n, p in saved.items()},
                 provider=MockProvider(),
-                job_store_override=store,
             )
         )
     finally:

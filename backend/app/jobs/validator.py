@@ -1,9 +1,25 @@
-"""Validator for LLM structured responses."""
+"""Validator for LLM structured responses.
+
+Includes the pre-retry pair-drift check (``_check_pair_drift``). See
+``app.jobs.migration_guards`` for the full matrix of text-migration
+guards across the three pipeline stages (validate / reconcile / accept).
+"""
 
 from __future__ import annotations
 
 from app.alto._norm import ncfold
 from app.schemas import LLMLineOutput, LLMResponse
+
+
+class HyphenIntegrityError(ValueError):
+    """Raised when an LLM response broke a hyphen-pair invariant.
+
+    Subclass of ValueError so existing ``except ValueError`` catches
+    keep working. The pipeline's retry classifier uses isinstance
+    checks against this type; the ``retry`` SSE event still carries the
+    literal tag ``"hyphen_integrity_violation"`` as its public error
+    name for the frontend consumer.
+    """
 
 
 def validate_llm_response(
@@ -36,10 +52,12 @@ def validate_llm_response(
 
     Raises
     ------
+    HyphenIntegrityError
+        Raised on hyphen-pair invariant violations (subclass of
+        ValueError so callers catching ValueError continue to work).
     ValueError
-        On any validation failure, with a descriptive message.
-        Hyphen-integrity violations use message prefix
-        "hyphen_integrity_violation".
+        On any other validation failure (schema, line count, missing
+        IDs, …).
     """
     # --- Basic structure ---
     if "lines" not in raw:
@@ -136,11 +154,11 @@ def _validate_hyphen_integrity(
 
         # 1. Either side being empty means illegal fusion/deletion
         if not text_a:
-            raise ValueError(
+            raise HyphenIntegrityError(
                 f"hyphen_integrity_violation: corrected_text for line {id_a!r} is empty"
             )
         if not text_b:
-            raise ValueError(
+            raise HyphenIntegrityError(
                 f"hyphen_integrity_violation: corrected_text for line {id_b!r} is empty"
             )
 
@@ -161,7 +179,7 @@ def _validate_hyphen_integrity(
             continue
         part1_last_word = part1_words[-1]
         if ncfold(part1_last_word) == ncfold(subs_content):
-            raise ValueError(
+            raise HyphenIntegrityError(
                 f"hyphen_integrity_violation: PART1 line {part1_id!r} "
                 f"contains full logical word {subs_content!r} "
                 f"(fusion detected)"
@@ -184,14 +202,14 @@ def _check_pair_drift(
 
     # PART1 grew by more than 2 words → probably pulled from PART2
     if cor_a_wc > ocr_a_wc + 2:
-        raise ValueError(
+        raise HyphenIntegrityError(
             f"hyphen_integrity_violation: PART1 line {id_a!r} grew from "
             f"{ocr_a_wc} to {cor_a_wc} words (text migration suspected)"
         )
 
     # PART2 shrank to less than 40% of original → absorbed by PART1
     if ocr_b_wc >= 2 and cor_b_wc < ocr_b_wc * 0.4:
-        raise ValueError(
+        raise HyphenIntegrityError(
             f"hyphen_integrity_violation: PART2 line {id_b!r} shrank from "
             f"{ocr_b_wc} to {cor_b_wc} words (text migration suspected)"
         )

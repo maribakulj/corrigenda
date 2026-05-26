@@ -42,9 +42,50 @@ class Provider(str, Enum):
 
 class HyphenRole(str, Enum):
     NONE = "none"
-    PART1 = "HypPart1"  # last line of pair: carries left fragment + hyphen
-    PART2 = "HypPart2"  # first line of pair: carries right fragment
+    PART1 = "HypPart1"  # first (top) line of pair: carries left fragment + trailing hyphen
+    PART2 = "HypPart2"  # second (bottom) line of pair: carries right fragment
     BOTH = "HypBoth"  # PART2 of previous pair AND PART1 of next pair (chained)
+
+
+class SSEEventType(str, Enum):
+    """Canonical event names emitted by the correction pipeline.
+
+    This enum is the authoritative source of truth shared with the
+    frontend's ``frontend/src/hooks/useJobStream.ts::EVENTS`` list. Any
+    new event MUST appear in both places; ``tests/test_sse_event_contract``
+    enforces the subset relation at every CI run.
+
+    The string values stay stable across releases — they are part of the
+    SSE wire contract.
+    """
+
+    # Pipeline lifecycle (runner)
+    STARTED = "started"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+    # Document / page / chunk lifecycle (correction_pipeline)
+    DOCUMENT_PARSED = "document_parsed"
+    PAGE_STARTED = "page_started"
+    PAGE_COMPLETED = "page_completed"
+    CHUNK_PLANNED = "chunk_planned"
+    CHUNK_STARTED = "chunk_started"
+    CHUNK_COMPLETED = "chunk_completed"
+    RETRY = "retry"
+    WARNING = "warning"
+
+    # Observability — emitted at file/job boundaries with rewriter and
+    # reconcile path counts. Pure read-only diagnostics; never influence
+    # the corrected XML output.
+    REWRITER_STATS = "rewriter_stats"
+    RECONCILE_STATS = "reconcile_stats"
+
+    # Frontend-only initial state (kept in the enum so the contract test
+    # can verify the frontend list against this set).
+    QUEUED = "queued"
+
+    # Stream keep-alive (emitted by JobStore.stream_events, not the pipeline)
+    KEEPALIVE = "keepalive"
 
 
 # ---------------------------------------------------------------------------
@@ -74,8 +115,6 @@ class LineManifest(BaseModel):
     ocr_text: str
     prev_line_id: str | None = None
     next_line_id: str | None = None
-    expected: bool = True
-    received: bool = False
     corrected_text: str | None = None
     status: LineStatus = LineStatus.PENDING
 
@@ -163,6 +202,12 @@ class ChunkPlan(BaseModel):
 
 
 class JobManifest(BaseModel):
+    # validate_assignment turns silent typos into ValidationError at write
+    # time — paired with the typed JobStore.update_job signature, this
+    # prevents a misnamed kwarg from quietly creating a bogus attribute
+    # that won't round-trip on serialisation.
+    model_config = {"validate_assignment": True}
+
     job_id: str
     provider: Provider
     model: str
@@ -176,7 +221,8 @@ class JobManifest(BaseModel):
     duration_seconds: float | None = None
     error: str | None = None
     images: dict[str, str] = Field(default_factory=dict)
-    # Line traces (Sprint 5bis) — keyed by line_id
+    # Per-line text trace through every pipeline stage, keyed by
+    # f"{page_id}:{line_order_global}:{line_id}" (see _trace_key).
     line_traces: dict[str, LineTrace] = Field(default_factory=dict)
 
 
@@ -271,7 +317,7 @@ class SSEEvent(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Line trace (Sprint 5bis — observability)
+# Line trace — per-line observability through the correction pipeline
 # ---------------------------------------------------------------------------
 
 

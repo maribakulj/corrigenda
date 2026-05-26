@@ -1,26 +1,43 @@
 """JobRunner — bridges the pure `CorrectionPipeline` with infrastructure.
 
 Owns the job lifecycle (STARTED → RUNNING → COMPLETED/FAILED), the
-timeout budget, the observer adapter, and error sanitisation. Stays
-agnostic of how the JobStore is wired in: callers pass it at
-construction time, which is the seam future-1.4 work will use to
-replace the in-memory singleton with `request.app.state.job_store`.
+timeout budget, the observer adapter, and error sanitisation. The
+JobStore is injected at construction time so it can be swapped (in
+tests, or for a future out-of-process store) without touching the
+pipeline.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
+import warnings
 from pathlib import Path
 from typing import Any
 
-from app.jobs.correction_pipeline import CorrectionPipeline, sanitize_error
+from app.jobs.correction_pipeline import CorrectionPipeline, CorrectionResult, sanitize_error
 from app.protocols import BaseProvider, JobStore
-from app.schemas import DocumentManifest, JobStatus
+from app.schemas import DocumentManifest, JobStatus, SSEEventType
 from app.storage.output_writer import FilesystemOutputWriter
 
 logger = logging.getLogger(__name__)
+
+
+def _default_timeout_from_env() -> int:
+    """Resolve JOB_TIMEOUT_SECONDS once at import. 0 disables the timeout."""
+    try:
+        return int(os.environ.get("JOB_TIMEOUT_SECONDS", "1800"))
+    except ValueError:
+        warnings.warn(
+            "JOB_TIMEOUT_SECONDS env var is not a valid integer; using default 1800s",
+            stacklevel=1,
+        )
+        return 1800
+
+
+DEFAULT_JOB_TIMEOUT_SECONDS: int = _default_timeout_from_env()
 
 
 class _JobStoreObserver:
@@ -71,7 +88,7 @@ class JobRunner:
 
         try:
             timeout = timeout_seconds if timeout_seconds > 0 else None
-            total_chunks, total_reconciled = await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._run_pipeline(
                     job_id=job_id,
                     document_manifest=document_manifest,
@@ -84,6 +101,8 @@ class JobRunner:
                 ),
                 timeout=timeout,
             )
+            total_chunks = result.total_chunks
+            total_reconciled = result.total_reconciled
 
             lines_modified = sum(
                 1
@@ -101,9 +120,23 @@ class JobRunner:
                 duration_seconds=elapsed,
             )
 
+            # Job-end reconcile stats: how many hyphen pairs landed in each
+            # outcome class. Emitted BEFORE the terminal `completed` so a
+            # subscriber that exits on `completed` still gets it.
             self.job_store.emit(
                 job_id,
-                "completed",
+                SSEEventType.RECONCILE_STATS,
+                {
+                    "coherent": result.reconcile_metrics.coherent,
+                    "fallback": result.reconcile_metrics.fallback,
+                    "neutralised": result.reconcile_metrics.neutralised,
+                    "total": result.reconcile_metrics.total,
+                },
+            )
+
+            self.job_store.emit(
+                job_id,
+                SSEEventType.COMPLETED,
                 {
                     "job_id": job_id,
                     "total_lines": document_manifest.total_lines,
@@ -124,7 +157,9 @@ class JobRunner:
                 error=safe_error,
                 duration_seconds=elapsed,
             )
-            self.job_store.emit(job_id, "failed", {"job_id": job_id, "error": safe_error})
+            self.job_store.emit(
+                job_id, SSEEventType.FAILED, {"job_id": job_id, "error": safe_error}
+            )
 
         except Exception as exc:
             logger.exception("Job %s failed", job_id)
@@ -140,7 +175,7 @@ class JobRunner:
             )
             self.job_store.emit(
                 job_id,
-                "failed",
+                SSEEventType.FAILED,
                 {
                     "job_id": job_id,
                     "error": safe_error,
@@ -158,10 +193,10 @@ class JobRunner:
         provider_name: str,
         output_writer: FilesystemOutputWriter,
         source_files: dict[str, Path],
-    ) -> tuple[int, int]:
+    ) -> CorrectionResult:
         """Drive the pure pipeline and persist its counters back."""
         self.job_store.update_job(job_id, status=JobStatus.STARTED)
-        self.job_store.emit(job_id, "started", {"job_id": job_id})
+        self.job_store.emit(job_id, SSEEventType.STARTED, {"job_id": job_id})
 
         self.job_store.update_job(
             job_id,
@@ -191,4 +226,4 @@ class JobRunner:
             line_traces=result.traces,
         )
 
-        return result.total_chunks, result.total_reconciled
+        return result
