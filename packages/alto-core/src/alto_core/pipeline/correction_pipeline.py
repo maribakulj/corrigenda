@@ -26,7 +26,12 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from alto_core.alto.hyphenation import enrich_chunk_lines, reconcile_hyphen_pair
+from alto_core.alto.hyphenation import (
+    ReconcileMetrics,
+    classify_reconcile_outcome,
+    enrich_chunk_lines,
+    reconcile_hyphen_pair,
+)
 from alto_core.alto.rewriter import extract_output_texts, rewrite_alto_file
 from alto_core.pipeline.chunk_planner import plan_page
 from alto_core.pipeline.line_acceptance import check_adjacent_duplicates, check_line
@@ -179,8 +184,14 @@ def _reconcile_one_pair(
     text_by_id: dict[str, str],
     *,
     is_forward: bool,
-) -> None:
-    """Apply reconcile_hyphen_pair and write results back onto the manifests."""
+) -> str:
+    """Apply reconcile_hyphen_pair and write results back onto the manifests.
+
+    Returns the outcome classification produced by
+    ``classify_reconcile_outcome``: ``"coherent"`` / ``"fallback"`` /
+    ``"neutralised"``. The pipeline aggregates these into the per-job
+    ReconcileMetrics surfaced on the reconcile_stats observability event.
+    """
     corrected_p2 = text_by_id.get(part2.line_id, part2.ocr_text)
 
     if is_forward:
@@ -202,6 +213,16 @@ def _reconcile_one_pair(
             corrected_p2,
         )
 
+    outcome = classify_reconcile_outcome(
+        lm.ocr_text,
+        part2.ocr_text,
+        corrected_p1,
+        corrected_p2,
+        final_p1,
+        final_p2,
+        subs,
+    )
+
     lm.corrected_text = final_p1
     lm.status = LineStatus.CORRECTED
     part2.corrected_text = final_p2
@@ -212,6 +233,8 @@ def _reconcile_one_pair(
         lm.hyphen_forward_subs_content = subs
     else:
         lm.hyphen_subs_content = subs
+
+    return outcome
 
 
 @dataclass
@@ -228,6 +251,7 @@ class CorrectionResult:
     retry_count: int
     fallback_count: int
     traces: dict[str, LineTrace]
+    reconcile_metrics: ReconcileMetrics
 
 
 class CorrectionPipeline:
@@ -254,6 +278,16 @@ class CorrectionPipeline:
         # Counters reset on every call to run()
         self._retry_count = 0
         self._fallback_count = 0
+        self._reconcile_metrics = ReconcileMetrics()
+
+    def _record_reconcile_outcome(self, outcome: str) -> None:
+        """Bump the per-job ReconcileMetrics counter for a single pair."""
+        if outcome == "coherent":
+            self._reconcile_metrics.coherent += 1
+        elif outcome == "fallback":
+            self._reconcile_metrics.fallback += 1
+        elif outcome == "neutralised":
+            self._reconcile_metrics.neutralised += 1
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -279,6 +313,7 @@ class CorrectionPipeline:
         run_id = run_id or str(uuid.uuid4())
         self._retry_count = 0
         self._fallback_count = 0
+        self._reconcile_metrics = ReconcileMetrics()
 
         total_hyphen_pairs = sum(
             sum(
@@ -361,6 +396,7 @@ class CorrectionPipeline:
             retry_count=self._retry_count,
             fallback_count=self._fallback_count,
             traces=traces,
+            reconcile_metrics=self._reconcile_metrics,
         )
 
     # ------------------------------------------------------------------
@@ -714,7 +750,8 @@ class CorrectionPipeline:
             part2_key = (part2.page_id, part2.line_id)
             if part2_key in processed_part2:
                 continue
-            _reconcile_one_pair(lm, part2, text_by_id, is_forward=False)
+            outcome = _reconcile_one_pair(lm, part2, text_by_id, is_forward=False)
+            self._record_reconcile_outcome(outcome)
             processed_part2.add(part2_key)
             reconciled_count += 1
 
@@ -742,7 +779,8 @@ class CorrectionPipeline:
             part2_key = (part2.page_id, part2.line_id)
             if part2_key in processed_part2:
                 continue
-            _reconcile_one_pair(lm, part2, text_by_id, is_forward=True)
+            outcome = _reconcile_one_pair(lm, part2, text_by_id, is_forward=True)
+            self._record_reconcile_outcome(outcome)
             processed_part2.add(part2_key)
             reconciled_count += 1
 
@@ -863,7 +901,7 @@ class CorrectionPipeline:
             if not pages_for_file:
                 continue
 
-            xml_bytes, _metrics, rewriter_paths = rewrite_alto_file(
+            xml_bytes, metrics, rewriter_paths = rewrite_alto_file(
                 xml_path,
                 pages_for_file,
                 provider_name,
@@ -872,6 +910,19 @@ class CorrectionPipeline:
             self.output_writer.write_corrected(
                 source_stem=xml_path.stem,
                 xml_bytes=xml_bytes,
+            )
+            # rewriter_stats observability event — pure read-only diagnostic
+            # surfacing how each line classified (UNTOUCHED / SUBS_ONLY /
+            # FAST_PATH / SLOW_PATH). Zero impact on the corrected XML.
+            self.observer.on_event(
+                PipelineEventType.REWRITER_STATS,
+                {
+                    "source_stem": xml_path.stem,
+                    "untouched": metrics.untouched,
+                    "subs_only": metrics.subs_only,
+                    "fast_path": metrics.fast_path,
+                    "slow_path": metrics.slow_path,
+                },
             )
 
             lid_to_tkey: dict[str, str] = {}

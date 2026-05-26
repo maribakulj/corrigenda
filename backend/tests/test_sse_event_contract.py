@@ -73,6 +73,9 @@ _KNOWN_BACKEND_EVENTS = {
     "warning",
     "chunk_error",
     "hyphen_partner_missing",
+    # Observability stats (emitted by CorrectionPipeline / JobRunner)
+    "rewriter_stats",
+    "reconcile_stats",
     # Synthetic stream events (store.stream_events)
     "keepalive",
     "error",

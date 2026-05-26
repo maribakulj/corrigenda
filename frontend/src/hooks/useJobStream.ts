@@ -92,6 +92,8 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
       'failed',
       'keepalive',
       'error',
+      'rewriter_stats',
+      'reconcile_stats',
     ]
 
     function handleEvent(eventName: string, rawData: string) {
