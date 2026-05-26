@@ -13,26 +13,14 @@ import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Any
 
 from alto_core import CorrectionPipeline, sanitize_error
 
-from app.jobs.observers import CompositeObserver, LoggingObserver
+from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore, OutputWriter
 from app.schemas import DocumentManifest, JobStatus
 
 logger = logging.getLogger(__name__)
-
-
-class JobStoreObserver:
-    """Adapt a JobStore to the PipelineObserver Protocol for a single job."""
-
-    def __init__(self, job_store: JobStore, job_id: str) -> None:
-        self._job_store = job_store
-        self._job_id = job_id
-
-    def on_event(self, event_type: str, payload: dict[str, Any]) -> None:
-        self._job_store.emit(self._job_id, event_type, payload)
 
 
 class JobRunner:
