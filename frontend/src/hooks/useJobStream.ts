@@ -73,6 +73,8 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
 
     let cancelled = false
     const MAX_RETRIES = 3
+    // Mirror of the backend's emit sites. Synchronisation is enforced
+    // by backend/tests/test_sse_event_contract.py — any drift fails CI.
     const EVENTS = [
       'queued',
       'started',
@@ -81,12 +83,15 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
       'chunk_planned',
       'chunk_started',
       'chunk_completed',
+      'chunk_error',
+      'hyphen_partner_missing',
       'retry',
       'warning',
       'page_completed',
       'completed',
       'failed',
       'keepalive',
+      'error',
     ]
 
     function handleEvent(eventName: string, rawData: string) {
