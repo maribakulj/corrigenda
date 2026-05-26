@@ -21,6 +21,8 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from alto_core.schemas import PipelineEventType
+
 from app.schemas import JobManifest, JobStatus, Provider, SSEEvent
 
 logger = logging.getLogger(__name__)
@@ -231,7 +233,7 @@ class JobStore:
                     if event.event in ("completed", "failed"):
                         break
                 except TimeoutError:
-                    yield SSEEvent(event="keepalive", data={})
+                    yield SSEEvent(event=PipelineEventType.KEEPALIVE, data={})
         finally:
             self.unsubscribe(job_id, queue)
 

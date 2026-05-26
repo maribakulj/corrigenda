@@ -17,6 +17,7 @@ import warnings
 from pathlib import Path
 
 from alto_core import CorrectionPipeline, sanitize_error
+from alto_core.schemas import PipelineEventType
 
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore, OutputWriter
@@ -116,7 +117,7 @@ class JobRunner:
 
             self.job_store.emit(
                 job_id,
-                "completed",
+                PipelineEventType.COMPLETED,
                 {
                     "job_id": job_id,
                     "total_lines": document_manifest.total_lines,
@@ -137,7 +138,9 @@ class JobRunner:
                 error=safe_error,
                 duration_seconds=elapsed,
             )
-            self.job_store.emit(job_id, "failed", {"job_id": job_id, "error": safe_error})
+            self.job_store.emit(
+                job_id, PipelineEventType.FAILED, {"job_id": job_id, "error": safe_error}
+            )
 
         except asyncio.CancelledError:
             # L10/B8 — SIGTERM during shutdown cancels the runner task
@@ -157,7 +160,9 @@ class JobRunner:
                 error=safe_error,
                 duration_seconds=elapsed,
             )
-            self.job_store.emit(job_id, "failed", {"job_id": job_id, "error": safe_error})
+            self.job_store.emit(
+                job_id, PipelineEventType.FAILED, {"job_id": job_id, "error": safe_error}
+            )
             # Re-raise so the task scheduler sees the cancellation and
             # propagates it correctly (this is the documented asyncio
             # pattern for handling CancelledError — never silently swallow).
@@ -177,7 +182,7 @@ class JobRunner:
             )
             self.job_store.emit(
                 job_id,
-                "failed",
+                PipelineEventType.FAILED,
                 {
                     "job_id": job_id,
                     "error": safe_error,
@@ -198,7 +203,7 @@ class JobRunner:
     ) -> tuple[int, int]:
         """Drive the pure pipeline and persist its counters back."""
         self.job_store.update_job(job_id, status=JobStatus.STARTED)
-        self.job_store.emit(job_id, "started", {"job_id": job_id})
+        self.job_store.emit(job_id, PipelineEventType.STARTED, {"job_id": job_id})
 
         self.job_store.update_job(
             job_id,

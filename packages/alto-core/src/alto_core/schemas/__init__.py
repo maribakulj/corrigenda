@@ -64,9 +64,52 @@ class HyphenRole(str, Enum):
     """
 
     NONE = "none"
-    PART1 = "HypPart1"  # last line of pair: carries left fragment + hyphen
-    PART2 = "HypPart2"  # first line of pair: carries right fragment
+    PART1 = (
+        "HypPart1"  # first (top) line of pair: carries left fragment + trailing hyphen
+    )
+    PART2 = "HypPart2"  # second (bottom) line of pair: carries right fragment
     BOTH = "HypBoth"  # PART2 of previous pair AND PART1 of next pair (chained)
+
+
+class PipelineEventType(str, Enum):
+    """Canonical event names emitted by the correction pipeline.
+
+    This enum is the authoritative source of truth for every event
+    name the pipeline or its observers can emit. The backend's SSE
+    layer transports the same strings; ``frontend/src/hooks/useJobStream
+    .ts::EVENTS`` lists them on the consumer side.
+    Synchronisation is enforced by
+    ``backend/tests/test_sse_event_contract.py`` at every CI run.
+
+    The string values are part of the wire contract and stay stable
+    across releases.
+    """
+
+    # Pipeline lifecycle (emitted by JobRunner on the backend)
+    STARTED = "started"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+    # Document / page / chunk lifecycle (emitted by CorrectionPipeline)
+    DOCUMENT_PARSED = "document_parsed"
+    PAGE_STARTED = "page_started"
+    PAGE_COMPLETED = "page_completed"
+    CHUNK_PLANNED = "chunk_planned"
+    CHUNK_STARTED = "chunk_started"
+    CHUNK_COMPLETED = "chunk_completed"
+    CHUNK_ERROR = "chunk_error"
+    RETRY = "retry"
+    WARNING = "warning"
+    HYPHEN_PARTNER_MISSING = "hyphen_partner_missing"
+
+    # Frontend-only initial state (kept here so the contract test can
+    # verify the frontend list against this canonical set).
+    QUEUED = "queued"
+
+    # Transport-layer events (emitted by JobStore.stream_events on the
+    # backend, not by the pipeline itself).
+    KEEPALIVE = "keepalive"
+    ERROR = "error"
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +374,7 @@ __all__ = [
     "ChunkGranularity",
     "Provider",
     "HyphenRole",
+    "PipelineEventType",
     "Coords",
     "LineManifest",
     "BlockManifest",

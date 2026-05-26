@@ -45,6 +45,7 @@ from alto_core.schemas import (
     LineTrace,
     LLMUserPayload,
     PageManifest,
+    PipelineEventType,
 )
 
 # Patterns to redact common secret formats in error messages.
@@ -289,7 +290,7 @@ class CorrectionPipeline:
         )
 
         self.observer.on_event(
-            "document_parsed",
+            PipelineEventType.DOCUMENT_PARSED,
             {
                 "total_pages": document_manifest.total_pages,
                 "total_lines": document_manifest.total_lines,
@@ -385,7 +386,7 @@ class CorrectionPipeline:
             if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
         )
         self.observer.on_event(
-            "page_started",
+            PipelineEventType.PAGE_STARTED,
             {
                 "page_id": page.page_id,
                 "page_index": page.page_index,
@@ -397,7 +398,7 @@ class CorrectionPipeline:
         plan = plan_page(page, document_id, self.config)
 
         self.observer.on_event(
-            "chunk_planned",
+            PipelineEventType.CHUNK_PLANNED,
             {
                 "page_id": page.page_id,
                 "chunk_count": len(plan.chunks),
@@ -425,7 +426,7 @@ class CorrectionPipeline:
                 # ADR-006: pipeline does not log directly; emit an
                 # event the host application can log/trace.
                 self.observer.on_event(
-                    "chunk_error",
+                    PipelineEventType.CHUNK_ERROR,
                     {
                         "chunk_id": chunk.chunk_id,
                         "message": str(exc)[:200],
@@ -441,7 +442,7 @@ class CorrectionPipeline:
             if lm.corrected_text is not None and lm.corrected_text != lm.ocr_text
         )
         self.observer.on_event(
-            "page_completed",
+            PipelineEventType.PAGE_COMPLETED,
             {
                 "page_id": page.page_id,
                 "page_index": page.page_index,
@@ -476,7 +477,7 @@ class CorrectionPipeline:
         all_lines_by_id = line_by_id
 
         self.observer.on_event(
-            "chunk_started",
+            PipelineEventType.CHUNK_STARTED,
             {
                 "chunk_id": chunk.chunk_id,
                 "granularity": chunk.granularity.value,
@@ -600,7 +601,7 @@ class CorrectionPipeline:
                     if backoff > 0:
                         await asyncio.sleep(backoff)
                     self.observer.on_event(
-                        "retry",
+                        PipelineEventType.RETRY,
                         {
                             "chunk_id": chunk.chunk_id,
                             "attempt": attempt,
@@ -613,7 +614,7 @@ class CorrectionPipeline:
                 # All attempts exhausted → fallback (ADR-006: no log here,
                 # the warning event carries the same information for hosts).
                 self.observer.on_event(
-                    "warning",
+                    PipelineEventType.WARNING,
                     {
                         "chunk_id": chunk.chunk_id,
                         "message": f"Fallback to OCR source: {msg[:120]}",
@@ -656,7 +657,7 @@ class CorrectionPipeline:
             )
 
             self.observer.on_event(
-                "chunk_completed",
+                PipelineEventType.CHUNK_COMPLETED,
                 {
                     "chunk_id": chunk.chunk_id,
                     "line_count": len(chunk_lines),
@@ -701,7 +702,7 @@ class CorrectionPipeline:
             )
             if part2 is None:
                 self.observer.on_event(
-                    "hyphen_partner_missing",
+                    PipelineEventType.HYPHEN_PARTNER_MISSING,
                     {
                         "chunk_id": chunk_id,
                         "line_id": lm.line_id,
@@ -729,7 +730,7 @@ class CorrectionPipeline:
             )
             if part2 is None:
                 self.observer.on_event(
-                    "hyphen_partner_missing",
+                    PipelineEventType.HYPHEN_PARTNER_MISSING,
                     {
                         "chunk_id": chunk_id,
                         "line_id": lm.line_id,
