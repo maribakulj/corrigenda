@@ -1,10 +1,10 @@
 """JobRunner — bridges the pure `CorrectionPipeline` with infrastructure.
 
 Owns the job lifecycle (STARTED → RUNNING → COMPLETED/FAILED), the
-timeout budget, the observer adapter, and error sanitisation. Stays
-agnostic of how the JobStore is wired in: callers pass it at
-construction time, which is the seam future-1.4 work will use to
-replace the in-memory singleton with `request.app.state.job_store`.
+timeout budget, the observer adapter, and error sanitisation. The
+JobStore is injected at construction time so it can be swapped (in
+tests, or for a future out-of-process store) without touching the
+pipeline.
 """
 
 from __future__ import annotations

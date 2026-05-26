@@ -221,7 +221,8 @@ class JobManifest(BaseModel):
     duration_seconds: float | None = None
     error: str | None = None
     images: dict[str, str] = Field(default_factory=dict)
-    # Line traces (Sprint 5bis) — keyed by line_id
+    # Per-line text trace through every pipeline stage, keyed by
+    # f"{page_id}:{line_order_global}:{line_id}" (see _trace_key).
     line_traces: dict[str, LineTrace] = Field(default_factory=dict)
 
 
@@ -316,7 +317,7 @@ class SSEEvent(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Line trace (Sprint 5bis — observability)
+# Line trace — per-line observability through the correction pipeline
 # ---------------------------------------------------------------------------
 
 

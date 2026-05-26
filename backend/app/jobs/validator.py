@@ -14,11 +14,11 @@ from app.schemas import LLMLineOutput, LLMResponse
 class HyphenIntegrityError(ValueError):
     """Raised when an LLM response broke a hyphen-pair invariant.
 
-    Subclass of ValueError so existing `except ValueError` catches keep
-    working. Carrying the type explicitly removes the string-match on
-    ``"hyphen_integrity_violation"`` that the orchestrator used to do.
-    The orchestrator's `retry` event still emits the literal tag
-    ``"hyphen_integrity_violation"`` for the SSE consumer.
+    Subclass of ValueError so existing ``except ValueError`` catches
+    keep working. The pipeline's retry classifier uses isinstance
+    checks against this type; the ``retry`` SSE event still carries the
+    literal tag ``"hyphen_integrity_violation"`` as its public error
+    name for the frontend consumer.
     """
 
 
