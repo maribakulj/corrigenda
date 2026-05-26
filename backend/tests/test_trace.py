@@ -11,7 +11,7 @@ import pytest
 from alto_core.alto.parser import build_document_manifest, parse_alto_file
 from alto_core.alto.rewriter import extract_output_texts, rewrite_alto_file
 
-from app.jobs.orchestrator import run_job
+from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.schemas import (
     HyphenRole,
@@ -25,6 +25,7 @@ from app.storage import (
     output_dir,
     save_uploaded_files,
 )
+from app.storage.output_writer import FilesystemOutputWriter
 
 SAMPLE_XML = Path(__file__).parent.parent.parent / "examples" / "sample.xml"
 X0000002_PATH = Path(__file__).parent.parent.parent / "examples" / "X0000002.xml"
@@ -139,16 +140,15 @@ def _run_job_with_traces(
 
     out_dir = output_dir(job_id)
     _run(
-        run_job(
+        JobRunner(job_store=store).run(
             job_id=job_id,
             document_manifest=doc,
             provider_name="openai",
             api_key="fake-key",
             model="mock",
-            output_dir=out_dir,
+            output_writer=FilesystemOutputWriter(out_dir),
             source_files={n: p for n, p in saved.items()},
             provider=provider,
-            job_store_override=store,
         )
     )
 

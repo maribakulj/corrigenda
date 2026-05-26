@@ -12,10 +12,11 @@ from alto_core.pipeline.line_acceptance import (
     check_line,
 )
 
-from app.jobs.orchestrator import run_job
+from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider
 from app.storage import init_job_dirs, output_dir, save_uploaded_files
+from app.storage.output_writer import FilesystemOutputWriter
 
 SAMPLE_XML = Path(__file__).parent.parent.parent / "examples" / "sample.xml"
 X0000002_PATH = Path(__file__).parent.parent.parent / "examples" / "X0000002.xml"
@@ -290,16 +291,15 @@ class TestTraceKeyCollision:
 
         out_dir = output_dir(job_id)
         asyncio.run(
-            run_job(
+            JobRunner(job_store=store).run(
                 job_id=job_id,
                 document_manifest=doc,
                 provider_name="openai",
                 api_key="fake-key",
                 model="mock",
-                output_dir=out_dir,
+                output_writer=FilesystemOutputWriter(out_dir),
                 source_files={n: p for n, p in saved.items()},
                 provider=IdentityProvider(),
-                job_store_override=store,
             )
         )
 
@@ -364,16 +364,15 @@ class TestLineAcceptanceIntegration:
 
         out_dir = output_dir(job_id)
         asyncio.run(
-            run_job(
+            JobRunner(job_store=store).run(
                 job_id=job_id,
                 document_manifest=doc,
                 provider_name="openai",
                 api_key="fake-key",
                 model="mock",
-                output_dir=out_dir,
+                output_writer=FilesystemOutputWriter(out_dir),
                 source_files={n: p for n, p in saved.items()},
                 provider=SwapProvider(),
-                job_store_override=store,
             )
         )
 

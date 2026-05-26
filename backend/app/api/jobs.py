@@ -17,7 +17,7 @@ from starlette.background import BackgroundTask
 
 from app.api.deps import get_job_store
 from app.api.rate_limit import limiter
-from app.jobs import orchestrator as _orch
+from app.jobs import runner as _runner_module
 from app.jobs.runner import JobRunner
 from app.protocols import JobStore
 from app.schemas import (
@@ -164,11 +164,6 @@ async def create_job(
 
     out_dir = output_dir(job_id)
 
-    # Drive the correction through the modern `JobRunner` API directly
-    # rather than the legacy `app.jobs.orchestrator.run_job` wrapper.
-    # The wrapper stays in place for the half-dozen test files that
-    # still call it (test_orchestrator.py, test_trace.py, etc.) but
-    # production code goes through the typed seam.
     runner = JobRunner(job_store=store)
     output_writer_instance = FilesystemOutputWriter(out_dir)
 
@@ -186,10 +181,10 @@ async def create_job(
             output_writer=output_writer_instance,
             source_files={name: path for name, path in saved.items()},
             provider=provider_instance,
-            # Lookup is dynamic (not a snapshot) so `monkeypatch.setattr(
-            # app.jobs.orchestrator, "_JOB_TIMEOUT_SECONDS", ...)` in tests —
-            # and any future runtime tunable — actually takes effect.
-            timeout_seconds=_orch._JOB_TIMEOUT_SECONDS,
+            # Lookup is dynamic (not a snapshot) so tests that
+            # `monkeypatch.setattr("app.jobs.runner.DEFAULT_JOB_TIMEOUT_SECONDS", N)`
+            # actually see the override at spawn time.
+            timeout_seconds=_runner_module.DEFAULT_JOB_TIMEOUT_SECONDS,
         ),
         name=f"run_job:{job_id}",
     )

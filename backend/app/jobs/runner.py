@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
+import warnings
 from pathlib import Path
 
 from alto_core import CorrectionPipeline, sanitize_error
@@ -21,6 +23,26 @@ from app.protocols import BaseProvider, JobStore, OutputWriter
 from app.schemas import DocumentManifest, JobStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _default_timeout_from_env() -> int:
+    """Resolve JOB_TIMEOUT_SECONDS once at import. 0 disables the timeout.
+
+    Kept at module scope (rather than inside ``JobRunner.__init__``) so
+    tests can ``monkeypatch.setattr("app.jobs.runner.DEFAULT_JOB_TIMEOUT_SECONDS", N)``
+    when they need a tighter budget than the production default.
+    """
+    try:
+        return int(os.environ.get("JOB_TIMEOUT_SECONDS", "1800"))
+    except ValueError:
+        warnings.warn(
+            "JOB_TIMEOUT_SECONDS env var is not a valid integer; using default 1800s",
+            stacklevel=1,
+        )
+        return 1800
+
+
+DEFAULT_JOB_TIMEOUT_SECONDS: int = _default_timeout_from_env()
 
 
 class JobRunner:
