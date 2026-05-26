@@ -9,6 +9,7 @@ from lxml import etree
 
 from alto_core.alto._norm import clean_content, nfc
 from alto_core.alto._ns import _detect_namespace, _int_attr, _tag, make_safe_parser
+from alto_core.alto._text import reconstruct_textline
 from alto_core.schemas import HyphenRole, LineManifest, PageManifest
 
 # ---------------------------------------------------------------------------
@@ -113,37 +114,14 @@ def _get_hyp_children(el: etree._Element, ns: str) -> list[etree._Element]:
 # ---------------------------------------------------------------------------
 
 
-def _extract_text_from_line(el: etree._Element, ns: str) -> str:
-    """Reconstruct text from a TextLine's children (String + SP + HYP).
-
-    Applies the same normalization as the parser: soft-hyphen → "-",
-    and HYP is skipped if preceding CONTENT already ends with "-".
-    """
-    string_tag = _tag("String", ns)
-    sp_tag = _tag("SP", ns)
-    hyp_tag = _tag("HYP", ns)
-    parts: list[str] = []
-    for child in el:
-        if child.tag == string_tag:
-            parts.append(child.get("CONTENT", ""))
-        elif child.tag == sp_tag:
-            parts.append(" ")
-        elif child.tag == hyp_tag:
-            hyp_char = child.get("CONTENT", "-")
-            if hyp_char == "\u00ad":
-                hyp_char = "-"
-            current = "".join(parts)
-            if current.endswith("-"):
-                continue
-            if hyp_char:
-                parts.append(hyp_char)
-    # NFC-normalize so equality vs. parser-produced ocr_text is reliable
-    # on corpora that mix NFC/NFD (the parser normalizes; this used not to).
-    return nfc("".join(parts))
+# Kept as a module-level alias so callers (tests) that imported the
+# old name before the _text.py extraction continue to work. New code
+# should call reconstruct_textline directly.
+_extract_text_from_line = reconstruct_textline
 
 
 def _line_text_unchanged(el: etree._Element, corrected: str, ns: str) -> bool:
-    return _extract_text_from_line(el, ns) == nfc(corrected)
+    return reconstruct_textline(el, ns) == nfc(corrected)
 
 
 # ---------------------------------------------------------------------------
@@ -612,8 +590,9 @@ def rewrite_alto_file(
 def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]:
     """Re-extract text from rewritten ALTO XML for the given line IDs.
 
-    Uses the same _extract_text_from_line logic as the rewriter's
-    _line_text_unchanged check, ensuring consistency with parser normalization.
+    Uses the shared ``reconstruct_textline`` helper so the output text
+    seen here matches both the parser's ocr_text and the rewriter's
+    UNTOUCHED-detection comparison.
     """
     # Hardened parser — see alto_core.alto._ns.make_safe_parser. The
     # bytes here are typically the OUTPUT of rewrite_alto_file but the
@@ -626,7 +605,7 @@ def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]
     for tl_el in root.iter(textline_tag):
         line_id = tl_el.get("ID")
         if line_id in line_ids:
-            result[line_id] = _extract_text_from_line(tl_el, ns)
+            result[line_id] = reconstruct_textline(tl_el, ns)
     return result
 
 
