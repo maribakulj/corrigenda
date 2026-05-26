@@ -1,4 +1,4 @@
-"""End-to-end tests for the JobRunner pipeline."""
+"""Tests for jobs/orchestrator.py"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 from lxml import etree
 
 from app.alto.parser import build_document_manifest, parse_alto_file
-from app.jobs.runner import JobRunner
+from app.jobs.orchestrator import run_job
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider, SSEEvent
 
@@ -86,10 +86,10 @@ async def _run(
     output_dir: Path,
     store: JobStore,
 ) -> None:
-    """Run a job end-to-end with the given store and provider."""
+    """Run the orchestrator with the given store injected explicitly."""
     pages, _ = parse_alto_file(SAMPLE_XML, SAMPLE_XML.name)
     doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-    await JobRunner(job_store=store).run(
+    await run_job(
         job_id=job_id,
         document_manifest=doc,
         provider_name="openai",
@@ -98,6 +98,7 @@ async def _run(
         output_dir=output_dir,
         source_files={SAMPLE_XML.name: SAMPLE_XML},
         provider=provider,
+        job_store_override=store,
     )
 
 
@@ -340,7 +341,7 @@ async def test_cross_page_hyphen_reconciled_through_colliding_ids(tmp_path: Path
     store = JobStore()
     job_id = store.create_job(Provider.OPENAI, "mock")
 
-    await JobRunner(job_store=store).run(
+    await run_job(
         job_id=job_id,
         document_manifest=doc,
         provider_name="openai",
@@ -349,6 +350,7 @@ async def test_cross_page_hyphen_reconciled_through_colliding_ids(tmp_path: Path
         output_dir=tmp_path,
         source_files={"fileA.xml": file_a, "fileB.xml": file_b},
         provider=MockProvider(),
+        job_store_override=store,
     )
 
     job = store.get_job(job_id)
@@ -391,23 +393,30 @@ class _SlowProvider:
 
 @pytest.mark.asyncio
 async def test_job_timeout_marks_failure(tmp_path: Path):
-    """When timeout_seconds elapses, JobRunner catches TimeoutError,
+    """When _JOB_TIMEOUT_SECONDS elapses, run_job catches TimeoutError,
     marks the job FAILED, emits a `failed` event, and records a clean
     error message (no traceback, no api_key leak)."""
+    import app.jobs.orchestrator as orch_module
+
     store, job_id = _make_store_and_job()
-    pages, _ = parse_alto_file(SAMPLE_XML, SAMPLE_XML.name)
-    doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-    await JobRunner(job_store=store).run(
-        job_id=job_id,
-        document_manifest=doc,
-        provider_name="openai",
-        api_key="sk-secret-token-12345",
-        model="mock",
-        output_dir=tmp_path,
-        source_files={SAMPLE_XML.name: SAMPLE_XML},
-        provider=_SlowProvider(),
-        timeout_seconds=1,  # 1-second budget — provider sleeps 5s
-    )
+    orig_timeout = orch_module._JOB_TIMEOUT_SECONDS
+    orch_module._JOB_TIMEOUT_SECONDS = 1  # 1-second budget — provider sleeps 5s
+    try:
+        pages, _ = parse_alto_file(SAMPLE_XML, SAMPLE_XML.name)
+        doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
+        await run_job(
+            job_id=job_id,
+            document_manifest=doc,
+            provider_name="openai",
+            api_key="sk-secret-token-12345",
+            model="mock",
+            output_dir=tmp_path,
+            source_files={SAMPLE_XML.name: SAMPLE_XML},
+            provider=_SlowProvider(),
+            job_store_override=store,
+        )
+    finally:
+        orch_module._JOB_TIMEOUT_SECONDS = orig_timeout
 
     job = store.get_job(job_id)
     assert job is not None
@@ -440,7 +449,7 @@ async def test_run_job_general_exception_marks_failed(
 
     monkeypatch.setattr(CorrectionPipeline, "run", _boom)
     doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-    await JobRunner(job_store=store).run(
+    await run_job(
         job_id=job_id,
         document_manifest=doc,
         provider_name="openai",
@@ -449,6 +458,7 @@ async def test_run_job_general_exception_marks_failed(
         output_dir=tmp_path,
         source_files={SAMPLE_XML.name: SAMPLE_XML},
         provider=MockProvider(),
+        job_store_override=store,
     )
 
     job = store.get_job(job_id)
@@ -469,7 +479,7 @@ async def test_run_job_resolves_provider_from_registry_when_none(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """When `provider` is not passed, JobRunner.run looks up the registry."""
+    """When `provider` is not passed, run_job looks up the registry."""
     import app.providers as prov_module
 
     mock = MockProvider()
@@ -477,7 +487,7 @@ async def test_run_job_resolves_provider_from_registry_when_none(
 
     store, job_id = _make_store_and_job()
     doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-    await JobRunner(job_store=store).run(
+    await run_job(
         job_id=job_id,
         document_manifest=doc,
         provider_name="openai",
@@ -486,6 +496,7 @@ async def test_run_job_resolves_provider_from_registry_when_none(
         output_dir=tmp_path,
         source_files={SAMPLE_XML.name: SAMPLE_XML},
         # Note: provider arg omitted → registry lookup path
+        job_store_override=store,
     )
 
     job = store.get_job(job_id)

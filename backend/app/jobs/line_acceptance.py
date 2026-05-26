@@ -21,12 +21,6 @@ A separate post-pass ``check_adjacent_duplicates`` applies:
 
 All guards are intentionally conservative: on any doubt, fall back to
 the original OCR text rather than risk a glissement or duplication.
-
-This module implements stage C of the migration-guard matrix
-(post-reconciliation line-level acceptance). Stages A and B handle
-pair-level migration earlier in the pipeline — see
-``app.jobs.migration_guards`` for the full matrix and the rationale
-behind the differing thresholds.
 """
 
 from __future__ import annotations
