@@ -80,6 +80,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
       'queued', 'started', 'document_parsed', 'page_started',
       'chunk_planned', 'chunk_started', 'chunk_completed',
       'retry', 'warning', 'page_completed', 'completed', 'failed', 'keepalive',
+      'rewriter_stats', 'reconcile_stats',
     ]
 
     function handleEvent(eventName: string, rawData: string) {

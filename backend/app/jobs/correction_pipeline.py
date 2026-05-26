@@ -24,7 +24,12 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.alto.hyphenation import enrich_chunk_lines, reconcile_hyphen_pair
+from app.alto.hyphenation import (
+    ReconcileMetrics,
+    classify_reconcile_outcome,
+    enrich_chunk_lines,
+    reconcile_hyphen_pair,
+)
 from app.alto.rewriter import extract_output_texts, rewrite_alto_file
 from app.jobs.chunk_planner import plan_page
 from app.jobs.line_acceptance import check_adjacent_duplicates, check_line
@@ -141,8 +146,14 @@ def _reconcile_one_pair(
     text_by_id: dict[str, str],
     *,
     is_forward: bool,
-) -> None:
-    """Apply reconcile_hyphen_pair and write results back onto the manifests."""
+) -> str:
+    """Apply reconcile_hyphen_pair and write results back onto the manifests.
+
+    Returns the outcome classification produced by
+    ``classify_reconcile_outcome``: ``"coherent"`` / ``"fallback"`` /
+    ``"neutralised"``. Counters in ``_reconcile_pairs`` aggregate this
+    into the per-job ReconcileMetrics observability event.
+    """
     corrected_p2 = text_by_id.get(part2.line_id, part2.ocr_text)
 
     if is_forward:
@@ -164,6 +175,16 @@ def _reconcile_one_pair(
             corrected_p2,
         )
 
+    outcome = classify_reconcile_outcome(
+        lm.ocr_text,
+        part2.ocr_text,
+        corrected_p1,
+        corrected_p2,
+        final_p1,
+        final_p2,
+        subs,
+    )
+
     lm.corrected_text = final_p1
     lm.status = LineStatus.CORRECTED
     part2.corrected_text = final_p2
@@ -175,13 +196,15 @@ def _reconcile_one_pair(
     else:
         lm.hyphen_subs_content = subs
 
+    return outcome
+
 
 def _reconcile_pairs(
     chunk_lines: list[LineManifest],
     line_by_id: dict[str, LineManifest],
     text_by_id: dict[str, str],
     cross_page_partners: dict[tuple[str, str], LineManifest] | None,
-) -> int:
+) -> tuple[int, ReconcileMetrics]:
     """Reconcile all hyphen pairs whose PART1 (or BOTH forward) side sits
     in this chunk. Mutates the manifests in place via _reconcile_one_pair.
 
@@ -193,9 +216,12 @@ def _reconcile_pairs(
     pass 2 from the BOTH side). A shared `processed_part2` set prevents
     double-reconciliation when the two passes land on the same partner.
 
-    Returns the count of pairs actually reconciled.
+    Returns (pairs_reconciled, ReconcileMetrics). The metrics break the
+    count down by outcome (coherent / fallback / neutralised) for the
+    job-end reconcile_stats observability event.
     """
     reconciled = 0
+    metrics = ReconcileMetrics()
     processed_part2: set[tuple[str, str]] = set()
     passes = (
         (HyphenRole.PART1, False, "hyphen_pair_line_id"),
@@ -223,10 +249,16 @@ def _reconcile_pairs(
             part2_key = (part2.page_id, part2.line_id)
             if part2_key in processed_part2:
                 continue
-            _reconcile_one_pair(lm, part2, text_by_id, is_forward=is_forward)
+            outcome = _reconcile_one_pair(lm, part2, text_by_id, is_forward=is_forward)
+            if outcome == "coherent":
+                metrics.coherent += 1
+            elif outcome == "fallback":
+                metrics.fallback += 1
+            elif outcome == "neutralised":
+                metrics.neutralised += 1
             processed_part2.add(part2_key)
             reconciled += 1
-    return reconciled
+    return reconciled, metrics
 
 
 def _apply_line_acceptance(
@@ -296,6 +328,7 @@ class CorrectionResult:
     retry_count: int
     fallback_count: int
     traces: dict[str, LineTrace]
+    reconcile_metrics: ReconcileMetrics
 
 
 class CorrectionPipeline:
@@ -322,6 +355,7 @@ class CorrectionPipeline:
         # Counters reset on every call to run()
         self._retry_count = 0
         self._fallback_count = 0
+        self._reconcile_metrics = ReconcileMetrics()
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -340,6 +374,7 @@ class CorrectionPipeline:
         """Run the full pipeline. Mutates `document_manifest.pages` in place."""
         self._retry_count = 0
         self._fallback_count = 0
+        self._reconcile_metrics = ReconcileMetrics()
 
         total_hyphen_pairs = sum(
             sum(1 for lm in page.lines if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH))
@@ -419,6 +454,7 @@ class CorrectionPipeline:
             retry_count=self._retry_count,
             fallback_count=self._fallback_count,
             traces=traces,
+            reconcile_metrics=self._reconcile_metrics,
         )
 
     # ------------------------------------------------------------------
@@ -710,9 +746,12 @@ class CorrectionPipeline:
 
         text_by_id: dict[str, str] = {o.line_id: o.corrected_text for o in response.lines}
 
-        reconciled_count = _reconcile_pairs(
+        reconciled_count, chunk_reconcile_metrics = _reconcile_pairs(
             chunk_lines, line_by_id, text_by_id, cross_page_partners
         )
+        self._reconcile_metrics.coherent += chunk_reconcile_metrics.coherent
+        self._reconcile_metrics.fallback += chunk_reconcile_metrics.fallback
+        self._reconcile_metrics.neutralised += chunk_reconcile_metrics.neutralised
 
         # Apply remaining lines via line_acceptance policy
         _apply_line_acceptance(chunk_lines, text_by_id, all_lines_by_id, traces)
@@ -774,7 +813,7 @@ class CorrectionPipeline:
             if not pages_for_file:
                 continue
 
-            xml_bytes, _metrics, rewriter_paths = rewrite_alto_file(
+            xml_bytes, metrics, rewriter_paths = rewrite_alto_file(
                 xml_path,
                 pages_for_file,
                 provider_name,
@@ -783,6 +822,16 @@ class CorrectionPipeline:
             self.output_writer.write_corrected(
                 source_stem=xml_path.stem,
                 xml_bytes=xml_bytes,
+            )
+            self.observer.on_event(
+                SSEEventType.REWRITER_STATS,
+                {
+                    "source_stem": xml_path.stem,
+                    "untouched": metrics.untouched,
+                    "subs_only": metrics.subs_only,
+                    "fast_path": metrics.fast_path,
+                    "slow_path": metrics.slow_path,
+                },
             )
 
             lid_to_tkey: dict[str, str] = {}

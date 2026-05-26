@@ -17,7 +17,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-from app.jobs.correction_pipeline import CorrectionPipeline, sanitize_error
+from app.jobs.correction_pipeline import CorrectionPipeline, CorrectionResult, sanitize_error
 from app.protocols import BaseProvider, JobStore
 from app.schemas import DocumentManifest, JobStatus, SSEEventType
 from app.storage.output_writer import FilesystemOutputWriter
@@ -88,7 +88,7 @@ class JobRunner:
 
         try:
             timeout = timeout_seconds if timeout_seconds > 0 else None
-            total_chunks, total_reconciled = await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._run_pipeline(
                     job_id=job_id,
                     document_manifest=document_manifest,
@@ -101,6 +101,8 @@ class JobRunner:
                 ),
                 timeout=timeout,
             )
+            total_chunks = result.total_chunks
+            total_reconciled = result.total_reconciled
 
             lines_modified = sum(
                 1
@@ -116,6 +118,20 @@ class JobRunner:
                 chunks_total=total_chunks,
                 lines_modified=lines_modified,
                 duration_seconds=elapsed,
+            )
+
+            # Job-end reconcile stats: how many hyphen pairs landed in each
+            # outcome class. Emitted BEFORE the terminal `completed` so a
+            # subscriber that exits on `completed` still gets it.
+            self.job_store.emit(
+                job_id,
+                SSEEventType.RECONCILE_STATS,
+                {
+                    "coherent": result.reconcile_metrics.coherent,
+                    "fallback": result.reconcile_metrics.fallback,
+                    "neutralised": result.reconcile_metrics.neutralised,
+                    "total": result.reconcile_metrics.total,
+                },
             )
 
             self.job_store.emit(
@@ -177,7 +193,7 @@ class JobRunner:
         provider_name: str,
         output_writer: FilesystemOutputWriter,
         source_files: dict[str, Path],
-    ) -> tuple[int, int]:
+    ) -> CorrectionResult:
         """Drive the pure pipeline and persist its counters back."""
         self.job_store.update_job(job_id, status=JobStatus.STARTED)
         self.job_store.emit(job_id, SSEEventType.STARTED, {"job_id": job_id})
@@ -210,4 +226,4 @@ class JobRunner:
             line_traces=result.traces,
         )
 
-        return result.total_chunks, result.total_reconciled
+        return result

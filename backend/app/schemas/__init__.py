@@ -74,6 +74,12 @@ class SSEEventType(str, Enum):
     RETRY = "retry"
     WARNING = "warning"
 
+    # Observability — emitted at file/job boundaries with rewriter and
+    # reconcile path counts. Pure read-only diagnostics; never influence
+    # the corrected XML output.
+    REWRITER_STATS = "rewriter_stats"
+    RECONCILE_STATS = "reconcile_stats"
+
     # Frontend-only initial state (kept in the enum so the contract test
     # can verify the frontend list against this set).
     QUEUED = "queued"
