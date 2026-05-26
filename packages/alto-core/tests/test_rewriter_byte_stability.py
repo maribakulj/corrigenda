@@ -62,7 +62,9 @@ def test_identity_corrections_take_untouched_or_subs_only_paths():
             xml_path, doc.pages, provider="test", model="mock"
         )
 
-        unexpected = {lid: p for lid, p in paths.items() if p not in ("untouched", "subs_only")}
+        unexpected = {
+            lid: p for lid, p in paths.items() if p not in ("untouched", "subs_only")
+        }
         assert not unexpected, (
             f"{xml_path.name}: lines classified as fast/slow despite identity correction: "
             f"{unexpected}"
@@ -95,8 +97,12 @@ def test_untouched_lines_preserve_string_content_verbatim():
         for line_id, classification in paths.items():
             if classification != "untouched":
                 continue
-            orig_contents = [c.get("CONTENT") for c in orig_by_id[line_id] if _local(c) == "String"]
-            new_contents = [c.get("CONTENT") for c in new_by_id[line_id] if _local(c) == "String"]
+            orig_contents = [
+                c.get("CONTENT") for c in orig_by_id[line_id] if _local(c) == "String"
+            ]
+            new_contents = [
+                c.get("CONTENT") for c in new_by_id[line_id] if _local(c) == "String"
+            ]
             assert orig_contents == new_contents, (
                 f"{xml_path.name}/{line_id}: CONTENT changed on UNTOUCHED path: "
                 f"{orig_contents} -> {new_contents}"
