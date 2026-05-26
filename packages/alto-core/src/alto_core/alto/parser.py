@@ -51,28 +51,6 @@ def _build_ocr_text(textline: etree._Element, ns: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _detect_hyphenation(lines: list[LineManifest]) -> None:
-    """
-    First pass: annotate each line individually based on its XML content.
-    Second pass: link PART1 → PART2 pairs and propagate SUBS_CONTENT.
-
-    This function works with a list of LineManifest whose `ocr_text` is
-    already built. The raw XML scan results are stored as temporary
-    attributes on the objects so that the second pass can use them.
-    """
-    # Nothing to do for empty lists
-    if not lines:
-        return
-
-    # We need the raw XML elements to inspect attributes — but LineManifest
-    # is a pure data object. Strategy: re-annotate using the ocr_text and
-    # flags that the parsing loop already stored on the manifest objects via
-    # _parse_textline_hyphen_info. We call that helper during parse_alto_file
-    # so by the time we reach _detect_hyphenation the hyphen fields may already
-    # be partially filled. Here we only do the second-pass linking.
-    _link_hyphen_pairs(lines)
-
-
 def _link_hyphen_pairs(lines: list[LineManifest]) -> None:
     """
     Second pass: link PART1/BOTH lines to their forward partners.

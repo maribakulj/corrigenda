@@ -50,10 +50,17 @@ class Provider(str, Enum):
 class HyphenRole(str, Enum):
     """Position of a line within a hyphenated pair.
 
-    ``NONE`` for ordinary lines, ``PART1`` carries the left fragment +
-    hyphen (last line of pair), ``PART2`` carries the right fragment
-    (first line of next pair), ``BOTH`` is ``PART2`` of the previous
-    pair AND ``PART1`` of the next one (chained hyphenation).
+    ``NONE`` for ordinary lines. ``PART1`` is the FIRST (top) line of
+    a pair — it carries the left word fragment and ends with the
+    trailing hyphen. ``PART2`` is the SECOND (bottom) line of the
+    pair — it carries the right word fragment. ``BOTH`` is the
+    PART2-of-the-previous-pair AND PART1-of-the-next-pair (chained
+    hyphenation across three consecutive lines).
+
+    Verified against examples/sample.xml: TL4 (the line carrying the
+    HYP element) is PART1; TL5 (the next line) is PART2. The previous
+    docstring inverted these — a real trap for any reader trying to
+    reason about the data model.
     """
 
     NONE = "none"
@@ -100,8 +107,6 @@ class LineManifest(BaseModel):
     ocr_text: str
     prev_line_id: str | None = None
     next_line_id: str | None = None
-    expected: bool = True
-    received: bool = False
     corrected_text: str | None = None
     status: LineStatus = LineStatus.PENDING
 
