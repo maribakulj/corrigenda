@@ -48,6 +48,7 @@ from alto_core.schemas import (
     LineManifest,
     LineStatus,
     LineTrace,
+    LLMResponse,
     LLMUserPayload,
     PageManifest,
     PipelineEventType,
@@ -521,13 +522,90 @@ class CorrectionPipeline:
             },
         )
 
+        response = await self._call_with_retry(
+            chunk=chunk,
+            chunk_lines=chunk_lines,
+            hyphen_pairs=hyphen_pairs,
+            all_lines_by_id=all_lines_by_id,
+            api_key=api_key,
+            model=model,
+            traces=traces,
+        )
+        if response is None:
+            # All attempts exhausted; _call_with_retry already applied
+            # the OCR fallback and emitted the warning event.
+            return 0
+
+        text_by_id: dict[str, str] = {
+            o.line_id: o.corrected_text for o in response.lines
+        }
+
+        reconciled_count = self._reconcile_chunk_hyphens(
+            chunk_id=chunk.chunk_id,
+            chunk_lines=chunk_lines,
+            text_by_id=text_by_id,
+            line_by_id=line_by_id,
+            cross_page_partners=cross_page_partners,
+        )
+        self._apply_line_acceptance(
+            chunk_lines=chunk_lines,
+            text_by_id=text_by_id,
+            all_lines_by_id=all_lines_by_id,
+            traces=traces,
+        )
+        self._finalize_chunk_traces(
+            chunk_lines=chunk_lines,
+            traces=traces,
+        )
+
+        self.observer.on_event(
+            PipelineEventType.CHUNK_COMPLETED,
+            {
+                "chunk_id": chunk.chunk_id,
+                "line_count": len(chunk_lines),
+                "hyphen_pairs_reconciled": reconciled_count,
+            },
+        )
+        return reconciled_count
+
+    async def _call_with_retry(
+        self,
+        *,
+        chunk: ChunkRequest,
+        chunk_lines: list[LineManifest],
+        hyphen_pairs: dict[str, str],
+        all_lines_by_id: dict[str, LineManifest],
+        api_key: str,
+        model: str,
+        traces: dict[str, LineTrace] | None,
+    ) -> LLMResponse | None:
+        """Call the LLM provider with retries; return a validated response.
+
+        On success: returns the validated ``LLMResponse``.
+        On exhaustion: applies the OCR fallback to every line in
+        ``chunk_lines`` (mutates ``corrected_text`` / ``status`` /
+        ``LineTrace``), emits a ``warning`` event, increments
+        ``self._fallback_count`` and returns ``None``. The caller must
+        short-circuit on ``None``.
+
+        Retry strategy (pinned by ``test_pipeline_classifies_*`` in the
+        backend and ``test_retry_classification`` in the contract
+        suite):
+          - Up to ``DEFAULT_MAX_ATTEMPTS`` attempts.
+          - Temperature ramp 0.0 → 0.3 → 0.5, pinned at 0.0 after a
+            ``HyphenIntegrityError`` (which suggests the LLM
+            mis-handled the hyphen pair — lower temperature is more
+            likely to stick to the source).
+          - Backoff: 0 s for hyphen violations (first occurrence),
+            ``attempt * 2`` for transient HTTP class names,
+            ``attempt`` for any other ValueError / JSONDecodeError.
+            Each retry emits a ``retry`` SSE event with the
+            classification tag.
+        """
         max_attempts = self.DEFAULT_MAX_ATTEMPTS
         hyphen_violation = False
 
         for attempt in range(1, max_attempts + 1):
-            # Retry temperature strategy: deterministic first, then more
-            # diverse to escape bad patterns. Hyphen violations always
-            # at 0.0 for maximum precision.
             if hyphen_violation or attempt == 1:
                 temperature = 0.0
             elif attempt == 2:
@@ -592,7 +670,7 @@ class CorrectionPipeline:
                     {lm.line_id: lm.ocr_text for lm in chunk_lines},
                     hyphen_subs if hyphen_subs else None,
                 )
-                hyphen_violation = False
+                return response
 
             except Exception as exc:
                 msg = sanitize_error(str(exc), api_key)
@@ -612,8 +690,6 @@ class CorrectionPipeline:
                     "RemoteProtocolError",
                     "ReadTimeout",
                 }
-                # LLM returned malformed JSON or failed schema validation —
-                # likely transient (next attempt may produce clean output).
                 is_llm_output_error = (
                     isinstance(exc, (ValueError, json.JSONDecodeError))
                     and not is_hyphen_violation
@@ -647,8 +723,9 @@ class CorrectionPipeline:
                     self._retry_count += 1
                     continue
 
-                # All attempts exhausted → fallback (ADR-006: no log here,
-                # the warning event carries the same information for hosts).
+                # All attempts exhausted → OCR fallback. ADR-006: no log
+                # here, the warning event carries the same information
+                # for hosts.
                 self.observer.on_event(
                     PipelineEventType.WARNING,
                     {
@@ -667,42 +744,10 @@ class CorrectionPipeline:
                         fallback_reason=f"all_attempts_exhausted: {msg[:120]}",
                     )
                 self._fallback_count += 1
-                return 0
+                return None
 
-            # --- Success: apply corrections ---
-            text_by_id: dict[str, str] = {
-                o.line_id: o.corrected_text for o in response.lines
-            }
-
-            reconciled_count = self._reconcile_chunk_hyphens(
-                chunk_id=chunk.chunk_id,
-                chunk_lines=chunk_lines,
-                text_by_id=text_by_id,
-                line_by_id=line_by_id,
-                cross_page_partners=cross_page_partners,
-            )
-            self._apply_line_acceptance(
-                chunk_lines=chunk_lines,
-                text_by_id=text_by_id,
-                all_lines_by_id=all_lines_by_id,
-                traces=traces,
-            )
-            self._finalize_chunk_traces(
-                chunk_lines=chunk_lines,
-                traces=traces,
-            )
-
-            self.observer.on_event(
-                PipelineEventType.CHUNK_COMPLETED,
-                {
-                    "chunk_id": chunk.chunk_id,
-                    "line_count": len(chunk_lines),
-                    "hyphen_pairs_reconciled": reconciled_count,
-                },
-            )
-            return reconciled_count
-
-        return 0
+        # Unreachable: every iteration either returns or continues.
+        return None
 
     # ------------------------------------------------------------------
     # Chunk helpers extracted from _run_chunk (audit A3)
