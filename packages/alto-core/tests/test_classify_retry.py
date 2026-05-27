@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 
-import httpx
 import pytest
 from alto_core.pipeline.correction_pipeline import _classify_retry, _RetryDecision
 from alto_core.pipeline.validator import HyphenIntegrityError
@@ -171,18 +170,26 @@ def test_llm_output_json_decode_error_linear_backoff():
 # ---------------------------------------------------------------------------
 
 
-def test_raw_http_status_error_non_retryable():
-    """A raw ``httpx.HTTPStatusError`` is what providers raise on 4xx-
-    non-429 — the wrapping helper deliberately doesn't convert it to
+class _RawHttpStatusErrorLike(Exception):
+    """Stub mimicking the raw ``httpx.HTTPStatusError`` a provider's
+    wrapper deliberately leaks on a 4xx-non-429. Defined locally so
+    alto-core stays http-library-agnostic — the contract under test is
+    "any non-matching exception → non-retryable", and a real
+    ``HTTPStatusError`` doesn't match any of the four isinstance checks
+    either. The full backend-side wiring (with the real httpx exception)
+    is pinned by
+    ``test_pipeline_classifies_client_http_4xx_as_non_retryable``.
+    """
+
+
+def test_raw_http_status_error_like_is_non_retryable():
+    """A raw HTTP-status-like exception is what providers raise on 4xx-
+    non-429: the wrapping helper deliberately doesn't convert it to
     ProviderTransientError (bad keys / wrong models don't heal). The
     classifier must mark it non-retryable so the chunk falls back
     immediately (no wasted attempts)."""
-    req = httpx.Request("POST", "https://api.example.com")
-    resp = httpx.Response(401, request=req)
-    exc = httpx.HTTPStatusError("401 Unauthorized", request=req, response=resp)
-
     decision = _classify_retry(
-        exc=exc,
+        exc=_RawHttpStatusErrorLike("401 Unauthorized"),
         sanitised_msg="401 Unauthorized",
         attempt=1,
         hyphen_already_seen=False,

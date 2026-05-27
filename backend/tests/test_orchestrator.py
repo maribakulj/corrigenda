@@ -749,9 +749,7 @@ async def test_pipeline_classifies_client_http_4xx_as_non_retryable(
 
     # Pin 1: zero backoff — the classifier short-circuits before
     # ``await asyncio.sleep(decision.backoff)`` runs.
-    assert sleeps == [], (
-        f"4xx HTTPStatusError should NOT retry; got {sleeps!r} backoff(s)"
-    )
+    assert sleeps == [], f"4xx HTTPStatusError should NOT retry; got {sleeps!r} backoff(s)"
 
     events: list[SSEEvent] = []
     while not queue.empty():
@@ -759,9 +757,7 @@ async def test_pipeline_classifies_client_http_4xx_as_non_retryable(
 
     # Pin 2: zero retry events emitted on any chunk.
     retries = [e for e in events if e.event == "retry"]
-    assert retries == [], (
-        f"4xx HTTPStatusError should emit zero retry events; got {len(retries)}"
-    )
+    assert retries == [], f"4xx HTTPStatusError should emit zero retry events; got {len(retries)}"
 
     # Pin 3: fallback path was taken — job still completes, but every
     # chunk fell back to OCR source.

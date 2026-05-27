@@ -854,14 +854,12 @@ def test_wrap_if_transient_classifies_correctly(exc_factory, should_wrap, label)
 
     if should_wrap:
         assert isinstance(result, ProviderTransientError), (
-            f"{label}: expected ProviderTransientError, "
-            f"got {type(result).__name__}"
+            f"{label}: expected ProviderTransientError, got {type(result).__name__}"
         )
         assert result is not exc, f"{label}: wrapped result must be a new exception"
     else:
         assert result is exc, (
-            f"{label}: expected pass-through (same object), "
-            f"got {type(result).__name__}"
+            f"{label}: expected pass-through (same object), got {type(result).__name__}"
         )
         assert not isinstance(result, ProviderTransientError), (
             f"{label}: must NOT be wrapped as ProviderTransientError"
@@ -908,8 +906,7 @@ async def test_call_llm_passes_4xx_through_as_raw_http_status_error():
             await call_llm(url="https://api.example.com", headers={}, body={})
         # Critical: the raised exception must NOT be a ProviderTransientError.
         assert not isinstance(exc_info.value, ProviderTransientError), (
-            "4xx-non-429 must NOT be wrapped; "
-            "wrapping would restore the 3-retry waste on bad keys."
+            "4xx-non-429 must NOT be wrapped; wrapping would restore the 3-retry waste on bad keys."
         )
         # And the status code is preserved on the original exception.
         assert exc_info.value.response.status_code == 401

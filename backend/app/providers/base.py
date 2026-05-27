@@ -61,9 +61,9 @@ def _wrap_if_transient(exc: BaseException) -> BaseException:
         # 4xx is client error — only 429 (rate-limit) is worth retrying.
         if 400 <= status < 500 and status != 429:
             return exc
-        return ProviderTransientError(
-            str(exc), status_code=status
-        ).with_traceback(exc.__traceback__)
+        return ProviderTransientError(str(exc), status_code=status).with_traceback(
+            exc.__traceback__
+        )
     if isinstance(exc, _TRANSIENT_HTTPX_TYPES):
         # Transport-level failures (timeout, network, protocol) carry no
         # HTTP status — status_code stays None.
