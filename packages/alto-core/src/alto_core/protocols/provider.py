@@ -90,7 +90,19 @@ class ProviderTransientError(Exception):
     ``ProviderTransientError`` — that way alto-core stays
     http-library-agnostic without resorting to fragile class-name
     string matching at the catch site.
+
+    When the underlying failure was HTTP, the originating status code
+    is preserved on ``status_code`` so observers can route on it (e.g.,
+    distinguish 429 rate-limit from 503 upstream-blip without parsing
+    the message). Transport-level failures (timeouts, network errors)
+    leave ``status_code`` as ``None``. The full underlying exception is
+    additionally reachable via ``__cause__`` when callers raise as
+    ``raise wrapped from original``.
     """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 # ---------------------------------------------------------------------------

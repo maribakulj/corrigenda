@@ -933,3 +933,89 @@ async def test_get_json_wraps_5xx_as_provider_transient_error():
         instance.get = AsyncMock(return_value=mock_resp)
         with pytest.raises(ProviderTransientError):
             await get_json(url="https://api.example.com/models")
+
+
+# ---------------------------------------------------------------------------
+# Preserved attributes — when ProviderTransientError wraps an HTTPStatusError
+# the originating status code must be available on the wrapped exception
+# without parsing the message (so observers can route 429 vs 503 vs 500
+# without regex tricks). Transport-level failures (timeout, network) carry
+# no status_code. The full underlying exception remains reachable via
+# ``__cause__`` for callers that need ``.response.headers`` etc.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+def test_wrap_preserves_status_code_on_http_errors(status):
+    """``status_code`` is set when the wrapped exception was an
+    HTTPStatusError. Without this attribute an alerting rule like
+    'page on 5xx, suppress on 429' would have to parse the exception
+    message — fragile."""
+    from alto_core.protocols.provider import ProviderTransientError
+
+    from app.providers.base import _wrap_if_transient
+
+    exc = _http_status_error(status)
+    wrapped = _wrap_if_transient(exc)
+    assert isinstance(wrapped, ProviderTransientError)
+    assert wrapped.status_code == status
+
+
+@pytest.mark.parametrize(
+    "exc_factory",
+    [
+        lambda: httpx.TimeoutException("read timeout"),
+        lambda: httpx.ConnectError("connection refused"),
+        lambda: httpx.RemoteProtocolError("disconnected"),
+    ],
+)
+def test_wrap_leaves_status_code_none_on_transport_errors(exc_factory):
+    """Transport-level failures don't have an HTTP status — the
+    attribute must be ``None`` so observers can distinguish 'connection
+    refused' from 'server returned 503'. A bug that set status_code
+    to e.g. 0 on transport errors would corrupt alerting rules."""
+    from alto_core.protocols.provider import ProviderTransientError
+
+    from app.providers.base import _wrap_if_transient
+
+    wrapped = _wrap_if_transient(exc_factory())
+    assert isinstance(wrapped, ProviderTransientError)
+    assert wrapped.status_code is None
+
+
+@pytest.mark.asyncio
+async def test_call_llm_wrapped_5xx_exposes_status_code_and_original_via_cause():
+    """End-to-end — through ``call_llm`` the raised
+    ProviderTransientError carries the 503 ``status_code`` directly,
+    and the original ``HTTPStatusError`` is accessible via ``__cause__``
+    (chained by ``raise wrapped from exc``). The chain gives callers
+    the response headers (e.g., Retry-After on 429) without exposing
+    httpx in the protocol surface."""
+    from alto_core.protocols.provider import ProviderTransientError
+
+    from app.providers.base import call_llm
+
+    mock_resp = _make_response(503, {"error": "blip"})
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(return_value=mock_resp)
+        with pytest.raises(ProviderTransientError) as exc_info:
+            await call_llm(url="https://api.example.com", headers={}, body={})
+
+    err = exc_info.value
+    assert err.status_code == 503
+    # __cause__ chain preserves the original httpx exception for any
+    # caller that needs response headers, request URL, etc.
+    assert isinstance(err.__cause__, httpx.HTTPStatusError)
+    assert err.__cause__.response.status_code == 503
+
+
+def test_provider_transient_error_default_status_code_is_none():
+    """Backward compatibility — existing call sites that build
+    ``ProviderTransientError("msg")`` without a status_code still
+    work; the attribute defaults to None."""
+    from alto_core.protocols.provider import ProviderTransientError
+
+    err = ProviderTransientError("plain message")
+    assert err.status_code is None
+    assert str(err) == "plain message"
