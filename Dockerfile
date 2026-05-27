@@ -23,7 +23,16 @@ COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
 COPY backend/app/ /app/backend/app/
-COPY --from=frontend-builder /frontend/dist /app/static/
+# Destination must match ``_STATIC_DIR`` in ``backend/app/main.py``:
+# ``Path(__file__).parent.parent / "static"`` resolves to
+# ``/app/backend/static`` (NOT ``/app/static``) once the backend lives
+# at ``/app/backend/app/``. Pre-f660262 the backend was at ``/app/app/``
+# and the math landed at ``/app/static`` — the refactor moved the
+# Python package but not the static destination, so HF Spaces silently
+# served the SPA-fallback JSON for the SPA root path. The container
+# still ran (``/health`` returned 200) and HF Spaces marked it
+# ``running``, masking the regression.
+COPY --from=frontend-builder /frontend/dist /app/backend/static/
 
 ENV JOB_STORAGE_DIR=/tmp/app-jobs
 ENV PYTHONPATH=/app/backend
