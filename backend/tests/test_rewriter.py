@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from alto_core.alto.parser import parse_alto_file
+
 # Private rewriter helpers — pulled from alto-core directly since the
 # backend re-export shim no longer surfaces privates.
-from alto_core.alto.rewriter import _compute_geometry, _tokenize
+from alto_core.alto.rewriter import _compute_geometry, _tokenize, rewrite_alto_file
 from lxml import etree
 
-from app.alto.parser import parse_alto_file
-from app.alto.rewriter import rewrite_alto_file
 from app.schemas import BlockManifest, Coords, HyphenRole, LineManifest, PageManifest
 
 # ---------------------------------------------------------------------------
@@ -801,7 +801,7 @@ def test_rewriter_does_not_pretty_print(tmp_path):
 
 def test_nfd_source_round_trip_marked_untouched(tmp_path):
     """A source containing NFD characters must round-trip as 'untouched'
-    when no correction is applied — _extract_text_from_line and the
+    when no correction is applied — reconstruct_textline and the
     manifest ocr_text must compare equal after NFC normalization."""
     import unicodedata
 

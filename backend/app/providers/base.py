@@ -24,9 +24,51 @@ from alto_core.protocols.provider import (  # noqa: F401  re-exported
     OUTPUT_JSON_SCHEMA,
     SYSTEM_PROMPT,
     BaseProvider,
+    ProviderTransientError,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# httpx exception classes that indicate a recoverable transport
+# failure: the upstream may heal on retry. Caught here and wrapped as
+# ``ProviderTransientError`` so the pipeline's retry classifier can
+# route them to exponential backoff without importing httpx itself.
+# 5xx and 429 from ``raise_for_status()`` fall into HTTPStatusError;
+# read timeouts, connect resets, etc. into the network families.
+_TRANSIENT_HTTPX_TYPES: tuple[type[BaseException], ...] = (
+    httpx.HTTPStatusError,
+    httpx.TimeoutException,
+    httpx.NetworkError,
+    httpx.RemoteProtocolError,
+)
+
+
+def _wrap_if_transient(exc: BaseException) -> BaseException:
+    """Return a ``ProviderTransientError`` chained to ``exc`` when ``exc``
+    is one of the known transient httpx classes; otherwise return
+    ``exc`` unchanged so the caller's raise leaves the original
+    traceback intact.
+
+    httpx.HTTPStatusError is intentionally split: 4xx (other than 429)
+    is a client-side bug — bad credentials, malformed schema — that
+    won't heal on retry, so we leave it alone. 5xx and 429 ARE
+    transient. The split happens here rather than at the catch site so
+    the pipeline doesn't need to know httpx status semantics.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        # 4xx is client error — only 429 (rate-limit) is worth retrying.
+        if 400 <= status < 500 and status != 429:
+            return exc
+        return ProviderTransientError(
+            str(exc), status_code=status
+        ).with_traceback(exc.__traceback__)
+    if isinstance(exc, _TRANSIENT_HTTPX_TYPES):
+        # Transport-level failures (timeout, network, protocol) carry no
+        # HTTP status — status_code stays None.
+        return ProviderTransientError(str(exc)).with_traceback(exc.__traceback__)
+    return exc
 
 
 # ---------------------------------------------------------------------------
@@ -46,29 +88,38 @@ async def call_llm(
     """Send a structured LLM request with optional 400/422 fallback.
 
     Centralises the httpx client lifecycle, the fallback-on-schema-
-    rejection pattern, and status-code handling that every provider needs.
+    rejection pattern, and status-code handling that every provider
+    needs. Transient transport failures are re-raised as
+    :class:`ProviderTransientError` so the pipeline's retry classifier
+    routes them to exponential backoff.
     """
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            url,
-            headers=headers,
-            json=body,
-            params=params,
-            timeout=timeout,
-        )
-
-        if resp.status_code in (400, 422) and fallback_body is not None:
-            logger.info("Schema rejected (%s) — retrying with fallback body", resp.status_code)
+    try:
+        async with httpx.AsyncClient() as client:
             resp = await client.post(
                 url,
                 headers=headers,
-                json=fallback_body,
+                json=body,
                 params=params,
                 timeout=timeout,
             )
 
-        resp.raise_for_status()
-        return resp.json()
+            if resp.status_code in (400, 422) and fallback_body is not None:
+                logger.info("Schema rejected (%s) — retrying with fallback body", resp.status_code)
+                resp = await client.post(
+                    url,
+                    headers=headers,
+                    json=fallback_body,
+                    params=params,
+                    timeout=timeout,
+                )
+
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as exc:
+        wrapped = _wrap_if_transient(exc)
+        if wrapped is exc:
+            raise
+        raise wrapped from exc
 
 
 def extract_chat_text(data: dict[str, Any], provider_label: str) -> dict[str, Any]:
@@ -98,12 +149,18 @@ async def get_json(
     status check so a future tweak (timeouts, retries, instrumentation)
     happens in one place.
     """
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            url,
-            headers=headers or {},
-            params=params,
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                url,
+                headers=headers or {},
+                params=params,
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as exc:
+        wrapped = _wrap_if_transient(exc)
+        if wrapped is exc:
+            raise
+        raise wrapped from exc

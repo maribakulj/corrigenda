@@ -74,6 +74,38 @@ te sont fournis à titre indicatif uniquement pour le contexte.\
 
 
 # ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class ProviderTransientError(Exception):
+    """Raised by a ``BaseProvider`` to signal a recoverable transport
+    failure (network timeout, 5xx upstream, connection reset, …).
+
+    The pipeline's retry classifier uses ``isinstance(exc,
+    ProviderTransientError)`` to route the error to the
+    exponential-backoff branch. Providers should wrap the underlying
+    library exception (``httpx.HTTPStatusError``,
+    ``httpx.TimeoutException``, …) and re-raise as
+    ``ProviderTransientError`` — that way alto-core stays
+    http-library-agnostic without resorting to fragile class-name
+    string matching at the catch site.
+
+    When the underlying failure was HTTP, the originating status code
+    is preserved on ``status_code`` so observers can route on it (e.g.,
+    distinguish 429 rate-limit from 503 upstream-blip without parsing
+    the message). Transport-level failures (timeouts, network errors)
+    leave ``status_code`` as ``None``. The full underlying exception is
+    additionally reachable via ``__cause__`` when callers raise as
+    ``raise wrapped from original``.
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+# ---------------------------------------------------------------------------
 # Protocol
 # ---------------------------------------------------------------------------
 
@@ -84,6 +116,9 @@ class BaseProvider(Protocol):
 
     Implementations call out to their provider's API (or run a local
     model) and return the JSON shape declared by ``OUTPUT_JSON_SCHEMA``.
+    Implementations SHOULD wrap recoverable transport failures as
+    ``ProviderTransientError`` so the pipeline retries with
+    exponential backoff.
     """
 
     async def list_models(self, api_key: str) -> list[ModelInfo]: ...
@@ -103,5 +138,6 @@ class BaseProvider(Protocol):
 __all__ = [
     "BaseProvider",
     "OUTPUT_JSON_SCHEMA",
+    "ProviderTransientError",
     "SYSTEM_PROMPT",
 ]

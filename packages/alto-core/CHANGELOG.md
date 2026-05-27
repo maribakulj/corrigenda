@@ -8,11 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Retry policy on HTTP 4xx (other than 429) is now non-retryable.**
+  The previous class-name allowlist (`exc.__class__.__name__ ==
+  "HTTPStatusError"`) caused `401`, `403`, `404`, `422` to be retried
+  3 times with exponential backoff — a waste, because client errors
+  (bad API key, wrong model, schema rejection) don't heal on retry.
+  The classifier now routes on `isinstance(exc,
+  ProviderTransientError)`, and providers' HTTP wrapper deliberately
+  leaves 4xx-non-429 errors un-wrapped, so they reach the classifier
+  as non-retryable and the chunk falls back to OCR source on the
+  first failure. Pinned by
+  `test_pipeline_classifies_client_http_4xx_as_non_retryable`.
+  `5xx`, `429`, and transport-level failures (timeout, network,
+  protocol) retain the previous 3-attempt exponential-backoff
+  behavior.
 - Clarified in the `### Added` section of `[0.1.0a1]` which symbols
   are re-exported at the package root (`from alto_core import …`)
   versus the ones that are sub-module-only. The technical contract
   is unchanged — every symbol previously listed remains importable
   from its canonical path. (roadmap L5 / B5)
+
+### Added
+- `ProviderTransientError.status_code: int | None` — when the
+  underlying transport failure was an HTTP error, the originating
+  status code is preserved on the wrapped exception so observers can
+  route on 429 vs 503 vs 500 without parsing the message. `None` for
+  transport-level failures (timeout, network, protocol). The full
+  underlying exception remains reachable via `__cause__` for callers
+  that need response headers or the request URL.
 
 ### Documentation
 - Public Pydantic models (`LineManifest`, `DocumentManifest`,

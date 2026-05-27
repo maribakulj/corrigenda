@@ -23,12 +23,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from alto_core.alto.parser import build_document_manifest
 from lxml import etree
 
-from app.alto.parser import build_document_manifest
-from app.jobs.orchestrator import run_job
+from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider
+from app.storage.output_writer import FilesystemOutputWriter
 
 EXAMPLES_DIR = Path(__file__).parent.parent.parent / "examples"
 SAMPLE_XML = EXAMPLES_DIR / "sample.xml"
@@ -69,16 +70,15 @@ def _run_and_capture(xml_path: Path) -> dict[str, Any]:
         out_dir = Path(td)
         doc = build_document_manifest([(xml_path, xml_path.name)])
         asyncio.run(
-            run_job(
+            JobRunner(job_store=store).run(
                 job_id=job_id,
                 document_manifest=doc,
                 provider_name="openai",
                 api_key="fake-key",
                 model="mock",
-                output_dir=out_dir,
+                output_writer=FilesystemOutputWriter(out_dir),
                 source_files={xml_path.name: xml_path},
                 provider=_IdentityProvider(),
-                job_store_override=store,
             )
         )
         job = store.get_job(job_id)
@@ -161,16 +161,15 @@ def _structural_facts(xml_path: Path) -> dict[str, Any]:
         out_dir = Path(td)
         doc = build_document_manifest([(xml_path, xml_path.name)])
         asyncio.run(
-            run_job(
+            JobRunner(job_store=store).run(
                 job_id=job_id,
                 document_manifest=doc,
                 provider_name="openai",
                 api_key="fake-key",
                 model="mock",
-                output_dir=out_dir,
+                output_writer=FilesystemOutputWriter(out_dir),
                 source_files={xml_path.name: xml_path},
                 provider=_IdentityProvider(),
-                job_store_override=store,
             )
         )
         out_xml = next(out_dir.glob("*_corrected.xml"))

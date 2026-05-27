@@ -448,9 +448,11 @@ def test_download_not_ready(client: TestClient):
 
 def test_download_single_xml(client: TestClient):
     """Complete a job synchronously then download the output XML."""
-    from app.alto.parser import build_document_manifest
-    from app.jobs.orchestrator import run_job
+    from alto_core.alto.parser import build_document_manifest
+
+    from app.jobs.runner import JobRunner
     from app.storage import init_job_dirs, output_dir, save_uploaded_files
+    from app.storage.output_writer import FilesystemOutputWriter
 
     store = client.app.state.job_store
     provider_enum = Provider.OPENAI
@@ -464,16 +466,15 @@ def test_download_single_xml(client: TestClient):
     out_dir = output_dir(job_id)
 
     asyncio.run(
-        run_job(
+        JobRunner(job_store=store).run(
             job_id=job_id,
             document_manifest=doc,
             provider_name="openai",
             api_key="fake-key",
             model="mock",
-            output_dir=out_dir,
+            output_writer=FilesystemOutputWriter(out_dir),
             source_files={n: p for n, p in saved.items()},
             provider=MockProvider(),
-            job_store_override=store,
         )
     )
 
@@ -517,16 +518,15 @@ def test_sse_endpoint_exists(client: TestClient):
 def test_create_job_resolves_timeout_seconds_dynamically(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ):
-    """The L6 migration moved `app/api/jobs.py` from `run_job(...)` to
-    `JobRunner.run(..., timeout_seconds=N)`. A naive
-    `from app.jobs.orchestrator import _JOB_TIMEOUT_SECONDS` would freeze
-    the value at module import — so any later mutation of
-    `app.jobs.orchestrator._JOB_TIMEOUT_SECONDS` (tests, operator hot-tune,
-    a future env-driven override) would silently NOT propagate to the
-    actual call site. This test pins the dynamic lookup so the regression
-    cannot reappear unnoticed.
+    """A naive `from app.jobs.runner import DEFAULT_JOB_TIMEOUT_SECONDS`
+    would freeze the value at module import — so any later mutation of
+    `app.jobs.runner.DEFAULT_JOB_TIMEOUT_SECONDS` (tests, operator
+    hot-tune, a future env-driven override) would silently NOT
+    propagate to the actual call site. This test pins the dynamic
+    lookup via `_runner_module.DEFAULT_JOB_TIMEOUT_SECONDS` so the
+    regression cannot reappear unnoticed.
     """
-    from app.jobs import orchestrator as orch
+    from app.jobs import runner as runner_module
     from app.jobs.runner import JobRunner
 
     captured: dict[str, Any] = {}
@@ -543,7 +543,7 @@ def test_create_job_resolves_timeout_seconds_dynamically(
 
     monkeypatch.setattr(JobRunner, "run", _fake_run)
     sentinel = 4242
-    monkeypatch.setattr(orch, "_JOB_TIMEOUT_SECONDS", sentinel)
+    monkeypatch.setattr(runner_module, "DEFAULT_JOB_TIMEOUT_SECONDS", sentinel)
 
     resp = client.post(
         "/api/jobs",
@@ -554,5 +554,5 @@ def test_create_job_resolves_timeout_seconds_dynamically(
     assert captured.get("timeout_seconds") == sentinel, (
         f"timeout_seconds was not resolved dynamically: "
         f"got {captured.get('timeout_seconds')!r}, expected {sentinel!r}. "
-        f"app/api/jobs.py likely snapshotted _JOB_TIMEOUT_SECONDS at import."
+        f"app/api/jobs.py likely snapshotted DEFAULT_JOB_TIMEOUT_SECONDS at import."
     )

@@ -50,16 +50,72 @@ class Provider(str, Enum):
 class HyphenRole(str, Enum):
     """Position of a line within a hyphenated pair.
 
-    ``NONE`` for ordinary lines, ``PART1`` carries the left fragment +
-    hyphen (last line of pair), ``PART2`` carries the right fragment
-    (first line of next pair), ``BOTH`` is ``PART2`` of the previous
-    pair AND ``PART1`` of the next one (chained hyphenation).
+    ``NONE`` for ordinary lines. ``PART1`` is the FIRST (top) line of
+    a pair — it carries the left word fragment and ends with the
+    trailing hyphen. ``PART2`` is the SECOND (bottom) line of the
+    pair — it carries the right word fragment. ``BOTH`` is the
+    PART2-of-the-previous-pair AND PART1-of-the-next-pair (chained
+    hyphenation across three consecutive lines).
+
+    Verified against examples/sample.xml: TL4 (the line carrying the
+    HYP element) is PART1; TL5 (the next line) is PART2. The previous
+    docstring inverted these — a real trap for any reader trying to
+    reason about the data model.
     """
 
     NONE = "none"
-    PART1 = "HypPart1"  # last line of pair: carries left fragment + hyphen
-    PART2 = "HypPart2"  # first line of pair: carries right fragment
+    PART1 = (
+        "HypPart1"  # first (top) line of pair: carries left fragment + trailing hyphen
+    )
+    PART2 = "HypPart2"  # second (bottom) line of pair: carries right fragment
     BOTH = "HypBoth"  # PART2 of previous pair AND PART1 of next pair (chained)
+
+
+class PipelineEventType(str, Enum):
+    """Canonical event names emitted by the correction pipeline.
+
+    This enum is the authoritative source of truth for every event
+    name the pipeline or its observers can emit. The backend's SSE
+    layer transports the same strings; ``frontend/src/hooks/useJobStream
+    .ts::EVENTS`` lists them on the consumer side.
+    Synchronisation is enforced by
+    ``backend/tests/test_sse_event_contract.py`` at every CI run.
+
+    The string values are part of the wire contract and stay stable
+    across releases.
+    """
+
+    # Pipeline lifecycle (emitted by JobRunner on the backend)
+    STARTED = "started"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+    # Document / page / chunk lifecycle (emitted by CorrectionPipeline)
+    DOCUMENT_PARSED = "document_parsed"
+    PAGE_STARTED = "page_started"
+    PAGE_COMPLETED = "page_completed"
+    CHUNK_PLANNED = "chunk_planned"
+    CHUNK_STARTED = "chunk_started"
+    CHUNK_COMPLETED = "chunk_completed"
+    CHUNK_ERROR = "chunk_error"
+    RETRY = "retry"
+    WARNING = "warning"
+    HYPHEN_PARTNER_MISSING = "hyphen_partner_missing"
+
+    # Observability stats — emitted at file/job boundaries with rewriter
+    # and reconcile path counts. Pure read-only diagnostics; never
+    # influence the corrected XML output.
+    REWRITER_STATS = "rewriter_stats"
+    RECONCILE_STATS = "reconcile_stats"
+
+    # Frontend-only initial state (kept here so the contract test can
+    # verify the frontend list against this canonical set).
+    QUEUED = "queued"
+
+    # Transport-layer events (emitted by JobStore.stream_events on the
+    # backend, not by the pipeline itself).
+    KEEPALIVE = "keepalive"
+    ERROR = "error"
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +156,6 @@ class LineManifest(BaseModel):
     ocr_text: str
     prev_line_id: str | None = None
     next_line_id: str | None = None
-    expected: bool = True
-    received: bool = False
     corrected_text: str | None = None
     status: LineStatus = LineStatus.PENDING
 
@@ -221,7 +275,9 @@ class JobManifest(BaseModel):
     duration_seconds: float | None = None
     error: str | None = None
     images: dict[str, str] = Field(default_factory=dict)
-    # Line traces (Sprint 5bis) — keyed by line_id
+    # Per-line text trace through every pipeline stage. Keyed by
+    # f"{page_id}:{line_order_global}:{line_id}" (see _trace_key in
+    # alto_core.pipeline.correction_pipeline).
     line_traces: dict[str, LineTrace] = Field(default_factory=dict)
 
 
@@ -287,7 +343,7 @@ class ModelInfo(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Line trace (Sprint 5bis — observability)
+# Line trace — per-line observability through the correction pipeline
 # ---------------------------------------------------------------------------
 
 
@@ -326,6 +382,7 @@ __all__ = [
     "ChunkGranularity",
     "Provider",
     "HyphenRole",
+    "PipelineEventType",
     "Coords",
     "LineManifest",
     "BlockManifest",

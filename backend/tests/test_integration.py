@@ -11,11 +11,11 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from alto_core.alto.parser import build_document_manifest, parse_alto_file
 from fastapi.testclient import TestClient
 from lxml import etree
 
-from app.alto.parser import build_document_manifest, parse_alto_file
-from app.jobs.orchestrator import run_job
+from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider
 from app.storage import (
@@ -25,6 +25,7 @@ from app.storage import (
     output_dir,
     save_uploaded_files,
 )
+from app.storage.output_writer import FilesystemOutputWriter
 
 SAMPLE_XML = Path(__file__).parent.parent.parent / "examples" / "sample.xml"
 NS = "http://www.loc.gov/standards/alto/ns-v3#"
@@ -98,16 +99,15 @@ def _run_job_directly(
 
     out_dir = output_dir(job_id)
     _run(
-        run_job(
+        JobRunner(job_store=store).run(
             job_id=job_id,
             document_manifest=doc,
             provider_name="openai",
             api_key="fake-key",
             model="mock",
-            output_dir=out_dir,
+            output_writer=FilesystemOutputWriter(out_dir),
             source_files={n: p for n, p in saved.items()},
             provider=mock,
-            job_store_override=store,
         )
     )
 
@@ -272,16 +272,15 @@ def test_sse_events_order():
 
     try:
         _run(
-            run_job(
+            JobRunner(job_store=store).run(
                 job_id=job_id,
                 document_manifest=doc,
                 provider_name="openai",
                 api_key="fake-key",
                 model="mock",
-                output_dir=output_dir(job_id),
+                output_writer=FilesystemOutputWriter(output_dir(job_id)),
                 source_files={n: p for n, p in saved.items()},
                 provider=MockProvider(),
-                job_store_override=store,
             )
         )
     finally:

@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from alto_core.alto.parser import build_document_manifest, parse_alto_file
+from alto_core.pipeline.validator import HyphenIntegrityError
 from lxml import etree
 
-from app.alto.parser import build_document_manifest, parse_alto_file
-from app.jobs.orchestrator import run_job
+from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.schemas import ModelInfo, Provider, SSEEvent
+from app.storage.output_writer import FilesystemOutputWriter
 
 # Path to sample XML
 SAMPLE_XML = Path(__file__).parent.parent.parent / "examples" / "sample.xml"
@@ -89,16 +91,15 @@ async def _run(
     """Run the orchestrator with the given store injected explicitly."""
     pages, _ = parse_alto_file(SAMPLE_XML, SAMPLE_XML.name)
     doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-    await run_job(
+    await JobRunner(job_store=store).run(
         job_id=job_id,
         document_manifest=doc,
         provider_name="openai",
         api_key="fake-key",
         model="mock",
-        output_dir=output_dir,
+        output_writer=FilesystemOutputWriter(output_dir),
         source_files={SAMPLE_XML.name: SAMPLE_XML},
         provider=provider,
-        job_store_override=store,
     )
 
 
@@ -302,7 +303,7 @@ async def test_cross_page_hyphen_reconciled_through_colliding_ids(tmp_path: Path
     and silently picked the local file (causing self-pairing or wrong
     pairing). With the qualified (page_id, line_id) lookup the right
     partner is resolved and the pair survives the pipeline."""
-    from app.alto.parser import build_document_manifest
+    from alto_core.alto.parser import build_document_manifest
 
     body_a = """\
 <TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="60">
@@ -341,16 +342,15 @@ async def test_cross_page_hyphen_reconciled_through_colliding_ids(tmp_path: Path
     store = JobStore()
     job_id = store.create_job(Provider.OPENAI, "mock")
 
-    await run_job(
+    await JobRunner(job_store=store).run(
         job_id=job_id,
         document_manifest=doc,
         provider_name="openai",
         api_key="fake-key",
         model="mock",
-        output_dir=tmp_path,
+        output_writer=FilesystemOutputWriter(tmp_path),
         source_files={"fileA.xml": file_a, "fileB.xml": file_b},
         provider=MockProvider(),
-        job_store_override=store,
     )
 
     job = store.get_job(job_id)
@@ -393,30 +393,23 @@ class _SlowProvider:
 
 @pytest.mark.asyncio
 async def test_job_timeout_marks_failure(tmp_path: Path):
-    """When _JOB_TIMEOUT_SECONDS elapses, run_job catches TimeoutError,
+    """When `timeout_seconds` elapses, JobRunner catches TimeoutError,
     marks the job FAILED, emits a `failed` event, and records a clean
     error message (no traceback, no api_key leak)."""
-    import app.jobs.orchestrator as orch_module
-
     store, job_id = _make_store_and_job()
-    orig_timeout = orch_module._JOB_TIMEOUT_SECONDS
-    orch_module._JOB_TIMEOUT_SECONDS = 1  # 1-second budget — provider sleeps 5s
-    try:
-        pages, _ = parse_alto_file(SAMPLE_XML, SAMPLE_XML.name)
-        doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-        await run_job(
-            job_id=job_id,
-            document_manifest=doc,
-            provider_name="openai",
-            api_key="sk-secret-token-12345",
-            model="mock",
-            output_dir=tmp_path,
-            source_files={SAMPLE_XML.name: SAMPLE_XML},
-            provider=_SlowProvider(),
-            job_store_override=store,
-        )
-    finally:
-        orch_module._JOB_TIMEOUT_SECONDS = orig_timeout
+    pages, _ = parse_alto_file(SAMPLE_XML, SAMPLE_XML.name)
+    doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
+    await JobRunner(job_store=store).run(
+        job_id=job_id,
+        document_manifest=doc,
+        provider_name="openai",
+        api_key="sk-secret-token-12345",
+        model="mock",
+        output_writer=FilesystemOutputWriter(tmp_path),
+        source_files={SAMPLE_XML.name: SAMPLE_XML},
+        provider=_SlowProvider(),
+        timeout_seconds=1,  # 1-second budget — provider sleeps 5s
+    )
 
     job = store.get_job(job_id)
     assert job is not None
@@ -440,7 +433,7 @@ async def test_run_job_general_exception_marks_failed(
 ):
     """A non-timeout exception escaping the pipeline must mark the job
     as FAILED with a sanitized error (no api_key leak)."""
-    from app.jobs.correction_pipeline import CorrectionPipeline
+    from alto_core.pipeline.correction_pipeline import CorrectionPipeline
 
     store, job_id = _make_store_and_job()
 
@@ -449,16 +442,15 @@ async def test_run_job_general_exception_marks_failed(
 
     monkeypatch.setattr(CorrectionPipeline, "run", _boom)
     doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-    await run_job(
+    await JobRunner(job_store=store).run(
         job_id=job_id,
         document_manifest=doc,
         provider_name="openai",
         api_key="sk-secret-token-12345",
         model="mock",
-        output_dir=tmp_path,
+        output_writer=FilesystemOutputWriter(tmp_path),
         source_files={SAMPLE_XML.name: SAMPLE_XML},
         provider=MockProvider(),
-        job_store_override=store,
     )
 
     job = store.get_job(job_id)
@@ -487,16 +479,15 @@ async def test_run_job_resolves_provider_from_registry_when_none(
 
     store, job_id = _make_store_and_job()
     doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
-    await run_job(
+    await JobRunner(job_store=store).run(
         job_id=job_id,
         document_manifest=doc,
         provider_name="openai",
         api_key="fake-key",
         model="mock",
-        output_dir=tmp_path,
+        output_writer=FilesystemOutputWriter(tmp_path),
         source_files={SAMPLE_XML.name: SAMPLE_XML},
         # Note: provider arg omitted → registry lookup path
-        job_store_override=store,
     )
 
     job = store.get_job(job_id)
@@ -545,13 +536,11 @@ class _AlwaysFailProvider:
         raise self._exception_factory()
 
 
-# Fake HTTP exception — pipeline duck-types on class name (see
-# correction_pipeline.py:554-561 for the allowlist), so the *class
-# name* must match exactly. Defining our own class avoids pulling
-# httpx into the test surface; the leading-underscore convention is
-# dropped on purpose since `__name__` is what the classifier reads.
-class HTTPStatusError(Exception):
-    pass
+# Transient HTTP exception used by the L4 classifier tests below.
+# The pipeline now routes on isinstance(exc, ProviderTransientError);
+# providers are responsible for wrapping their httpx errors before
+# re-raising. Tests raise the canonical type directly.
+from alto_core.protocols.provider import ProviderTransientError
 
 
 class _OneHyphenViolationThenOK:
@@ -574,7 +563,7 @@ class _OneHyphenViolationThenOK:
     async def complete_structured(self, **kwargs):
         self.call_count += 1
         if self.call_count == 1:
-            raise ValueError("hyphen_integrity_violation: TL5 corrupted")
+            raise HyphenIntegrityError("hyphen_integrity_violation: TL5 corrupted")
         lines_out = [
             {"line_id": line_in["line_id"], "corrected_text": line_in["ocr_text"]}
             for line_in in kwargs["user_payload"].get("lines", [])
@@ -665,19 +654,21 @@ async def test_pipeline_classifies_transient_http_with_exponential_backoff(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Roadmap L4 (T0a) — HTTPStatusError-shaped exceptions retry with
+    """Roadmap L4 (T0a) — ``ProviderTransientError`` retries with
     backoff = attempt * 2 (1→2s, 2→4s).
 
     Network / 5xx upstream issues recover on a timescale of seconds,
     so the pipeline backs off exponentially to give the upstream room
-    to heal. A bug in the duck-typing allowlist (e.g. removing
-    HTTPStatusError) would make this branch fall through to
-    is_llm_output_error and use linear backoff instead — caught here.
+    to heal. Providers wrap their httpx transport failures as
+    ``ProviderTransientError`` before re-raising; a bug in that
+    wrapping (or in the classifier's ``isinstance`` check) would make
+    this branch fall through to ``is_llm_output_error`` and use linear
+    backoff instead — caught here.
     """
     sleeps = await _capture_sleeps(monkeypatch)
     store, job_id = _make_store_and_job()
 
-    provider = _AlwaysFailProvider(lambda: HTTPStatusError("upstream 503"))
+    provider = _AlwaysFailProvider(lambda: ProviderTransientError("upstream 503"))
     await _run(job_id, provider, tmp_path, store)
 
     # 3 attempts → 2 retries → 2 backoffs. correction_pipeline.py:577-579
@@ -717,6 +708,75 @@ async def test_pipeline_classifies_llm_output_error_with_linear_backoff(
         assert s in (1, 2), (
             f"llm_output_error backoff should be linear (1 or 2), got {s} at index {i}"
         )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_classifies_client_http_4xx_as_non_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A raw ``httpx.HTTPStatusError`` with a 4xx status (other than 429)
+    is NON-retryable: zero backoff, zero retry events, immediate fallback.
+
+    Contract: ``_wrap_if_transient`` in ``backend/app/providers/base.py``
+    intentionally leaves 4xx-non-429 errors un-wrapped — bad keys (401),
+    forbidden models (403), wrong endpoints (404), schema rejections (422)
+    don't heal on retry, so retrying just burns quota and adds latency.
+    The classifier sees the raw ``HTTPStatusError``: no ``isinstance``
+    branch matches (it's neither ``ProviderTransientError`` nor
+    ``ValueError``/``JSONDecodeError``), so ``is_retryable=False`` and the
+    chunk falls back to OCR source on the first failure.
+
+    This is a deliberate departure from the pre-refactor behavior, where
+    a class-name allowlist treated every ``HTTPStatusError`` as transient
+    and wasted 3 attempts on permanent client errors. The pin makes the
+    contract explicit so a future "retry everything" refactor doesn't
+    silently restore that waste.
+    """
+    import httpx
+
+    sleeps = await _capture_sleeps(monkeypatch)
+    store, job_id = _make_store_and_job()
+    queue = store.subscribe(job_id)
+
+    def _make_401() -> httpx.HTTPStatusError:
+        req = httpx.Request("POST", "https://api.example.com/v1/chat")
+        resp = httpx.Response(401, request=req)
+        return httpx.HTTPStatusError("401 Unauthorized", request=req, response=resp)
+
+    provider = _AlwaysFailProvider(_make_401)
+    await _run(job_id, provider, tmp_path, store)
+
+    # Pin 1: zero backoff — the classifier short-circuits before
+    # ``await asyncio.sleep(decision.backoff)`` runs.
+    assert sleeps == [], (
+        f"4xx HTTPStatusError should NOT retry; got {sleeps!r} backoff(s)"
+    )
+
+    events: list[SSEEvent] = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+
+    # Pin 2: zero retry events emitted on any chunk.
+    retries = [e for e in events if e.event == "retry"]
+    assert retries == [], (
+        f"4xx HTTPStatusError should emit zero retry events; got {len(retries)}"
+    )
+
+    # Pin 3: fallback path was taken — job still completes, but every
+    # chunk fell back to OCR source.
+    job = store.get_job(job_id)
+    assert job is not None
+    assert job.status.value == "completed"
+    assert job.fallbacks >= 1, "expected fallback path to be taken on 4xx"
+
+    # Pin 4: exactly one provider call per chunk — no retries. The
+    # transient branch would yield 3*chunk_count calls; we want 1*.
+    chunk_starts = [e for e in events if e.event == "chunk_started"]
+    assert provider.call_count == len(chunk_starts), (
+        f"4xx should not retry; expected {len(chunk_starts)} calls "
+        f"(one per chunk), got {provider.call_count}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -929,7 +989,8 @@ async def test_runner_marks_job_failed_on_cancellation(tmp_path: Path):
     capacity sweep + TTL eviction both keyed off `_completed_at` so
     the job leaked across redeploys.
     """
-    from app.alto.parser import build_document_manifest
+    from alto_core.alto.parser import build_document_manifest
+
     from app.jobs.runner import JobRunner
     from app.schemas import JobStatus
     from app.storage import init_job_dirs, output_dir, save_uploaded_files

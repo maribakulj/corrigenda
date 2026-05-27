@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import unicodedata
 from pathlib import Path
 
 from lxml import etree
 
 from alto_core.alto._ns import _detect_namespace, _int_attr, _tag, make_safe_parser
+from alto_core.alto._text import reconstruct_textline
 from alto_core.schemas import (
     BlockManifest,
     Coords,
@@ -21,56 +21,13 @@ from alto_core.schemas import (
 
 
 def _build_ocr_text(textline: etree._Element, ns: str) -> str:
-    parts: list[str] = []
-    for child in textline:
-        local = etree.QName(child.tag).localname
-        if local == "String":
-            parts.append(child.get("CONTENT", ""))
-        elif local == "SP":
-            parts.append(" ")
-        elif local == "HYP":
-            # Normalize: HYP contributes a single "-" to the logical text.
-            # Avoid double-dash when preceding String CONTENT already ends
-            # with a hyphen, and normalize soft-hyphen (\xad) to "-".
-            hyp_char = child.get("CONTENT", "-")
-            if hyp_char == "\u00ad":
-                hyp_char = "-"
-            # Skip if the accumulated text already ends with a dash
-            current = "".join(parts)
-            if current.endswith("-"):
-                continue
-            parts.append(hyp_char)
-    text = "".join(parts)
-    text = text.replace("\r", "")
-    text = unicodedata.normalize("NFC", text)
-    return text.strip()
+    """Build the parser's logical line text: NFC + carriage-return strip + strip."""
+    return reconstruct_textline(textline, ns).replace("\r", "").strip()
 
 
 # ---------------------------------------------------------------------------
 # Hyphenation detection (mutates lines in-place)
 # ---------------------------------------------------------------------------
-
-
-def _detect_hyphenation(lines: list[LineManifest]) -> None:
-    """
-    First pass: annotate each line individually based on its XML content.
-    Second pass: link PART1 → PART2 pairs and propagate SUBS_CONTENT.
-
-    This function works with a list of LineManifest whose `ocr_text` is
-    already built. The raw XML scan results are stored as temporary
-    attributes on the objects so that the second pass can use them.
-    """
-    # Nothing to do for empty lists
-    if not lines:
-        return
-
-    # We need the raw XML elements to inspect attributes — but LineManifest
-    # is a pure data object. Strategy: re-annotate using the ocr_text and
-    # flags that the parsing loop already stored on the manifest objects via
-    # _parse_textline_hyphen_info. We call that helper during parse_alto_file
-    # so by the time we reach _detect_hyphenation the hyphen fields may already
-    # be partially filled. Here we only do the second-pass linking.
-    _link_hyphen_pairs(lines)
 
 
 def _link_hyphen_pairs(lines: list[LineManifest]) -> None:
@@ -374,7 +331,7 @@ def _disambiguate_page_ids(
 
     Multiple ALTO files commonly declare the same Page ID (``"Page1"``,
     ``"P1"``…) — a per-scan workflow practically guarantees this.
-    Without disambiguation, the orchestrator's cross-page hyphen partner
+    Without disambiguation, the pipeline's cross-page hyphen partner
     lookup picks the wrong page, intra-page hyphen pair_page_id refs
     become ambiguous, and the trace/diff/layout endpoints emit duplicate
     page_id values to the frontend.

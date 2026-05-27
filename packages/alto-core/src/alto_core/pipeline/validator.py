@@ -6,6 +6,19 @@ from alto_core.alto._norm import ncfold
 from alto_core.schemas import LLMLineOutput, LLMResponse
 
 
+class HyphenIntegrityError(ValueError):
+    """Raised when an LLM response broke a hyphen-pair invariant.
+
+    Subclass of ValueError so existing ``except ValueError`` catches
+    continue to work. Carrying the type explicitly lets the pipeline's
+    retry classifier use ``isinstance(exc, HyphenIntegrityError)``
+    instead of substring-matching ``"hyphen_integrity_violation"`` in
+    the exception message — a fragile coupling that prior audit §7.1
+    flagged. The retry SSE event still emits the literal
+    ``"hyphen_integrity_violation"`` tag for the frontend consumer.
+    """
+
+
 def validate_llm_response(
     raw: dict,
     expected_line_ids: list[str],
@@ -156,11 +169,11 @@ def _validate_hyphen_integrity(
 
         # 1. Either side being empty means illegal fusion/deletion
         if not text_a:
-            raise ValueError(
+            raise HyphenIntegrityError(
                 f"hyphen_integrity_violation: corrected_text for line {id_a!r} is empty"
             )
         if not text_b:
-            raise ValueError(
+            raise HyphenIntegrityError(
                 f"hyphen_integrity_violation: corrected_text for line {id_b!r} is empty"
             )
 
@@ -181,7 +194,7 @@ def _validate_hyphen_integrity(
             continue
         part1_last_word = part1_words[-1]
         if ncfold(part1_last_word) == ncfold(subs_content):
-            raise ValueError(
+            raise HyphenIntegrityError(
                 f"hyphen_integrity_violation: PART1 line {part1_id!r} "
                 f"contains full logical word {subs_content!r} "
                 f"(fusion detected)"
@@ -204,14 +217,14 @@ def _check_pair_drift(
 
     # PART1 grew by more than 2 words → probably pulled from PART2
     if cor_a_wc > ocr_a_wc + 2:
-        raise ValueError(
+        raise HyphenIntegrityError(
             f"hyphen_integrity_violation: PART1 line {id_a!r} grew from "
             f"{ocr_a_wc} to {cor_a_wc} words (text migration suspected)"
         )
 
     # PART2 shrank to less than 40% of original → absorbed by PART1
     if ocr_b_wc >= 2 and cor_b_wc < ocr_b_wc * 0.4:
-        raise ValueError(
+        raise HyphenIntegrityError(
             f"hyphen_integrity_violation: PART2 line {id_b!r} shrank from "
             f"{ocr_b_wc} to {cor_b_wc} words (text migration suspected)"
         )

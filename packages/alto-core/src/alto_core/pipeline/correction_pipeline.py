@@ -26,12 +26,22 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from alto_core.alto.hyphenation import enrich_chunk_lines, reconcile_hyphen_pair
+from alto_core.alto.hyphenation import (
+    ReconcileMetrics,
+    classify_reconcile_outcome,
+    enrich_chunk_lines,
+    reconcile_hyphen_pair,
+)
 from alto_core.alto.rewriter import extract_output_texts, rewrite_alto_file
 from alto_core.pipeline.chunk_planner import plan_page
 from alto_core.pipeline.line_acceptance import check_adjacent_duplicates, check_line
-from alto_core.pipeline.validator import validate_llm_response
-from alto_core.protocols import BaseProvider, OutputWriter, PipelineObserver
+from alto_core.pipeline.validator import HyphenIntegrityError, validate_llm_response
+from alto_core.protocols import (
+    BaseProvider,
+    OutputWriter,
+    PipelineObserver,
+    ProviderTransientError,
+)
 from alto_core.protocols.provider import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 from alto_core.schemas import (
     ChunkPlannerConfig,
@@ -43,8 +53,10 @@ from alto_core.schemas import (
     LineManifest,
     LineStatus,
     LineTrace,
+    LLMResponse,
     LLMUserPayload,
     PageManifest,
+    PipelineEventType,
 )
 
 # Patterns to redact common secret formats in error messages.
@@ -105,6 +117,102 @@ def _trace_key(lm: LineManifest) -> str:
     return f"{lm.page_id}:{lm.line_order_global}:{lm.line_id}"
 
 
+def _set_trace(
+    traces: dict[str, LineTrace] | None,
+    lm: LineManifest,
+    **fields: object,
+) -> None:
+    """Assign trace fields on the LineTrace keyed by ``lm``, if tracked.
+
+    Centralises the ``if traces is not None: t = traces.get(...);
+    if t is not None: ...`` pattern that was repeated five times in
+    ``_run_chunk`` and its helpers. A trace dict that isn't tracking
+    a given line silently no-ops.
+    """
+    if traces is None:
+        return
+    trace = traces.get(_trace_key(lm))
+    if trace is None:
+        return
+    for name, value in fields.items():
+        setattr(trace, name, value)
+
+
+@dataclass(frozen=True)
+class _RetryDecision:
+    """Pure result of classifying a retry-loop exception.
+
+    Decoupled from the retry loop so the classifier can be tested in
+    isolation (no chunk, no observer, no traces — just the exception
+    and the per-chunk hyphen latch).
+    """
+
+    is_retryable: bool
+    backoff: float
+    error_tag: str
+    is_hyphen_violation: bool
+
+
+def _classify_retry(
+    *,
+    exc: BaseException,
+    sanitised_msg: str,
+    attempt: int,
+    hyphen_already_seen: bool,
+) -> _RetryDecision:
+    """Decide what to do with an exception during the LLM retry loop.
+
+    Three retryable branches:
+      - ``HyphenIntegrityError`` (first occurrence per chunk):
+        backoff 0, fixed tag ``"hyphen_integrity_violation"``.
+      - ``ProviderTransientError`` (transport): backoff = attempt * 2.
+      - other ``ValueError`` / ``JSONDecodeError`` (malformed LLM
+        output): backoff = attempt.
+
+    Anything else (or a second hyphen-integrity violation in the same
+    chunk) is non-retryable from THIS decision's standpoint — the
+    caller short-circuits to the OCR fallback.
+
+    Caller passes ``sanitised_msg`` (already run through
+    ``sanitize_error``) so we don't re-sanitise here.
+    """
+    is_hyphen_violation = isinstance(exc, HyphenIntegrityError)
+    is_transient_http = isinstance(exc, ProviderTransientError)
+    # A repeated HyphenIntegrityError on the same chunk falls into the
+    # LLM-output-error path (linear backoff): the per-chunk latch only
+    # exempts the FIRST occurrence; subsequent ones are treated like
+    # any other malformed LLM output.
+    is_llm_output_error = isinstance(exc, (ValueError, json.JSONDecodeError))
+
+    if is_hyphen_violation and not hyphen_already_seen:
+        return _RetryDecision(
+            is_retryable=True,
+            backoff=0,
+            error_tag="hyphen_integrity_violation",
+            is_hyphen_violation=True,
+        )
+    if is_transient_http:
+        return _RetryDecision(
+            is_retryable=True,
+            backoff=attempt * 2,
+            error_tag=sanitised_msg[:120],
+            is_hyphen_violation=False,
+        )
+    if is_llm_output_error:
+        return _RetryDecision(
+            is_retryable=True,
+            backoff=attempt,
+            error_tag=sanitised_msg[:120],
+            is_hyphen_violation=False,
+        )
+    return _RetryDecision(
+        is_retryable=False,
+        backoff=0,
+        error_tag=sanitised_msg[:120],
+        is_hyphen_violation=False,
+    )
+
+
 def _build_hyphen_pairs(lines: list[LineManifest]) -> dict[str, str]:
     """Return PART1↔PART2 mapping (bidirectional) for lines in the chunk."""
     pairs: dict[str, str] = {}
@@ -157,8 +265,14 @@ def _reconcile_one_pair(
     text_by_id: dict[str, str],
     *,
     is_forward: bool,
-) -> None:
-    """Apply reconcile_hyphen_pair and write results back onto the manifests."""
+) -> str:
+    """Apply reconcile_hyphen_pair and write results back onto the manifests.
+
+    Returns the outcome classification produced by
+    ``classify_reconcile_outcome``: ``"coherent"`` / ``"fallback"`` /
+    ``"neutralised"``. The pipeline aggregates these into the per-job
+    ReconcileMetrics surfaced on the reconcile_stats observability event.
+    """
     corrected_p2 = text_by_id.get(part2.line_id, part2.ocr_text)
 
     if is_forward:
@@ -180,6 +294,16 @@ def _reconcile_one_pair(
             corrected_p2,
         )
 
+    outcome = classify_reconcile_outcome(
+        lm.ocr_text,
+        part2.ocr_text,
+        corrected_p1,
+        corrected_p2,
+        final_p1,
+        final_p2,
+        subs,
+    )
+
     lm.corrected_text = final_p1
     lm.status = LineStatus.CORRECTED
     part2.corrected_text = final_p2
@@ -190,6 +314,8 @@ def _reconcile_one_pair(
         lm.hyphen_forward_subs_content = subs
     else:
         lm.hyphen_subs_content = subs
+
+    return outcome
 
 
 @dataclass
@@ -206,6 +332,7 @@ class CorrectionResult:
     retry_count: int
     fallback_count: int
     traces: dict[str, LineTrace]
+    reconcile_metrics: ReconcileMetrics
 
 
 class CorrectionPipeline:
@@ -232,6 +359,16 @@ class CorrectionPipeline:
         # Counters reset on every call to run()
         self._retry_count = 0
         self._fallback_count = 0
+        self._reconcile_metrics = ReconcileMetrics()
+
+    def _record_reconcile_outcome(self, outcome: str) -> None:
+        """Bump the per-job ReconcileMetrics counter for a single pair."""
+        if outcome == "coherent":
+            self._reconcile_metrics.coherent += 1
+        elif outcome == "fallback":
+            self._reconcile_metrics.fallback += 1
+        elif outcome == "neutralised":
+            self._reconcile_metrics.neutralised += 1
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -257,6 +394,7 @@ class CorrectionPipeline:
         run_id = run_id or str(uuid.uuid4())
         self._retry_count = 0
         self._fallback_count = 0
+        self._reconcile_metrics = ReconcileMetrics()
 
         total_hyphen_pairs = sum(
             sum(
@@ -268,7 +406,7 @@ class CorrectionPipeline:
         )
 
         self.observer.on_event(
-            "document_parsed",
+            PipelineEventType.DOCUMENT_PARSED,
             {
                 "total_pages": document_manifest.total_pages,
                 "total_lines": document_manifest.total_lines,
@@ -339,6 +477,7 @@ class CorrectionPipeline:
             retry_count=self._retry_count,
             fallback_count=self._fallback_count,
             traces=traces,
+            reconcile_metrics=self._reconcile_metrics,
         )
 
     # ------------------------------------------------------------------
@@ -364,7 +503,7 @@ class CorrectionPipeline:
             if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
         )
         self.observer.on_event(
-            "page_started",
+            PipelineEventType.PAGE_STARTED,
             {
                 "page_id": page.page_id,
                 "page_index": page.page_index,
@@ -376,7 +515,7 @@ class CorrectionPipeline:
         plan = plan_page(page, document_id, self.config)
 
         self.observer.on_event(
-            "chunk_planned",
+            PipelineEventType.CHUNK_PLANNED,
             {
                 "page_id": page.page_id,
                 "chunk_count": len(plan.chunks),
@@ -404,7 +543,7 @@ class CorrectionPipeline:
                 # ADR-006: pipeline does not log directly; emit an
                 # event the host application can log/trace.
                 self.observer.on_event(
-                    "chunk_error",
+                    PipelineEventType.CHUNK_ERROR,
                     {
                         "chunk_id": chunk.chunk_id,
                         "message": str(exc)[:200],
@@ -420,7 +559,7 @@ class CorrectionPipeline:
             if lm.corrected_text is not None and lm.corrected_text != lm.ocr_text
         )
         self.observer.on_event(
-            "page_completed",
+            PipelineEventType.PAGE_COMPLETED,
             {
                 "page_id": page.page_id,
                 "page_index": page.page_index,
@@ -455,7 +594,7 @@ class CorrectionPipeline:
         all_lines_by_id = line_by_id
 
         self.observer.on_event(
-            "chunk_started",
+            PipelineEventType.CHUNK_STARTED,
             {
                 "chunk_id": chunk.chunk_id,
                 "granularity": chunk.granularity.value,
@@ -463,13 +602,127 @@ class CorrectionPipeline:
             },
         )
 
+        response = await self._call_with_retry(
+            chunk=chunk,
+            chunk_lines=chunk_lines,
+            hyphen_pairs=hyphen_pairs,
+            all_lines_by_id=all_lines_by_id,
+            api_key=api_key,
+            model=model,
+            traces=traces,
+        )
+        if response is None:
+            # All attempts exhausted; _call_with_retry already applied
+            # the OCR fallback and emitted the warning event.
+            return 0
+
+        text_by_id: dict[str, str] = {
+            o.line_id: o.corrected_text for o in response.lines
+        }
+
+        reconciled_count = self._reconcile_chunk_hyphens(
+            chunk_id=chunk.chunk_id,
+            chunk_lines=chunk_lines,
+            text_by_id=text_by_id,
+            line_by_id=line_by_id,
+            cross_page_partners=cross_page_partners,
+        )
+        self._apply_line_acceptance(
+            chunk_lines=chunk_lines,
+            text_by_id=text_by_id,
+            all_lines_by_id=all_lines_by_id,
+            traces=traces,
+        )
+        self._finalize_chunk_traces(
+            chunk_lines=chunk_lines,
+            traces=traces,
+        )
+
+        self.observer.on_event(
+            PipelineEventType.CHUNK_COMPLETED,
+            {
+                "chunk_id": chunk.chunk_id,
+                "line_count": len(chunk_lines),
+                "hyphen_pairs_reconciled": reconciled_count,
+            },
+        )
+        return reconciled_count
+
+    def _apply_chunk_fallback(
+        self,
+        *,
+        chunk: ChunkRequest,
+        chunk_lines: list[LineManifest],
+        traces: dict[str, LineTrace] | None,
+        sanitised_msg: str,
+    ) -> None:
+        """Revert every line in the chunk to its OCR text and emit a
+        ``warning`` event. Mutates ``corrected_text`` / ``status`` /
+        line traces. Called once the retry loop exhausts its budget or
+        hits a non-retryable error.
+
+        The pipeline-level ``_fallback_count`` is bumped by the caller,
+        mirroring how ``_retry_count`` is incremented at the retry
+        call site — both counters are pipeline-orchestration state, not
+        chunk-level side effects.
+        """
+        self.observer.on_event(
+            PipelineEventType.WARNING,
+            {
+                "chunk_id": chunk.chunk_id,
+                "message": f"Fallback to OCR source: {sanitised_msg[:120]}",
+            },
+        )
+        for lm in chunk_lines:
+            lm.corrected_text = lm.ocr_text
+            lm.status = LineStatus.FALLBACK
+            _set_trace(
+                traces,
+                lm,
+                projected_text=lm.ocr_text,
+                validation_status="fallback",
+                fallback_reason=f"all_attempts_exhausted: {sanitised_msg[:120]}",
+            )
+
+    async def _call_with_retry(
+        self,
+        *,
+        chunk: ChunkRequest,
+        chunk_lines: list[LineManifest],
+        hyphen_pairs: dict[str, str],
+        all_lines_by_id: dict[str, LineManifest],
+        api_key: str,
+        model: str,
+        traces: dict[str, LineTrace] | None,
+    ) -> LLMResponse | None:
+        """Call the LLM provider with retries; return a validated response.
+
+        On success: returns the validated ``LLMResponse``.
+        On exhaustion: applies the OCR fallback to every line in
+        ``chunk_lines`` (mutates ``corrected_text`` / ``status`` /
+        ``LineTrace``), emits a ``warning`` event, increments
+        ``self._fallback_count`` (at the call site, mirroring
+        ``self._retry_count``) and returns ``None``. The caller must
+        short-circuit on ``None``.
+
+        Retry strategy (pinned by ``test_pipeline_classifies_*`` in the
+        backend and ``test_retry_classification`` in the contract
+        suite):
+          - Up to ``DEFAULT_MAX_ATTEMPTS`` attempts.
+          - Temperature ramp 0.0 → 0.3 → 0.5, pinned at 0.0 after a
+            ``HyphenIntegrityError`` (which suggests the LLM
+            mis-handled the hyphen pair — lower temperature is more
+            likely to stick to the source).
+          - Backoff: 0 s for hyphen violations (first occurrence),
+            ``attempt * 2`` for transient HTTP class names,
+            ``attempt`` for any other ValueError / JSONDecodeError.
+            Each retry emits a ``retry`` SSE event with the
+            classification tag.
+        """
         max_attempts = self.DEFAULT_MAX_ATTEMPTS
         hyphen_violation = False
 
         for attempt in range(1, max_attempts + 1):
-            # Retry temperature strategy: deterministic first, then more
-            # diverse to escape bad patterns. Hyphen violations always
-            # at 0.0 for maximum precision.
             if hyphen_violation or attempt == 1:
                 temperature = 0.0
             elif attempt == 2:
@@ -479,14 +732,11 @@ class CorrectionPipeline:
 
             enriched = enrich_chunk_lines(chunk_lines, all_lines_by_id)
 
-            if traces is not None:
-                enriched_by_id = {e.line_id: e for e in enriched}
-                for lm in chunk_lines:
-                    t = traces.get(_trace_key(lm))
-                    if t is not None:
-                        ei = enriched_by_id.get(lm.line_id)
-                        if ei is not None:
-                            t.model_input_text = ei.ocr_text
+            enriched_by_id = {e.line_id: e for e in enriched}
+            for lm in chunk_lines:
+                ei = enriched_by_id.get(lm.line_id)
+                if ei is not None:
+                    _set_trace(traces, lm, model_input_text=ei.ocr_text)
 
             payload = LLMUserPayload(
                 granularity=chunk.granularity,
@@ -507,19 +757,18 @@ class CorrectionPipeline:
                     temperature=temperature,
                 )
 
-                if traces is not None:
-                    lid_to_tkey = {lm.line_id: _trace_key(lm) for lm in chunk_lines}
-                    raw_lines = raw.get("lines", []) if isinstance(raw, dict) else []
-                    for rl in raw_lines:
-                        lid = rl.get("line_id", "") if isinstance(rl, dict) else ""
-                        rt = (
-                            rl.get("corrected_text", "") if isinstance(rl, dict) else ""
+                lm_by_id = {lm.line_id: lm for lm in chunk_lines}
+                raw_lines = raw.get("lines", []) if isinstance(raw, dict) else []
+                for rl in raw_lines:
+                    if not isinstance(rl, dict):
+                        continue
+                    target = lm_by_id.get(rl.get("line_id", ""))
+                    if target is not None:
+                        _set_trace(
+                            traces,
+                            target,
+                            model_corrected_text=rl.get("corrected_text", ""),
                         )
-                        tkey = lid_to_tkey.get(lid)
-                        if tkey:
-                            t = traces.get(tkey)
-                            if t is not None:
-                                t.model_corrected_text = rt
 
                 hyphen_subs: dict[str, str] = {}
                 for lm in chunk_lines:
@@ -538,117 +787,47 @@ class CorrectionPipeline:
                     {lm.line_id: lm.ocr_text for lm in chunk_lines},
                     hyphen_subs if hyphen_subs else None,
                 )
-                hyphen_violation = False
+                return response
 
             except Exception as exc:
                 msg = sanitize_error(str(exc), api_key)
-                # Classify the exception to pick the right policy.
-                # alto-core stays http-library-agnostic — we duck-type
-                # on class name rather than importing httpx. A future
-                # cleanup would define ProviderTransientError in
-                # alto_core.protocols.provider for providers to raise.
-                exc_class = type(exc).__name__
-                is_hyphen_violation = isinstance(
-                    exc, ValueError
-                ) and "hyphen_integrity_violation" in str(exc)
-                is_transient_http = exc_class in {
-                    "HTTPStatusError",
-                    "TimeoutException",
-                    "NetworkError",
-                    "ConnectError",
-                    "RemoteProtocolError",
-                    "ReadTimeout",
-                }
-                # LLM returned malformed JSON or failed schema validation —
-                # likely transient (next attempt may produce clean output).
-                is_llm_output_error = (
-                    isinstance(exc, (ValueError, json.JSONDecodeError))
-                    and not is_hyphen_violation
-                )
-                is_retryable = (
-                    is_hyphen_violation or is_transient_http or is_llm_output_error
+                decision = _classify_retry(
+                    exc=exc,
+                    sanitised_msg=msg,
+                    attempt=attempt,
+                    hyphen_already_seen=hyphen_violation,
                 )
 
-                if attempt < max_attempts and is_retryable:
-                    if is_hyphen_violation and not hyphen_violation:
+                if attempt < max_attempts and decision.is_retryable:
+                    if decision.is_hyphen_violation:
                         hyphen_violation = True
-                        backoff = 0
-                        error_tag: str = "hyphen_integrity_violation"
-                    elif is_transient_http:
-                        backoff = attempt * 2
-                        error_tag = msg[:120]
-                    else:  # is_llm_output_error
-                        backoff = attempt
-                        error_tag = msg[:120]
-
-                    if backoff > 0:
-                        await asyncio.sleep(backoff)
+                    if decision.backoff > 0:
+                        await asyncio.sleep(decision.backoff)
                     self.observer.on_event(
-                        "retry",
+                        PipelineEventType.RETRY,
                         {
                             "chunk_id": chunk.chunk_id,
                             "attempt": attempt,
-                            "error": error_tag,
+                            "error": decision.error_tag,
                         },
                     )
                     self._retry_count += 1
                     continue
 
-                # All attempts exhausted → fallback (ADR-006: no log here,
-                # the warning event carries the same information for hosts).
-                self.observer.on_event(
-                    "warning",
-                    {
-                        "chunk_id": chunk.chunk_id,
-                        "message": f"Fallback to OCR source: {msg[:120]}",
-                    },
+                # Attempts exhausted (or non-retryable error class) →
+                # OCR fallback. ADR-006: no log here, the warning event
+                # carries the same information for hosts.
+                self._apply_chunk_fallback(
+                    chunk=chunk,
+                    chunk_lines=chunk_lines,
+                    traces=traces,
+                    sanitised_msg=msg,
                 )
-                for lm in chunk_lines:
-                    lm.corrected_text = lm.ocr_text
-                    lm.status = LineStatus.FALLBACK
-                    if traces is not None:
-                        t = traces.get(_trace_key(lm))
-                        if t is not None:
-                            t.projected_text = lm.ocr_text
-                            t.validation_status = "fallback"
-                            t.fallback_reason = f"all_attempts_exhausted: {msg[:120]}"
                 self._fallback_count += 1
-                return 0
+                return None
 
-            # --- Success: apply corrections ---
-            text_by_id: dict[str, str] = {
-                o.line_id: o.corrected_text for o in response.lines
-            }
-
-            reconciled_count = self._reconcile_chunk_hyphens(
-                chunk_id=chunk.chunk_id,
-                chunk_lines=chunk_lines,
-                text_by_id=text_by_id,
-                line_by_id=line_by_id,
-                cross_page_partners=cross_page_partners,
-            )
-            self._apply_line_acceptance(
-                chunk_lines=chunk_lines,
-                text_by_id=text_by_id,
-                all_lines_by_id=all_lines_by_id,
-                traces=traces,
-            )
-            self._finalize_chunk_traces(
-                chunk_lines=chunk_lines,
-                traces=traces,
-            )
-
-            self.observer.on_event(
-                "chunk_completed",
-                {
-                    "chunk_id": chunk.chunk_id,
-                    "line_count": len(chunk_lines),
-                    "hyphen_pairs_reconciled": reconciled_count,
-                },
-            )
-            return reconciled_count
-
-        return 0
+        # Unreachable: every iteration either returns or continues.
+        return None
 
     # ------------------------------------------------------------------
     # Chunk helpers extracted from _run_chunk (audit A3)
@@ -684,7 +863,7 @@ class CorrectionPipeline:
             )
             if part2 is None:
                 self.observer.on_event(
-                    "hyphen_partner_missing",
+                    PipelineEventType.HYPHEN_PARTNER_MISSING,
                     {
                         "chunk_id": chunk_id,
                         "line_id": lm.line_id,
@@ -696,7 +875,8 @@ class CorrectionPipeline:
             part2_key = (part2.page_id, part2.line_id)
             if part2_key in processed_part2:
                 continue
-            _reconcile_one_pair(lm, part2, text_by_id, is_forward=False)
+            outcome = _reconcile_one_pair(lm, part2, text_by_id, is_forward=False)
+            self._record_reconcile_outcome(outcome)
             processed_part2.add(part2_key)
             reconciled_count += 1
 
@@ -712,7 +892,7 @@ class CorrectionPipeline:
             )
             if part2 is None:
                 self.observer.on_event(
-                    "hyphen_partner_missing",
+                    PipelineEventType.HYPHEN_PARTNER_MISSING,
                     {
                         "chunk_id": chunk_id,
                         "line_id": lm.line_id,
@@ -724,7 +904,8 @@ class CorrectionPipeline:
             part2_key = (part2.page_id, part2.line_id)
             if part2_key in processed_part2:
                 continue
-            _reconcile_one_pair(lm, part2, text_by_id, is_forward=True)
+            outcome = _reconcile_one_pair(lm, part2, text_by_id, is_forward=True)
+            self._record_reconcile_outcome(outcome)
             processed_part2.add(part2_key)
             reconciled_count += 1
 
@@ -762,10 +943,7 @@ class CorrectionPipeline:
             ):
                 lm.corrected_text = lm.ocr_text
                 lm.status = LineStatus.FALLBACK
-                if traces is not None:
-                    t = traces.get(_trace_key(lm))
-                    if t is not None:
-                        t.fallback_reason = "orphan_hyphen_completed"
+                _set_trace(traces, lm, fallback_reason="orphan_hyphen_completed")
                 continue
 
             prev_ocr = (
@@ -784,10 +962,7 @@ class CorrectionPipeline:
                 lm.status = LineStatus.CORRECTED
             else:
                 lm.status = LineStatus.FALLBACK
-                if traces is not None:
-                    t = traces.get(_trace_key(lm))
-                    if t is not None:
-                        t.fallback_reason = result.reason
+                _set_trace(traces, lm, fallback_reason=result.reason)
 
     def _finalize_chunk_traces(
         self,
@@ -813,18 +988,21 @@ class CorrectionPipeline:
                 lm.corrected_text = lm.ocr_text
                 lm.status = LineStatus.FALLBACK
 
-        if traces is None:
-            return
         for lm in chunk_lines:
-            t = traces.get(_trace_key(lm))
-            if t is None:
-                continue
-            t.projected_text = (
-                lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
+            _set_trace(
+                traces,
+                lm,
+                projected_text=(
+                    lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
+                ),
+                validation_status=lm.status.value,
             )
-            t.validation_status = lm.status.value
-            if lm.line_id in dup_reverts and not t.fallback_reason:
-                t.fallback_reason = dup_reverts[lm.line_id]
+            # Adjacent-duplicate revert: only stamp the reason if no earlier
+            # fallback path (e.g. orphan_hyphen_completed) already pinned one.
+            if traces is not None and lm.line_id in dup_reverts:
+                trace = traces.get(_trace_key(lm))
+                if trace is not None and not trace.fallback_reason:
+                    trace.fallback_reason = dup_reverts[lm.line_id]
 
     # ------------------------------------------------------------------
     # Output writing (rewriter + trace assembly)
@@ -848,7 +1026,7 @@ class CorrectionPipeline:
             if not pages_for_file:
                 continue
 
-            xml_bytes, _metrics, rewriter_paths = rewrite_alto_file(
+            xml_bytes, metrics, rewriter_paths = rewrite_alto_file(
                 xml_path,
                 pages_for_file,
                 provider_name,
@@ -857,6 +1035,19 @@ class CorrectionPipeline:
             self.output_writer.write_corrected(
                 source_stem=xml_path.stem,
                 xml_bytes=xml_bytes,
+            )
+            # rewriter_stats observability event — pure read-only diagnostic
+            # surfacing how each line classified (UNTOUCHED / SUBS_ONLY /
+            # FAST_PATH / SLOW_PATH). Zero impact on the corrected XML.
+            self.observer.on_event(
+                PipelineEventType.REWRITER_STATS,
+                {
+                    "source_stem": xml_path.stem,
+                    "untouched": metrics.untouched,
+                    "subs_only": metrics.subs_only,
+                    "fast_path": metrics.fast_path,
+                    "slow_path": metrics.slow_path,
+                },
             )
 
             lid_to_tkey: dict[str, str] = {}

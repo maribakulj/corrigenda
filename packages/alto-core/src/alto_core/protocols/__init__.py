@@ -15,12 +15,16 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
-from alto_core.protocols.provider import BaseProvider  # re-export
+from alto_core.protocols.provider import (  # re-export
+    BaseProvider,
+    ProviderTransientError,
+)
 
 __all__ = [
     "BaseProvider",
     "OutputWriter",
     "PipelineObserver",
+    "ProviderTransientError",
 ]
 
 

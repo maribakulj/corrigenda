@@ -789,3 +789,233 @@ def test_google_provider_source_does_not_pass_api_key_via_params():
         f"google_provider.py still passes api_key via URL params: {offenders}. "
         f"Use headers={{'x-goog-api-key': api_key}} instead."
     )
+
+
+# ---------------------------------------------------------------------------
+# `_wrap_if_transient` — providers wrap httpx transport failures as
+# ProviderTransientError so the pipeline's retry classifier can route them
+# to exponential backoff without depending on httpx types. The policy
+# split: 5xx, 429, network/timeout/protocol → wrapped (retry); 4xx-non-429
+# and non-httpx exceptions → pass through (caller's bug, no upstream to
+# heal). These tests pin the policy and the wiring at the two call sites
+# (`call_llm`, `get_json`).
+# ---------------------------------------------------------------------------
+
+
+def _http_status_error(status: int) -> httpx.HTTPStatusError:
+    req = httpx.Request("POST", "https://api.example.com/v1/chat")
+    resp = httpx.Response(status, request=req)
+    return httpx.HTTPStatusError(f"HTTP {status}", request=req, response=resp)
+
+
+@pytest.mark.parametrize(
+    ("exc_factory", "should_wrap", "label"),
+    [
+        # 4xx (non-429) — client errors that don't heal on retry.
+        # Pass through unchanged so the classifier short-circuits.
+        (lambda: _http_status_error(400), False, "400 Bad Request"),
+        (lambda: _http_status_error(401), False, "401 Unauthorized"),
+        (lambda: _http_status_error(403), False, "403 Forbidden"),
+        (lambda: _http_status_error(404), False, "404 Not Found"),
+        (lambda: _http_status_error(422), False, "422 Unprocessable"),
+        # 429 — rate limit, MAY heal → wrapped → retried with backoff.
+        (lambda: _http_status_error(429), True, "429 Too Many Requests"),
+        # 5xx — upstream blip, MAY heal → wrapped.
+        (lambda: _http_status_error(500), True, "500 Internal Server Error"),
+        (lambda: _http_status_error(502), True, "502 Bad Gateway"),
+        (lambda: _http_status_error(503), True, "503 Service Unavailable"),
+        (lambda: _http_status_error(504), True, "504 Gateway Timeout"),
+        # Transport-level (no status code) — wrapped.
+        (lambda: httpx.TimeoutException("read timeout"), True, "TimeoutException"),
+        (lambda: httpx.ConnectError("connection refused"), True, "ConnectError"),
+        (lambda: httpx.RemoteProtocolError("disconnected"), True, "RemoteProtocolError"),
+        # Non-httpx exceptions — caller's responsibility, pass through.
+        (lambda: ValueError("malformed JSON"), False, "ValueError"),
+        (lambda: RuntimeError("internal"), False, "RuntimeError"),
+    ],
+)
+def test_wrap_if_transient_classifies_correctly(exc_factory, should_wrap, label):
+    """Pin the policy of ``_wrap_if_transient``: which exceptions are
+    wrapped as ``ProviderTransientError`` (retryable transport failure)
+    vs. passed through unchanged (caller-side bug, won't heal on retry).
+
+    A future "let's just wrap everything httpx-y" refactor that removed
+    the 4xx exception would silently re-introduce the 3-retry waste on
+    permanent client errors (bad keys, wrong models). A refactor that
+    forgot to wrap 5xx would break exponential backoff on upstream
+    blips. Either regression is caught here.
+    """
+    from alto_core.protocols.provider import ProviderTransientError
+
+    from app.providers.base import _wrap_if_transient
+
+    exc = exc_factory()
+    result = _wrap_if_transient(exc)
+
+    if should_wrap:
+        assert isinstance(result, ProviderTransientError), (
+            f"{label}: expected ProviderTransientError, "
+            f"got {type(result).__name__}"
+        )
+        assert result is not exc, f"{label}: wrapped result must be a new exception"
+    else:
+        assert result is exc, (
+            f"{label}: expected pass-through (same object), "
+            f"got {type(result).__name__}"
+        )
+        assert not isinstance(result, ProviderTransientError), (
+            f"{label}: must NOT be wrapped as ProviderTransientError"
+        )
+
+
+@pytest.mark.asyncio
+async def test_call_llm_wraps_5xx_as_provider_transient_error():
+    """Wiring — ``call_llm`` must call ``_wrap_if_transient`` on the
+    HTTPStatusError raised by ``raise_for_status()``. Without this
+    wiring the pipeline would see a raw HTTPStatusError on a 503 and
+    short-circuit to fallback (skipping the exponential-backoff retry
+    that 5xx is supposed to get).
+    """
+    from alto_core.protocols.provider import ProviderTransientError
+
+    from app.providers.base import call_llm
+
+    mock_resp = _make_response(503, {"error": "upstream blip"})
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(return_value=mock_resp)
+        with pytest.raises(ProviderTransientError):
+            await call_llm(url="https://api.example.com", headers={}, body={})
+
+
+@pytest.mark.asyncio
+async def test_call_llm_passes_4xx_through_as_raw_http_status_error():
+    """Wiring symmetric — ``call_llm`` must NOT wrap 4xx-non-429. The
+    raw ``HTTPStatusError`` surfaces so the classifier's isinstance
+    chain misses every retryable branch and the chunk falls back on
+    first failure (the contract pinned by
+    ``test_pipeline_classifies_client_http_4xx_as_non_retryable``).
+    """
+    from alto_core.protocols.provider import ProviderTransientError
+
+    from app.providers.base import call_llm
+
+    mock_resp = _make_response(401, {"error": "bad key"})
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(return_value=mock_resp)
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await call_llm(url="https://api.example.com", headers={}, body={})
+        # Critical: the raised exception must NOT be a ProviderTransientError.
+        assert not isinstance(exc_info.value, ProviderTransientError), (
+            "4xx-non-429 must NOT be wrapped; "
+            "wrapping would restore the 3-retry waste on bad keys."
+        )
+        # And the status code is preserved on the original exception.
+        assert exc_info.value.response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_json_wraps_5xx_as_provider_transient_error():
+    """Wiring — ``get_json`` (used by every provider's ``list_models``)
+    must wrap 5xx the same way ``call_llm`` does. Pre-fix several
+    ``list_models`` paths inlined their own try/except and didn't
+    centralise the wrapping; this test pins that the helper now does
+    it on behalf of all callers.
+    """
+    from alto_core.protocols.provider import ProviderTransientError
+
+    from app.providers.base import get_json
+
+    mock_resp = _make_response(503, {"error": "upstream blip"})
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.get = AsyncMock(return_value=mock_resp)
+        with pytest.raises(ProviderTransientError):
+            await get_json(url="https://api.example.com/models")
+
+
+# ---------------------------------------------------------------------------
+# Preserved attributes — when ProviderTransientError wraps an HTTPStatusError
+# the originating status code must be available on the wrapped exception
+# without parsing the message (so observers can route 429 vs 503 vs 500
+# without regex tricks). Transport-level failures (timeout, network) carry
+# no status_code. The full underlying exception remains reachable via
+# ``__cause__`` for callers that need ``.response.headers`` etc.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+def test_wrap_preserves_status_code_on_http_errors(status):
+    """``status_code`` is set when the wrapped exception was an
+    HTTPStatusError. Without this attribute an alerting rule like
+    'page on 5xx, suppress on 429' would have to parse the exception
+    message — fragile."""
+    from alto_core.protocols.provider import ProviderTransientError
+
+    from app.providers.base import _wrap_if_transient
+
+    exc = _http_status_error(status)
+    wrapped = _wrap_if_transient(exc)
+    assert isinstance(wrapped, ProviderTransientError)
+    assert wrapped.status_code == status
+
+
+@pytest.mark.parametrize(
+    "exc_factory",
+    [
+        lambda: httpx.TimeoutException("read timeout"),
+        lambda: httpx.ConnectError("connection refused"),
+        lambda: httpx.RemoteProtocolError("disconnected"),
+    ],
+)
+def test_wrap_leaves_status_code_none_on_transport_errors(exc_factory):
+    """Transport-level failures don't have an HTTP status — the
+    attribute must be ``None`` so observers can distinguish 'connection
+    refused' from 'server returned 503'. A bug that set status_code
+    to e.g. 0 on transport errors would corrupt alerting rules."""
+    from alto_core.protocols.provider import ProviderTransientError
+
+    from app.providers.base import _wrap_if_transient
+
+    wrapped = _wrap_if_transient(exc_factory())
+    assert isinstance(wrapped, ProviderTransientError)
+    assert wrapped.status_code is None
+
+
+@pytest.mark.asyncio
+async def test_call_llm_wrapped_5xx_exposes_status_code_and_original_via_cause():
+    """End-to-end — through ``call_llm`` the raised
+    ProviderTransientError carries the 503 ``status_code`` directly,
+    and the original ``HTTPStatusError`` is accessible via ``__cause__``
+    (chained by ``raise wrapped from exc``). The chain gives callers
+    the response headers (e.g., Retry-After on 429) without exposing
+    httpx in the protocol surface."""
+    from alto_core.protocols.provider import ProviderTransientError
+
+    from app.providers.base import call_llm
+
+    mock_resp = _make_response(503, {"error": "blip"})
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(return_value=mock_resp)
+        with pytest.raises(ProviderTransientError) as exc_info:
+            await call_llm(url="https://api.example.com", headers={}, body={})
+
+    err = exc_info.value
+    assert err.status_code == 503
+    # __cause__ chain preserves the original httpx exception for any
+    # caller that needs response headers, request URL, etc.
+    assert isinstance(err.__cause__, httpx.HTTPStatusError)
+    assert err.__cause__.response.status_code == 503
+
+
+def test_provider_transient_error_default_status_code_is_none():
+    """Backward compatibility — existing call sites that build
+    ``ProviderTransientError("msg")`` without a status_code still
+    work; the attribute defaults to None."""
+    from alto_core.protocols.provider import ProviderTransientError
+
+    err = ProviderTransientError("plain message")
+    assert err.status_code is None
+    assert str(err) == "plain message"

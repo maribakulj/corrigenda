@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from app.alto.hyphenation import (
+from alto_core.alto.hyphenation import (
     enrich_chunk_lines,
     reconcile_hyphen_pair,
     should_stay_in_same_chunk,
 )
+
 from app.schemas import Coords, HyphenRole, LineManifest
 
 # ---------------------------------------------------------------------------
