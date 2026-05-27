@@ -230,8 +230,18 @@ jobs:
       - name: bandit (static analysis)
         working-directory: backend
         run: bandit -r app -c pyproject.toml
-      - name: pip-audit (dependency CVEs in resolved env)
-        run: pip-audit --strict
+      - name: pip-audit (dependency CVEs)
+        # Audit from ``backend/requirements.txt`` rather than the
+        # resolved env. The previous resolved-env approach tried to
+        # audit alto-core (editable sibling package, not on PyPI) and
+        # failed in ``--strict`` mode — ``--skip-editable`` still
+        # surfaces the failure as a strict-mode collection error. The
+        # requirements file no longer contains editable lines (alto-core
+        # is installed separately upstream of this job), so the file-
+        # based audit cleanly resolves and audits all backend deps,
+        # transitive deps included, against the PyPI advisory DB.
+        working-directory: backend
+        run: pip-audit -r requirements.txt --strict
 
   frontend:
     runs-on: ubuntu-latest
