@@ -710,6 +710,75 @@ async def test_pipeline_classifies_llm_output_error_with_linear_backoff(
         )
 
 
+@pytest.mark.asyncio
+async def test_pipeline_classifies_client_http_4xx_as_non_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A raw ``httpx.HTTPStatusError`` with a 4xx status (other than 429)
+    is NON-retryable: zero backoff, zero retry events, immediate fallback.
+
+    Contract: ``_wrap_if_transient`` in ``backend/app/providers/base.py``
+    intentionally leaves 4xx-non-429 errors un-wrapped — bad keys (401),
+    forbidden models (403), wrong endpoints (404), schema rejections (422)
+    don't heal on retry, so retrying just burns quota and adds latency.
+    The classifier sees the raw ``HTTPStatusError``: no ``isinstance``
+    branch matches (it's neither ``ProviderTransientError`` nor
+    ``ValueError``/``JSONDecodeError``), so ``is_retryable=False`` and the
+    chunk falls back to OCR source on the first failure.
+
+    This is a deliberate departure from the pre-refactor behavior, where
+    a class-name allowlist treated every ``HTTPStatusError`` as transient
+    and wasted 3 attempts on permanent client errors. The pin makes the
+    contract explicit so a future "retry everything" refactor doesn't
+    silently restore that waste.
+    """
+    import httpx
+
+    sleeps = await _capture_sleeps(monkeypatch)
+    store, job_id = _make_store_and_job()
+    queue = store.subscribe(job_id)
+
+    def _make_401() -> httpx.HTTPStatusError:
+        req = httpx.Request("POST", "https://api.example.com/v1/chat")
+        resp = httpx.Response(401, request=req)
+        return httpx.HTTPStatusError("401 Unauthorized", request=req, response=resp)
+
+    provider = _AlwaysFailProvider(_make_401)
+    await _run(job_id, provider, tmp_path, store)
+
+    # Pin 1: zero backoff — the classifier short-circuits before
+    # ``await asyncio.sleep(decision.backoff)`` runs.
+    assert sleeps == [], (
+        f"4xx HTTPStatusError should NOT retry; got {sleeps!r} backoff(s)"
+    )
+
+    events: list[SSEEvent] = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+
+    # Pin 2: zero retry events emitted on any chunk.
+    retries = [e for e in events if e.event == "retry"]
+    assert retries == [], (
+        f"4xx HTTPStatusError should emit zero retry events; got {len(retries)}"
+    )
+
+    # Pin 3: fallback path was taken — job still completes, but every
+    # chunk fell back to OCR source.
+    job = store.get_job(job_id)
+    assert job is not None
+    assert job.status.value == "completed"
+    assert job.fallbacks >= 1, "expected fallback path to be taken on 4xx"
+
+    # Pin 4: exactly one provider call per chunk — no retries. The
+    # transient branch would yield 3*chunk_count calls; we want 1*.
+    chunk_starts = [e for e in events if e.event == "chunk_started"]
+    assert provider.call_count == len(chunk_starts), (
+        f"4xx should not retry; expected {len(chunk_starts)} calls "
+        f"(one per chunk), got {provider.call_count}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # T0b — event payload shape coverage
 # ---------------------------------------------------------------------------
