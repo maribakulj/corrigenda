@@ -536,13 +536,11 @@ class _AlwaysFailProvider:
         raise self._exception_factory()
 
 
-# Fake HTTP exception — pipeline duck-types on class name (see
-# correction_pipeline.py:554-561 for the allowlist), so the *class
-# name* must match exactly. Defining our own class avoids pulling
-# httpx into the test surface; the leading-underscore convention is
-# dropped on purpose since `__name__` is what the classifier reads.
-class HTTPStatusError(Exception):
-    pass
+# Transient HTTP exception used by the L4 classifier tests below.
+# The pipeline now routes on isinstance(exc, ProviderTransientError);
+# providers are responsible for wrapping their httpx errors before
+# re-raising. Tests raise the canonical type directly.
+from alto_core.protocols.provider import ProviderTransientError
 
 
 class _OneHyphenViolationThenOK:
@@ -656,19 +654,21 @@ async def test_pipeline_classifies_transient_http_with_exponential_backoff(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Roadmap L4 (T0a) — HTTPStatusError-shaped exceptions retry with
+    """Roadmap L4 (T0a) — ``ProviderTransientError`` retries with
     backoff = attempt * 2 (1→2s, 2→4s).
 
     Network / 5xx upstream issues recover on a timescale of seconds,
     so the pipeline backs off exponentially to give the upstream room
-    to heal. A bug in the duck-typing allowlist (e.g. removing
-    HTTPStatusError) would make this branch fall through to
-    is_llm_output_error and use linear backoff instead — caught here.
+    to heal. Providers wrap their httpx transport failures as
+    ``ProviderTransientError`` before re-raising; a bug in that
+    wrapping (or in the classifier's ``isinstance`` check) would make
+    this branch fall through to ``is_llm_output_error`` and use linear
+    backoff instead — caught here.
     """
     sleeps = await _capture_sleeps(monkeypatch)
     store, job_id = _make_store_and_job()
 
-    provider = _AlwaysFailProvider(lambda: HTTPStatusError("upstream 503"))
+    provider = _AlwaysFailProvider(lambda: ProviderTransientError("upstream 503"))
     await _run(job_id, provider, tmp_path, store)
 
     # 3 attempts → 2 retries → 2 backoffs. correction_pipeline.py:577-579

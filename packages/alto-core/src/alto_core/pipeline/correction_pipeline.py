@@ -36,7 +36,12 @@ from alto_core.alto.rewriter import extract_output_texts, rewrite_alto_file
 from alto_core.pipeline.chunk_planner import plan_page
 from alto_core.pipeline.line_acceptance import check_adjacent_duplicates, check_line
 from alto_core.pipeline.validator import HyphenIntegrityError, validate_llm_response
-from alto_core.protocols import BaseProvider, OutputWriter, PipelineObserver
+from alto_core.protocols import (
+    BaseProvider,
+    OutputWriter,
+    PipelineObserver,
+    ProviderTransientError,
+)
 from alto_core.protocols.provider import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 from alto_core.schemas import (
     ChunkPlannerConfig,
@@ -131,6 +136,81 @@ def _set_trace(
         return
     for name, value in fields.items():
         setattr(trace, name, value)
+
+
+@dataclass(frozen=True)
+class _RetryDecision:
+    """Pure result of classifying a retry-loop exception.
+
+    Decoupled from the retry loop so the classifier can be tested in
+    isolation (no chunk, no observer, no traces — just the exception
+    and the per-chunk hyphen latch).
+    """
+
+    is_retryable: bool
+    backoff: float
+    error_tag: str
+    is_hyphen_violation: bool
+
+
+def _classify_retry(
+    *,
+    exc: BaseException,
+    sanitised_msg: str,
+    attempt: int,
+    hyphen_already_seen: bool,
+) -> _RetryDecision:
+    """Decide what to do with an exception during the LLM retry loop.
+
+    Three retryable branches:
+      - ``HyphenIntegrityError`` (first occurrence per chunk):
+        backoff 0, fixed tag ``"hyphen_integrity_violation"``.
+      - ``ProviderTransientError`` (transport): backoff = attempt * 2.
+      - other ``ValueError`` / ``JSONDecodeError`` (malformed LLM
+        output): backoff = attempt.
+
+    Anything else (or a second hyphen-integrity violation in the same
+    chunk) is non-retryable from THIS decision's standpoint — the
+    caller short-circuits to the OCR fallback.
+
+    Caller passes ``sanitised_msg`` (already run through
+    ``sanitize_error``) so we don't re-sanitise here.
+    """
+    is_hyphen_violation = isinstance(exc, HyphenIntegrityError)
+    is_transient_http = isinstance(exc, ProviderTransientError)
+    # A repeated HyphenIntegrityError on the same chunk falls into the
+    # LLM-output-error path (linear backoff): the per-chunk latch only
+    # exempts the FIRST occurrence; subsequent ones are treated like
+    # any other malformed LLM output.
+    is_llm_output_error = isinstance(exc, (ValueError, json.JSONDecodeError))
+
+    if is_hyphen_violation and not hyphen_already_seen:
+        return _RetryDecision(
+            is_retryable=True,
+            backoff=0,
+            error_tag="hyphen_integrity_violation",
+            is_hyphen_violation=True,
+        )
+    if is_transient_http:
+        return _RetryDecision(
+            is_retryable=True,
+            backoff=attempt * 2,
+            error_tag=sanitised_msg[:120],
+            is_hyphen_violation=False,
+        )
+    if is_llm_output_error:
+        return _RetryDecision(
+            is_retryable=True,
+            backoff=attempt,
+            error_tag=sanitised_msg[:120],
+            is_hyphen_violation=False,
+        )
+    return _RetryDecision(
+        is_retryable=False,
+        backoff=0,
+        error_tag=sanitised_msg[:120],
+        is_hyphen_violation=False,
+    )
 
 
 def _build_hyphen_pairs(lines: list[LineManifest]) -> dict[str, str]:
@@ -568,6 +648,38 @@ class CorrectionPipeline:
         )
         return reconciled_count
 
+    def _apply_chunk_fallback(
+        self,
+        *,
+        chunk: ChunkRequest,
+        chunk_lines: list[LineManifest],
+        traces: dict[str, LineTrace] | None,
+        sanitised_msg: str,
+    ) -> None:
+        """Revert every line in the chunk to its OCR text and emit a
+        ``warning`` event. Mutates ``corrected_text`` / ``status`` /
+        line traces; bumps ``self._fallback_count``. Called once the
+        retry loop exhausts its budget or hits a non-retryable error.
+        """
+        self.observer.on_event(
+            PipelineEventType.WARNING,
+            {
+                "chunk_id": chunk.chunk_id,
+                "message": f"Fallback to OCR source: {sanitised_msg[:120]}",
+            },
+        )
+        for lm in chunk_lines:
+            lm.corrected_text = lm.ocr_text
+            lm.status = LineStatus.FALLBACK
+            _set_trace(
+                traces,
+                lm,
+                projected_text=lm.ocr_text,
+                validation_status="fallback",
+                fallback_reason=f"all_attempts_exhausted: {sanitised_msg[:120]}",
+            )
+        self._fallback_count += 1
+
     async def _call_with_retry(
         self,
         *,
@@ -674,76 +786,38 @@ class CorrectionPipeline:
 
             except Exception as exc:
                 msg = sanitize_error(str(exc), api_key)
-                # Classify the exception to pick the right policy.
-                # alto-core stays http-library-agnostic — we duck-type
-                # on transient HTTP class names rather than importing
-                # httpx. A future cleanup would define a
-                # ``ProviderTransientError`` in alto_core.protocols
-                # for providers to raise.
-                exc_class = type(exc).__name__
-                is_hyphen_violation = isinstance(exc, HyphenIntegrityError)
-                is_transient_http = exc_class in {
-                    "HTTPStatusError",
-                    "TimeoutException",
-                    "NetworkError",
-                    "ConnectError",
-                    "RemoteProtocolError",
-                    "ReadTimeout",
-                }
-                is_llm_output_error = (
-                    isinstance(exc, (ValueError, json.JSONDecodeError))
-                    and not is_hyphen_violation
-                )
-                is_retryable = (
-                    is_hyphen_violation or is_transient_http or is_llm_output_error
+                decision = _classify_retry(
+                    exc=exc,
+                    sanitised_msg=msg,
+                    attempt=attempt,
+                    hyphen_already_seen=hyphen_violation,
                 )
 
-                if attempt < max_attempts and is_retryable:
-                    if is_hyphen_violation and not hyphen_violation:
+                if attempt < max_attempts and decision.is_retryable:
+                    if decision.is_hyphen_violation:
                         hyphen_violation = True
-                        backoff = 0
-                        error_tag: str = "hyphen_integrity_violation"
-                    elif is_transient_http:
-                        backoff = attempt * 2
-                        error_tag = msg[:120]
-                    else:  # is_llm_output_error
-                        backoff = attempt
-                        error_tag = msg[:120]
-
-                    if backoff > 0:
-                        await asyncio.sleep(backoff)
+                    if decision.backoff > 0:
+                        await asyncio.sleep(decision.backoff)
                     self.observer.on_event(
                         PipelineEventType.RETRY,
                         {
                             "chunk_id": chunk.chunk_id,
                             "attempt": attempt,
-                            "error": error_tag,
+                            "error": decision.error_tag,
                         },
                     )
                     self._retry_count += 1
                     continue
 
-                # All attempts exhausted → OCR fallback. ADR-006: no log
-                # here, the warning event carries the same information
-                # for hosts.
-                self.observer.on_event(
-                    PipelineEventType.WARNING,
-                    {
-                        "chunk_id": chunk.chunk_id,
-                        "message": f"Fallback to OCR source: {msg[:120]}",
-                    },
+                # Attempts exhausted (or non-retryable error class) →
+                # OCR fallback. ADR-006: no log here, the warning event
+                # carries the same information for hosts.
+                self._apply_chunk_fallback(
+                    chunk=chunk,
+                    chunk_lines=chunk_lines,
+                    traces=traces,
+                    sanitised_msg=msg,
                 )
-                for lm in chunk_lines:
-                    lm.corrected_text = lm.ocr_text
-                    lm.status = LineStatus.FALLBACK
-                    _set_trace(
-                        traces,
-                        lm,
-                        projected_text=lm.ocr_text,
-                        validation_status="fallback",
-                        fallback_reason=f"all_attempts_exhausted: {msg[:120]}",
-                    )
-                self._fallback_count += 1
                 return None
 
         # Unreachable: every iteration either returns or continues.

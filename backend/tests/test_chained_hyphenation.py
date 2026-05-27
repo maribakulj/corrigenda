@@ -14,10 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from alto_core.alto._text import reconstruct_textline
 from alto_core.alto.hyphenation import (
     reconcile_hyphen_pair,
 )
-from alto_core.alto._text import reconstruct_textline
 from alto_core.alto.parser import parse_alto_file
 from alto_core.alto.rewriter import rewrite_alto_file
 from lxml import etree
