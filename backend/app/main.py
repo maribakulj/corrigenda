@@ -6,7 +6,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -47,10 +47,19 @@ async def lifespan(app: FastAPI):
         await registry.shutdown(timeout=30.0)
 
 
-def _rate_limit_handler(_request, exc: RateLimitExceeded) -> JSONResponse:
-    """Render slowapi's RateLimitExceeded as a uniform JSON 429."""
+def _rate_limit_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """Render slowapi's RateLimitExceeded as a uniform JSON 429.
+
+    Signature widened to ``(Request, Exception) -> JSONResponse`` so the
+    handler conforms to Starlette's ``add_exception_handler`` type
+    contract. SlowAPI only ever dispatches this handler for
+    ``RateLimitExceeded`` at runtime (it's registered against that
+    type), so the isinstance narrowing is a guaranteed match — the
+    fallback string defends against future misregistration only.
+    """
+    detail = exc.detail if isinstance(exc, RateLimitExceeded) else "rate limit"
     return JSONResponse(
-        {"detail": f"Rate limit exceeded: {exc.detail}"},
+        {"detail": f"Rate limit exceeded: {detail}"},
         status_code=429,
     )
 
