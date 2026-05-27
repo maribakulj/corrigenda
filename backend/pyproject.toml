@@ -107,6 +107,18 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Add the backend directory (pytest's auto-detected rootdir = parent of
+# this file) to sys.path so test imports like ``from app.schemas import …``
+# resolve regardless of how pytest is invoked. Without this, bare
+# ``pytest`` from this directory fails: Python 3.11+ no longer adds cwd
+# to sys.path automatically, and the CI's ``env: PYTHONPATH: backend``
+# is resolved relative to the step's cwd (already ``backend/``) so it
+# points at a non-existent ``backend/backend``. ``python -m pytest``
+# happens to work because the ``-m`` form does add cwd, but the
+# pyproject setting makes the import contract independent of the
+# invocation form (PR #45 introduced bare ``pytest`` in CI and broke
+# the backend-tests job; this restores it).
+pythonpath = ["."]
 # Surface DeprecationWarnings so upstream API changes (alto-core, FastAPI,
 # Pydantic, ...) reach us early instead of breaking suddenly. Switch to
 # "error" once the baseline is clean.
