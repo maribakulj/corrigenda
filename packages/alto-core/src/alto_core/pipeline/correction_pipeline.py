@@ -658,8 +658,13 @@ class CorrectionPipeline:
     ) -> None:
         """Revert every line in the chunk to its OCR text and emit a
         ``warning`` event. Mutates ``corrected_text`` / ``status`` /
-        line traces; bumps ``self._fallback_count``. Called once the
-        retry loop exhausts its budget or hits a non-retryable error.
+        line traces. Called once the retry loop exhausts its budget or
+        hits a non-retryable error.
+
+        The pipeline-level ``_fallback_count`` is bumped by the caller,
+        mirroring how ``_retry_count`` is incremented at the retry
+        call site — both counters are pipeline-orchestration state, not
+        chunk-level side effects.
         """
         self.observer.on_event(
             PipelineEventType.WARNING,
@@ -678,7 +683,6 @@ class CorrectionPipeline:
                 validation_status="fallback",
                 fallback_reason=f"all_attempts_exhausted: {sanitised_msg[:120]}",
             )
-        self._fallback_count += 1
 
     async def _call_with_retry(
         self,
@@ -697,7 +701,8 @@ class CorrectionPipeline:
         On exhaustion: applies the OCR fallback to every line in
         ``chunk_lines`` (mutates ``corrected_text`` / ``status`` /
         ``LineTrace``), emits a ``warning`` event, increments
-        ``self._fallback_count`` and returns ``None``. The caller must
+        ``self._fallback_count`` (at the call site, mirroring
+        ``self._retry_count``) and returns ``None``. The caller must
         short-circuit on ``None``.
 
         Retry strategy (pinned by ``test_pipeline_classifies_*`` in the
@@ -818,6 +823,7 @@ class CorrectionPipeline:
                     traces=traces,
                     sanitised_msg=msg,
                 )
+                self._fallback_count += 1
                 return None
 
         # Unreachable: every iteration either returns or continues.

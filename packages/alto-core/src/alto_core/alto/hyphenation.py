@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from alto_core.alto._norm import ncfold
-from alto_core.pipeline.migration_guards import (  # noqa: F401  re-exported for back-compat
+from alto_core.pipeline.migration_guards import (
     part1_text_migrated as _part1_text_migrated,
     part2_boundary_word_diverged as _part2_boundary_word_diverged,
     part2_text_migrated as _part2_text_migrated,
