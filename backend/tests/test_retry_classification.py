@@ -117,17 +117,6 @@ async def _run_and_collect(
     return events, store, job_id
 
 
-def _first_retry_for_first_chunk(events: list[SSEEvent]) -> SSEEvent | None:
-    """Return the first 'retry' event scoped to the first chunk emitted."""
-    first_chunk_id: str | None = None
-    for ev in events:
-        if ev.event == "chunk_started" and first_chunk_id is None:
-            first_chunk_id = ev.data.get("chunk_id")
-        if ev.event == "retry" and ev.data.get("chunk_id") == first_chunk_id:
-            return ev
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Invariant 1 — Temperature ramp without hyphen flag: 0.0 → 0.3 → 0.5
 # ---------------------------------------------------------------------------

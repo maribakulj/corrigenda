@@ -1,11 +1,12 @@
-"""Pin parity between parser._build_ocr_text and rewriter._extract_text_from_line.
+"""Pin parity between parser._build_ocr_text and reconstruct_textline.
 
-Both functions reconstruct the logical text of a TextLine from its
-String/SP/HYP children, applying the same soft-hyphen and double-dash
-rules. They live in two separate modules today (audit §6.2). The
-shared-helper refactor planned downstream will merge them; this test
-characterises the CURRENT relationship so the merge is provably
-behaviour-preserving:
+Both call sites reconstruct the logical text of a TextLine from its
+String/SP/HYP children. After the audit §6.2 fix they share the same
+helper (``alto_core.alto._text.reconstruct_textline``); the parser
+wraps it with ``.replace("\\r", "").strip()`` to get its "logical"
+form, the rewriter calls it raw for byte-faithful UNTOUCHED detection.
+
+This test pins the relationship between the two:
   - both return the same NFC-normalised payload;
   - the only documented difference is the parser's terminal `.strip()`.
 
@@ -19,8 +20,8 @@ import unicodedata
 from pathlib import Path
 
 from alto_core.alto._ns import _detect_namespace
+from alto_core.alto._text import reconstruct_textline
 from alto_core.alto.parser import _build_ocr_text
-from alto_core.alto.rewriter import _extract_text_from_line
 from lxml import etree
 
 _EXAMPLES = Path(__file__).parent.parent.parent.parent / "examples"
@@ -52,7 +53,7 @@ def test_reconstructed_text_matches_modulo_strip():
     for xml_path in _SAMPLE_FILES:
         for tl, ns in _iter_textlines(xml_path):
             parser_text = _build_ocr_text(tl, ns)
-            rewriter_text = _extract_text_from_line(tl, ns)
+            rewriter_text = reconstruct_textline(tl, ns)
             assert parser_text == rewriter_text.strip(), (
                 f"{xml_path.name}/{tl.get('ID')!r}: "
                 f"parser={parser_text!r} rewriter.strip={rewriter_text.strip()!r}"
@@ -65,7 +66,7 @@ def test_reconstructed_text_is_nfc_normalized():
     for xml_path in _SAMPLE_FILES:
         for tl, ns in _iter_textlines(xml_path):
             parser_text = _build_ocr_text(tl, ns)
-            rewriter_text = _extract_text_from_line(tl, ns)
+            rewriter_text = reconstruct_textline(tl, ns)
             assert parser_text == unicodedata.normalize("NFC", parser_text)
             assert rewriter_text == unicodedata.normalize("NFC", rewriter_text)
 
@@ -83,7 +84,7 @@ def test_soft_hyphen_in_hyp_normalized_to_dash_in_both():
     h.set("CONTENT", "­")
 
     parser_text = _build_ocr_text(tl, ns)
-    rewriter_text = _extract_text_from_line(tl, ns)
+    rewriter_text = reconstruct_textline(tl, ns)
 
     assert parser_text.endswith("-")
     assert "­" not in parser_text
@@ -103,7 +104,7 @@ def test_hyp_after_trailing_dash_skipped_in_both():
     h.set("CONTENT", "-")
 
     parser_text = _build_ocr_text(tl, ns)
-    rewriter_text = _extract_text_from_line(tl, ns)
+    rewriter_text = reconstruct_textline(tl, ns)
 
     assert parser_text.endswith("-")
     assert not parser_text.endswith("--")

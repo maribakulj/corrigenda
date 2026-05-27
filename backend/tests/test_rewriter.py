@@ -801,7 +801,7 @@ def test_rewriter_does_not_pretty_print(tmp_path):
 
 def test_nfd_source_round_trip_marked_untouched(tmp_path):
     """A source containing NFD characters must round-trip as 'untouched'
-    when no correction is applied — _extract_text_from_line and the
+    when no correction is applied — reconstruct_textline and the
     manifest ocr_text must compare equal after NFC normalization."""
     import unicodedata
 

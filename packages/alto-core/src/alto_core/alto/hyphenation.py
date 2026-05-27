@@ -3,13 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from alto_core.alto._norm import ncfold
-from alto_core.pipeline.migration_guards import (
+from alto_core.pipeline.migration_guards import (  # noqa: F401  re-exported for back-compat
     part1_text_migrated as _part1_text_migrated,
-)
-from alto_core.pipeline.migration_guards import (
     part2_boundary_word_diverged as _part2_boundary_word_diverged,
-)
-from alto_core.pipeline.migration_guards import (
     part2_text_migrated as _part2_text_migrated,
 )
 from alto_core.schemas import HyphenRole, LineManifest, LLMLineInput

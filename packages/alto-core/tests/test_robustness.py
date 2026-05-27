@@ -267,7 +267,7 @@ def test_clean_content_nfc_normalizes_decomposed_input():
     (alto_core.alto.parser:45). The rewriter's `clean_content` did
     NOT — so an LLM returning `café` in NFD (`cafe\\u0301`) would
     land NFD bytes in the output CONTENT. A subsequent re-parse via
-    `_extract_text_from_line` (which applies `nfc(...)` again) would
+    `reconstruct_textline` (which applies `nfc(...)` again) would
     yield `café` in NFC — equal to the original, but the bytes on
     disk differ from what every other consumer (search index,
     grep, byte-for-byte snapshot) would expect.

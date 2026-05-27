@@ -17,13 +17,9 @@ import pytest
 from alto_core.alto.hyphenation import (
     reconcile_hyphen_pair,
 )
+from alto_core.alto._text import reconstruct_textline
 from alto_core.alto.parser import parse_alto_file
-
-# `_extract_text_from_line` is a private rewriter helper; the backend
-# re-export shim no longer surfaces private symbols (Stage 3 of audit
-# remediation). Import directly from alto-core when a test legitimately
-# needs the private.
-from alto_core.alto.rewriter import _extract_text_from_line, rewrite_alto_file
+from alto_core.alto.rewriter import rewrite_alto_file
 from lxml import etree
 
 from app.schemas import HyphenRole
@@ -93,7 +89,7 @@ def _extract_output_text(root, line_id: str) -> str:
     tl = root.find(f".//{_ns('TextLine')}[@ID='{line_id}']")
     if tl is None:
         return ""
-    return _extract_text_from_line(tl, NS)
+    return reconstruct_textline(tl, NS)
 
 
 def _get_subs(root, line_id: str, position: str) -> tuple[str | None, str | None]:

@@ -29,6 +29,7 @@ from alto_core.schemas import (
     LLMUserPayload,
     ModelInfo,
     PageManifest,
+    PipelineEventType,
     Provider,
 )
 
@@ -67,6 +68,7 @@ __all__ = [
     "ListModelsResponse",
     "ModelInfo",
     "PageManifest",
+    "PipelineEventType",
     "Provider",
     "SSEEvent",
 ]

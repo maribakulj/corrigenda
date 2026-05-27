@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from alto_core.schemas import JobStatus, ModelInfo, Provider
+from alto_core.schemas import JobStatus, ModelInfo, PipelineEventType, Provider
 from pydantic import BaseModel, Field
 
 
@@ -44,5 +44,9 @@ class JobStatusResponse(BaseModel):
 
 
 class SSEEvent(BaseModel):
-    event: str
+    # PipelineEventType is `str, Enum` — accepts both enum members
+    # (emitter side, type-checked) and bare strings (wire format,
+    # frontend consumer). Coercion is lossless because the enum's
+    # serialised value is its string member.
+    event: PipelineEventType | str
     data: dict[str, Any] = Field(default_factory=dict)

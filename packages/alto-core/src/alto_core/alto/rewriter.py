@@ -114,12 +114,6 @@ def _get_hyp_children(el: etree._Element, ns: str) -> list[etree._Element]:
 # ---------------------------------------------------------------------------
 
 
-# Kept as a module-level alias so callers (tests) that imported the
-# old name before the _text.py extraction continue to work. New code
-# should call reconstruct_textline directly.
-_extract_text_from_line = reconstruct_textline
-
-
 def _line_text_unchanged(el: etree._Element, corrected: str, ns: str) -> bool:
     return reconstruct_textline(el, ns) == nfc(corrected)
 
