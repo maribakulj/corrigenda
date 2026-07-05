@@ -50,6 +50,7 @@ def _make_chunk(
     granularity: ChunkGranularity,
     line_ids: list[str],
     block_id: str | None = None,
+    target_line_ids: list[str] | None = None,
 ) -> ChunkRequest:
     return ChunkRequest(
         chunk_id=str(uuid.uuid4()),
@@ -58,7 +59,60 @@ def _make_chunk(
         block_id=block_id,
         granularity=granularity,
         line_ids=list(line_ids),
+        target_line_ids=None if target_line_ids is None else list(target_line_ids),
     )
+
+
+def _hyphen_partner_id(lm: LineManifest) -> str | None:
+    """Return the forward/backward hyphen partner line_id, if any."""
+    if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.PART2):
+        return lm.hyphen_pair_line_id
+    if lm.hyphen_role == HyphenRole.BOTH:
+        # A BOTH line pairs backward (hyphen_pair_line_id) and forward
+        # (hyphen_forward_pair_id); either partner is enough to keep the
+        # chain in one target window (chains are contiguous).
+        return lm.hyphen_forward_pair_id or lm.hyphen_pair_line_id
+    return None
+
+
+def _assign_window_targets(
+    windows: list[list[str]],
+    line_by_id: dict[str, LineManifest],
+) -> list[list[str]]:
+    """Assign every line to exactly one target window (F8).
+
+    Overlapping windows mean a boundary line appears in two windows; pre-F8
+    it was corrected in whichever window ran first (its context there was
+    truncated). Here each line becomes a target in the LAST window that
+    contains it — the window where it has the most in-chunk *following*
+    context (following lines drive word-completion and hyphen joins). A
+    hyphen pair is forced into the last window that contains BOTH members
+    so reconciliation never spans a target boundary.
+    """
+    membership: dict[str, list[int]] = {}
+    for i, w in enumerate(windows):
+        for lid in w:
+            membership.setdefault(lid, []).append(i)
+
+    target_win: dict[str, int] = {lid: idxs[-1] for lid, idxs in membership.items()}
+
+    # Hyphen atomicity: pin both members of a pair to the last window that
+    # contains both.
+    for lid in list(membership):
+        lm = line_by_id.get(lid)
+        if lm is None:
+            continue
+        partner = _hyphen_partner_id(lm)
+        if not partner or partner not in membership:
+            continue
+        common = sorted(set(membership[lid]) & set(membership[partner]))
+        if common:
+            target_win[lid] = common[-1]
+            target_win[partner] = common[-1]
+
+    return [
+        [lid for lid in w if target_win.get(lid) == i] for i, w in enumerate(windows)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +256,7 @@ def _try_window(
     overlap = config.line_window_overlap
     step = window_size - overlap
 
-    chunks: list[ChunkRequest] = []
+    window_line_ids: list[list[str]] = []
     start = 0
 
     while start < n:
@@ -220,20 +274,28 @@ def _try_window(
             else:
                 break
 
-        chunk_line_ids = [lines[i].line_id for i in range(start, end)]
-        chunks.append(
-            _make_chunk(
-                document_id,
-                page.page_id,
-                ChunkGranularity.WINDOW,
-                chunk_line_ids,
-            )
-        )
+        window_line_ids.append([lines[i].line_id for i in range(start, end)])
 
         next_start = start + step
         if next_start <= start:
             next_start = start + 1
         start = next_start
+
+    # F8 — each line is a target in exactly one window (its last, best-context
+    # window); overlaps become pure context in the other window.
+    line_by_id = {lm.line_id: lm for lm in lines}
+    targets_per_window = _assign_window_targets(window_line_ids, line_by_id)
+
+    chunks = [
+        _make_chunk(
+            document_id,
+            page.page_id,
+            ChunkGranularity.WINDOW,
+            ids,
+            target_line_ids=targets,
+        )
+        for ids, targets in zip(window_line_ids, targets_per_window)
+    ]
 
     return ChunkPlan(
         page_id=page.page_id,

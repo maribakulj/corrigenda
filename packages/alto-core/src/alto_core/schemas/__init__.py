@@ -428,6 +428,18 @@ class ChunkRequest(BaseModel):
     block_id: str | None = None
     granularity: ChunkGranularity
     line_ids: list[str]
+    # F8 — target lines the pipeline actually corrects/accepts. Any line in
+    # ``line_ids`` but NOT in ``target_line_ids`` is *context only*: it is
+    # still sent to the producer so a target near it keeps full surrounding
+    # context, but its output is discarded here (it is a target of an
+    # adjacent chunk). ``None`` means every line is a target (PAGE / BLOCK /
+    # LINE granularity, and the historical default for windows).
+    target_line_ids: list[str] | None = None
+
+    def targets(self) -> list[str]:
+        """The line_ids this chunk owns (all of them when unrestricted)."""
+        return self.line_ids if self.target_line_ids is None else self.target_line_ids
+
     attempt: int = 0
 
 

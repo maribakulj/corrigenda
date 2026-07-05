@@ -788,26 +788,35 @@ class CorrectionPipeline:
         cross_page_partners: dict[tuple[str, str], LineManifest] | None,
         traces: dict[str, LineTrace] | None,
     ) -> int:
-        """Reconcile / accept / finalize a chunk whose LLM call succeeded."""
+        """Reconcile / accept / finalize a chunk whose LLM call succeeded.
+
+        F8 — only the chunk's *target* lines are corrected here. Context
+        lines (in ``line_ids`` but not ``target_line_ids``) were sent to the
+        producer for context but are owned by an adjacent chunk, so their
+        output is discarded on this pass.
+        """
         text_by_id: dict[str, str] = {
             o.line_id: o.corrected_text for o in response.lines
         }
 
+        target_ids = set(chunk.targets())
+        target_lines = [lm for lm in chunk_lines if lm.line_id in target_ids]
+
         reconciled_count = self._reconcile_chunk_hyphens(
             chunk_id=chunk.chunk_id,
-            chunk_lines=chunk_lines,
+            chunk_lines=target_lines,
             text_by_id=text_by_id,
             line_by_id=line_by_id,
             cross_page_partners=cross_page_partners,
         )
         self._apply_line_acceptance(
-            chunk_lines=chunk_lines,
+            chunk_lines=target_lines,
             text_by_id=text_by_id,
             all_lines_by_id=line_by_id,
             traces=traces,
         )
         self._finalize_chunk_traces(
-            chunk_lines=chunk_lines,
+            chunk_lines=target_lines,
             traces=traces,
         )
 
@@ -816,6 +825,7 @@ class CorrectionPipeline:
             {
                 "chunk_id": chunk.chunk_id,
                 "line_count": len(chunk_lines),
+                "target_count": len(target_lines),
                 "hyphen_pairs_reconciled": reconciled_count,
             },
         )
@@ -829,10 +839,13 @@ class CorrectionPipeline:
         traces: dict[str, LineTrace] | None,
         sanitised_msg: str,
     ) -> None:
-        """Revert every line in the chunk to its OCR text and emit a
+        """Revert the chunk's TARGET lines to their OCR text and emit a
         ``warning`` event. Mutates ``corrected_text`` / ``status`` /
         line traces. Called once the retry loop exhausts its budget or
         hits a non-retryable error.
+
+        F8 — only target lines are reverted; context lines are owned by an
+        adjacent chunk and must not be forced to OCR here.
 
         The pipeline-level ``_fallback_count`` is bumped by the caller,
         mirroring how ``_retry_count`` is incremented at the retry
@@ -846,7 +859,10 @@ class CorrectionPipeline:
                 "message": f"Fallback to OCR source: {sanitised_msg[:120]}",
             },
         )
+        target_ids = set(chunk.targets())
         for lm in chunk_lines:
+            if lm.line_id not in target_ids:
+                continue
             lm.corrected_text = lm.ocr_text
             lm.status = LineStatus.FALLBACK
             _set_trace(
