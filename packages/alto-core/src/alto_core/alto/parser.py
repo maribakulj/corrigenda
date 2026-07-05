@@ -116,7 +116,12 @@ def _parse_textline_hyphen_info(
     PART1 (trailing HYP element or last String has SUBS_TYPE="HypPart1").
     In that case, role is set to BOTH with forward fields for the PART1 side.
     """
-    children = list(textline)
+    # Spec F5/F3 — comments and processing instructions carry a callable
+    # ``tag`` (``etree.Comment`` / ``etree.PI``), not a ``str``. A trailing
+    # comment inside a TextLine made ``etree.QName(last_child.tag)`` below
+    # raise and abort the whole file. Filter them out up front so every
+    # downstream child access sees only real elements.
+    children = [c for c in textline if isinstance(c.tag, str)]
     if not children:
         return
 

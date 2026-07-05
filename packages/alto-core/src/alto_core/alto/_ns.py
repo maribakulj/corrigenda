@@ -29,7 +29,7 @@ def _tag(local: str, ns: str) -> str:
 
 
 def _int_attr(el: etree._Element, name: str, default: int = 0) -> int:
-    """Read an integer attribute, tolerating MISSING and EMPTY values.
+    """Read an integer attribute, tolerating MISSING, EMPTY and FLOAT values.
 
     Pre-L10 the alto-core parser used ``int(el.get(name, 0))`` which
     fails on ``WIDTH=""`` (legitimate output from some ALTO
@@ -37,13 +37,17 @@ def _int_attr(el: etree._Element, name: str, default: int = 0) -> int:
     present-but-empty attrs — the default only fires for MISSING
     attrs (L10/B3).
 
-    Non-integer values still raise ValueError as before — only the
-    empty-string case is normalised to the default.
+    Spec F5 — some ALTO producers emit float-valued coordinates
+    (``HPOS="123.0"``, ``WIDTH="12.5"``). ``int("123.0")`` raises
+    ``ValueError`` and used to abort the whole file. We parse via
+    ``int(float(raw))`` so floats truncate toward zero (``"12.9" → 12``,
+    ``"-1.9" → -1``). A genuinely non-numeric value (``"abc"``) still
+    raises ``ValueError`` — only float-shaped strings are newly accepted.
     """
     raw = el.get(name)
     if raw is None or raw == "":
         return default
-    return int(raw)
+    return int(float(raw))
 
 
 def make_safe_parser() -> etree.XMLParser:

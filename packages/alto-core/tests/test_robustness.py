@@ -109,6 +109,103 @@ def test_validate_llm_response_rejects_non_dict_as_valueerror(bad_input):
 
 
 # ---------------------------------------------------------------------------
+# F5 — parser tolerates float-valued coordinates
+# ---------------------------------------------------------------------------
+
+
+def _alto_with_float_coords(tmp_path: Path) -> Path:
+    p = tmp_path / "float_coords.xml"
+    p.write_bytes(
+        b"""<?xml version="1.0"?>
+<alto xmlns="http://www.loc.gov/standards/alto/ns-v4#">
+  <Layout>
+    <Page ID="P1" WIDTH="600.0" HEIGHT="800.9">
+      <PrintSpace>
+        <TextBlock ID="B1" HPOS="10.0" VPOS="20.5" WIDTH="500.0" HEIGHT="30.0">
+          <TextLine ID="L1" HPOS="10.0" VPOS="20.5" WIDTH="500.0" HEIGHT="30.0">
+            <String CONTENT="hello" HPOS="10.0" VPOS="20.5" WIDTH="100.9" HEIGHT="30.0"/>
+          </TextLine>
+        </TextBlock>
+      </PrintSpace>
+    </Page>
+  </Layout>
+</alto>"""
+    )
+    return p
+
+
+def test_parser_tolerates_float_coordinates(tmp_path: Path):
+    """Spec F5 — some ALTO producers emit float coordinates
+    (``HPOS="123.0"``, ``HEIGHT="800.9"``). Pre-fix ``int("123.0")``
+    raised ``ValueError`` and aborted the whole file. Floats now
+    truncate toward zero."""
+    pages, _root = parse_alto_file(_alto_with_float_coords(tmp_path), "x.xml")
+    assert pages
+    page = pages[0]
+    assert page.page_width == 600  # 600.0 -> 600
+    assert page.page_height == 800  # 800.9 truncates to 800
+    line = page.lines[0]
+    assert line.coords.vpos == 20  # 20.5 truncates to 20
+    assert line.ocr_text == "hello"
+
+
+def test_int_attr_still_rejects_non_numeric(tmp_path: Path):
+    """Spec F5 — the float tolerance must NOT swallow genuinely
+    non-numeric attribute values; those still raise ``ValueError``."""
+    from lxml import etree
+
+    from alto_core.alto._ns import _int_attr
+
+    el = etree.Element("TextLine", WIDTH="abc")
+    with pytest.raises(ValueError):
+        _int_attr(el, "WIDTH")
+
+
+# ---------------------------------------------------------------------------
+# F3 — parser ignores comments / PIs among TextLine children
+# ---------------------------------------------------------------------------
+
+
+def _alto_with_trailing_comment(tmp_path: Path) -> Path:
+    p = tmp_path / "trailing_comment.xml"
+    # The comment is the LAST child of the TextLine — pre-fix
+    # ``etree.QName(last_child.tag)`` raised on it.
+    p.write_bytes(
+        b"""<?xml version="1.0"?>
+<alto xmlns="http://www.loc.gov/standards/alto/ns-v4#">
+  <Layout>
+    <Page ID="P1" WIDTH="600" HEIGHT="800">
+      <PrintSpace>
+        <TextBlock ID="B1" HPOS="0" VPOS="0" WIDTH="500" HEIGHT="30">
+          <TextLine ID="L1" HPOS="0" VPOS="0" WIDTH="500" HEIGHT="30">
+            <String CONTENT="bonjour" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="30"/>
+            <!-- an OCR-engine annotation left inside the line -->
+          </TextLine>
+        </TextBlock>
+      </PrintSpace>
+    </Page>
+  </Layout>
+</alto>"""
+    )
+    return p
+
+
+def test_parser_tolerates_comment_as_last_textline_child(tmp_path: Path):
+    """Spec F3 — a comment (or PI) as the final child of a TextLine
+    carries a callable ``tag`` (``etree.Comment``), not a ``str``.
+    Pre-fix ``etree.QName(last_child.tag)`` raised and aborted the
+    whole file. The parser must skip such nodes."""
+    pages, _root = parse_alto_file(_alto_with_trailing_comment(tmp_path), "x.xml")
+    assert pages
+    line = pages[0].lines[0]
+    assert line.ocr_text == "bonjour"
+    # No trailing HYP was mistaken from the comment.
+    from alto_core.schemas import HyphenRole
+
+    assert line.hyphen_role == HyphenRole.NONE
+
+
+# ---------------------------------------------------------------------------
 # R3 — validator rejects whitespace-only corrected_text
 # ---------------------------------------------------------------------------
 
