@@ -58,32 +58,61 @@ def _compute_geometry(
     """
     Return list of (token, token_hpos, token_width) for every token.
 
-    Space tokens get proportional width; word tokens get proportional width.
-    The last token is adjusted so sum(widths) == width exactly.
+    Widths are proportional to a per-token *weight*: a word weighs its
+    character count, a run of spaces weighs 0.6x its character count
+    (spaces render narrower than glyphs).
+
+    Spec F6 — the 0.6 space weight must enter the total weight used to
+    compute the per-unit width. Pre-fix, ``unit`` was computed against the
+    full character count (spaces at 1.0) while each space was then drawn
+    at 0.6; the accumulated shortfall of every space was dumped onto the
+    LAST token via a single ``correction`` term, inflating it. Now the
+    weight is consistent on both sides and the rounding error is spread
+    across all tokens by cumulative rounding — the final token only ever
+    absorbs the residual rounding, never the sum of every space's deficit.
     """
     if not tokens:
         return []
 
-    total_chars = sum(len(t) for t in tokens)
-    if total_chars == 0:
-        per = width // len(tokens) if tokens else 0
+    def _weight(t: str) -> float:
+        return len(t) * 0.6 if t.strip() == "" else float(len(t))
+
+    weights = [_weight(t) for t in tokens]
+    total_weight = sum(weights)
+    if total_weight == 0:
+        per = width // len(tokens)
         return [(t, hpos + i * per, per) for i, t in enumerate(tokens)]
 
-    unit = width / total_chars
-    raw_widths: list[int] = []
-    for t in tokens:
-        if t.strip() == "":
-            w = max(1, round(len(t) * 0.6 * unit))
-        else:
-            w = max(1, round(len(t) * unit))
-        raw_widths.append(w)
+    unit = width / total_weight
 
-    correction = width - sum(raw_widths)
-    raw_widths[-1] = max(1, raw_widths[-1] + correction)
+    # Cumulative rounding: round the running total at each token boundary
+    # and take successive differences. Every token lands on the floor or
+    # ceil of its ideal share and the widths sum EXACTLY to ``width``.
+    widths: list[int] = []
+    cumulative = 0.0
+    prev_rounded = 0
+    for w in weights:
+        cumulative += w * unit
+        rounded = round(cumulative)
+        widths.append(rounded - prev_rounded)
+        prev_rounded = rounded
+
+    # Defensive min-1 floor for degenerate lines (width < token count).
+    # Compensate on the widest token so the exact-sum invariant survives.
+    # Real ALTO never reaches this — the guard mirrors the pre-fix max(1,…).
+    if min(widths) < 1:
+        deficit = 0
+        for i, w in enumerate(widths):
+            if w < 1:
+                deficit += 1 - w
+                widths[i] = 1
+        if deficit:
+            donor = max(range(len(widths)), key=lambda i: widths[i])
+            widths[donor] = max(1, widths[donor] - deficit)
 
     result: list[tuple[str, int, int]] = []
     cursor = hpos
-    for t, w in zip(tokens, raw_widths):
+    for t, w in zip(tokens, widths):
         result.append((t, cursor, w))
         cursor += w
     return result
