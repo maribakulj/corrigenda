@@ -261,3 +261,60 @@ def test_hyphen_fusion_detected_when_corrected_is_nfd():
             hyphen_pairs={"L1": "L2", "L2": "L1"},
             hyphen_subs={"L1": "nécessaires"},
         )
+
+
+# ---------------------------------------------------------------------------
+# F8 — target-based counting (spec §7-F8: the 1:1 count is on targets)
+# ---------------------------------------------------------------------------
+
+
+def test_targets_mode_missing_context_output_is_accepted():
+    """A response omitting a CONTEXT line is valid: only targets are
+    required. Historical mode (no targets) would reject on count."""
+    raw = {"lines": [{"line_id": "L1", "corrected_text": "un"}]}
+    resp = validate_llm_response(
+        raw,
+        ["L1", "L2"],  # L2 sent as context
+        target_line_ids=["L1"],
+    )
+    assert [o.line_id for o in resp.lines] == ["L1"]
+
+
+def test_targets_mode_missing_target_still_rejected():
+    raw = {"lines": [{"line_id": "L2", "corrected_text": "deux"}]}
+    with pytest.raises(ValueError, match="Missing line_ids"):
+        validate_llm_response(
+            raw,
+            ["L1", "L2"],
+            target_line_ids=["L1"],
+        )
+
+
+def test_targets_mode_context_entry_present_is_kept_and_checked():
+    """Context entries, when present, pass through (downstream discards
+    them) but stay structurally checked — garbage anywhere is a degraded
+    response."""
+    raw = {
+        "lines": [
+            {"line_id": "L1", "corrected_text": "un"},
+            {"line_id": "L2", "corrected_text": "deux"},
+        ]
+    }
+    resp = validate_llm_response(raw, ["L1", "L2"], target_line_ids=["L1"])
+    assert {o.line_id for o in resp.lines} == {"L1", "L2"}
+
+    bad = {
+        "lines": [
+            {"line_id": "L1", "corrected_text": "un"},
+            {"line_id": "L2", "corrected_text": "   "},  # whitespace-only
+        ]
+    }
+    with pytest.raises(ValueError, match="empty or missing"):
+        validate_llm_response(bad, ["L1", "L2"], target_line_ids=["L1"])
+
+
+def test_no_targets_arg_is_byte_compatible_with_historical_count():
+    """target_line_ids=None keeps the exact-count contract."""
+    raw = {"lines": [{"line_id": "L1", "corrected_text": "un"}]}
+    with pytest.raises(ValueError, match="Line count mismatch"):
+        validate_llm_response(raw, ["L1", "L2"])

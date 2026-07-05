@@ -73,6 +73,58 @@ async def test_pipeline_aggregates_usage_into_result():
 
 
 @pytest.mark.asyncio
+async def test_chunk_completed_reports_chunk_total_across_retries():
+    """A call whose response fails validation still spent tokens; the
+    chunk_completed event must report the CHUNK total, not just the final
+    successful call."""
+
+    class _FailOnceProvider(_UsageProvider):
+        async def complete_structured(
+            self, **kw: Any
+        ) -> tuple[dict[str, Any], Usage | None]:
+            self.calls += 1
+            if self.calls == 1:
+                return {"bad_key": []}, Usage(input_tokens=10, output_tokens=3)
+            payload = kw["user_payload"]
+            out = {
+                "lines": [
+                    {"line_id": ln["line_id"], "corrected_text": ln["ocr_text"]}
+                    for ln in payload.get("lines", [])
+                ]
+            }
+            return out, Usage(input_tokens=10, output_tokens=3)
+
+    class _Capture(_Null):
+        def __init__(self) -> None:
+            self.chunk_completed: list[dict[str, Any]] = []
+
+        def on_event(self, event_type: Any, payload: dict[str, Any]) -> None:
+            if getattr(event_type, "value", str(event_type)) == "chunk_completed":
+                self.chunk_completed.append(payload)
+
+    provider = _FailOnceProvider()
+    capture = _Capture()
+    doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
+    pipeline = CorrectionPipeline(
+        provider=provider, observer=capture, output_writer=_Null()
+    )
+    result = await pipeline.run(
+        document_manifest=doc,
+        api_key="k",
+        model="m",
+        provider_name="mock",
+        source_files={},
+    )
+    assert capture.chunk_completed
+    first = capture.chunk_completed[0]
+    # 2 calls of (10, 3) for the retried chunk.
+    assert first["input_tokens"] == 20
+    assert first["output_tokens"] == 6
+    # Global aggregate counts every call too.
+    assert result.usage.input_tokens == 10 * provider.calls
+
+
+@pytest.mark.asyncio
 async def test_usage_is_zero_when_provider_reports_none():
     class _NoUsage(_UsageProvider):
         async def complete_structured(self, **kw):

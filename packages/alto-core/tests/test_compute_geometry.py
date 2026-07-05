@@ -72,3 +72,21 @@ def test_all_widths_at_least_one_at_the_boundary():
     assert len(widths) == 5
     assert all(w >= 1 for w in widths), widths
     assert sum(widths) == 5
+
+
+def test_degenerate_width_below_token_count_pins_floor_behaviour():
+    """Post-audit F6 pin — when width < token count the exact-sum
+    invariant is mathematically unsatisfiable with all-≥1 widths: the
+    min-1 floor wins and the sum settles at the token count. Any feasible
+    width keeps the exact sum, spread across several donors if needed."""
+    # 11 tokens ("a b c d e f"), width 7 → infeasible: all 1, sum 11.
+    widths = _widths("a b c d e f", hpos=0, width=7)
+    assert len(widths) == 11
+    assert all(w >= 1 for w in widths), widths
+    assert sum(widths) == 11  # floor wins, documented
+
+    # Feasible tight case: sum must be EXACT even when several tokens
+    # need flooring (deficit spread over multiple donors).
+    widths2 = _widths("aaaaaaaa b c", hpos=0, width=12)
+    assert all(w >= 1 for w in widths2), widths2
+    assert sum(widths2) == 12

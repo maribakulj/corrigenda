@@ -97,18 +97,26 @@ def _compute_geometry(
         widths.append(rounded - prev_rounded)
         prev_rounded = rounded
 
-    # Defensive min-1 floor for degenerate lines (width < token count).
-    # Compensate on the widest token so the exact-sum invariant survives.
-    # Real ALTO never reaches this — the guard mirrors the pre-fix max(1,…).
+    # Defensive min-1 floor for degenerate lines. Raise every sub-1 width
+    # to 1, then repay the deficit from the widest donors (each clamped to
+    # 1) until the exact-sum invariant is restored. When ``width`` is
+    # smaller than the token count the invariant is mathematically
+    # unsatisfiable with all-≥1 widths; the min-1 floor wins and the sum
+    # settles at ``len(tokens)`` — the only honest outcome, and pinned by
+    # test_compute_geometry. Real ALTO never reaches this branch.
     if min(widths) < 1:
         deficit = 0
         for i, w in enumerate(widths):
             if w < 1:
                 deficit += 1 - w
                 widths[i] = 1
-        if deficit:
+        while deficit > 0:
             donor = max(range(len(widths)), key=lambda i: widths[i])
-            widths[donor] = max(1, widths[donor] - deficit)
+            if widths[donor] <= 1:
+                break  # all at the floor — sum > width, unavoidable
+            take = min(deficit, widths[donor] - 1)
+            widths[donor] -= take
+            deficit -= take
 
     result: list[tuple[str, int, int]] = []
     cursor = hpos
@@ -359,15 +367,27 @@ def _emit_sp(
     tok_width: int,
     vpos: int,
 ) -> None:
-    """Append a fresh SP child, reusing the nth original SP attribs when present."""
+    """Append a fresh SP child with RECOMPUTED geometry.
+
+    Post-audit fix (doctrine §6.1) — the slow path used to recycle the nth
+    original SP's attributes verbatim, keeping OLD HPOS/WIDTH from the
+    pre-correction layout while the surrounding Strings got recomputed
+    positions: the interleaved SP/String geometry contradicted itself
+    (worse after F6 rebalanced the token widths). SPs are pure spacing —
+    they carry no confidences and no identity worth recycling — so their
+    geometry is now always derived from the same ``_compute_geometry``
+    pass as the Strings around them. ``orig_sp_attribs`` is still received
+    so any non-geometric attribute an exotic producer set (none in the
+    ALTO corpus at hand) survives; the geometric trio is overwritten.
+    """
     sp = etree.SubElement(el, _tag("SP", ns))
     if sp_n < len(orig_sp_attribs):
         for k, v in orig_sp_attribs[sp_n].items():
-            sp.set(k, v)
-    else:
-        sp.set("WIDTH", str(tok_width))
-        sp.set("HPOS", str(tok_hpos))
-        sp.set("VPOS", str(vpos))
+            if k not in ("HPOS", "VPOS", "WIDTH", "HEIGHT"):
+                sp.set(k, v)
+    sp.set("WIDTH", str(tok_width))
+    sp.set("HPOS", str(tok_hpos))
+    sp.set("VPOS", str(vpos))
 
 
 def _emit_string(

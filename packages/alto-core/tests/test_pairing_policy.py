@@ -53,6 +53,40 @@ def _linked_count(pages) -> int:
     )
 
 
+def test_realistic_gap_policy_keeps_adjacent_pairs():
+    """A generous, realistic gap (a couple of line heights) must keep the
+    sample's adjacent pairs linked — the policy only rejects outliers."""
+    lenient = PairingPolicy(max_vertical_gap=500)
+    pages, _ = parse_alto_file(_SAMPLE, _SAMPLE.name, pairing_policy=lenient)
+    assert _linked_count(pages) > 0
+
+
+def test_vertical_gap_skipped_across_pages():
+    """VPOS restarts on every page, so max_vertical_gap must not be
+    applied to a cross-page candidate (post-audit F7 fix)."""
+    from alto_core.schemas import Coords, LineManifest
+
+    def _line(page: str, vpos: int) -> LineManifest:
+        return LineManifest(
+            line_id=f"L_{page}",
+            page_id=page,
+            block_id=f"B_{page}",
+            line_order_global=0,
+            line_order_in_block=0,
+            coords=Coords(hpos=0, vpos=vpos, width=100, height=10),
+            ocr_text="mot-",
+        )
+
+    policy = PairingPolicy(max_vertical_gap=5)
+    bottom_of_p1 = _line("P1", vpos=900)  # bottom of page 1
+    top_of_p2 = _line("P2", vpos=0)  # top of page 2 — VPOS not comparable
+    assert policy.can_pair(bottom_of_p1, top_of_p2)
+
+    # Intra-page, the same gap threshold does reject a distant candidate.
+    far_same_page = _line("P1", vpos=2000)
+    assert not policy.can_pair(bottom_of_p1, far_same_page)
+
+
 def test_strict_gap_policy_breaks_every_pair():
     """A policy that rejects any downward gap must link zero pairs, while
     the default links at least one — proving the seam is honoured and not

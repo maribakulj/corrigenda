@@ -37,6 +37,7 @@ def validate_llm_response(
     hyphen_subs: dict[str, str] | None = None,
     *,
     guard_config: GuardConfig = DEFAULT_GUARD_CONFIG,
+    target_line_ids: list[str] | None = None,
 ) -> LLMResponse:
     """
     Validate an LLM response dict and return a typed LLMResponse.
@@ -58,6 +59,18 @@ def validate_llm_response(
         for the hyphen pair).  Used for fusion detection: if PART1
         corrected text equals the full word, the LLM illegally merged
         the pair.
+    target_line_ids:
+        F8 — the chunk's *target* lines. When provided, the 1:1 count is
+        enforced on targets only: every target must be present exactly
+        once; entries for *context* lines (in ``expected_line_ids`` but
+        not targets) are accepted when present and their absence is NOT
+        an error — their output belongs to an adjacent chunk anyway.
+        Per-entry structural checks (dict shape, known id, no duplicate,
+        non-empty single-line text) stay strict for every entry: garbage
+        anywhere still signals a degraded response. Hyphen-integrity
+        checks run over the target set (F8 pins both pair members into
+        the same target set). ``None`` = every line is a target
+        (historical behaviour, byte-compatible).
 
     Raises
     ------
@@ -88,11 +101,23 @@ def validate_llm_response(
         raise ValidationError("'lines' must be a list")
 
     expected_set = set(expected_line_ids)
+    # F8 — the ids whose output is REQUIRED. When target_line_ids is None
+    # every expected line is a target (historical exact-count behaviour).
+    check_set = expected_set if target_line_ids is None else set(target_line_ids)
 
     # --- Count ---
-    if len(lines_raw) != len(expected_line_ids):
+    if target_line_ids is None:
+        if len(lines_raw) != len(expected_line_ids):
+            raise ValidationError(
+                f"Line count mismatch: expected {len(expected_line_ids)}, got {len(lines_raw)}"
+            )
+    elif len(lines_raw) > len(expected_line_ids):
+        # Targets mode: dedup + membership + targets-present cover the
+        # counting; only a response LARGER than everything sent is flagged
+        # here (it necessarily contains duplicates or unknown ids anyway,
+        # but the early message is clearer).
         raise ValidationError(
-            f"Line count mismatch: expected {len(expected_line_ids)}, got {len(lines_raw)}"
+            f"Line count mismatch: sent {len(expected_line_ids)}, got {len(lines_raw)}"
         )
 
     seen_ids: set[str] = set()
@@ -128,18 +153,19 @@ def validate_llm_response(
 
         outputs.append(LLMLineOutput(line_id=line_id, corrected_text=corrected_text))
 
-    # --- Check all expected IDs are present ---
-    missing = expected_set - seen_ids
+    # --- Check all REQUIRED (target) IDs are present ---
+    missing = check_set - seen_ids
     if missing:
         raise ValidationError(f"Missing line_ids in response: {sorted(missing)}")
 
-    # --- Hyphen integrity ---
+    # --- Hyphen integrity (over the required set — F8 keeps hyphen pairs
+    # within one target set, so both members are guaranteed present) ---
     if hyphen_pairs:
         text_by_id = {o.line_id: o.corrected_text for o in outputs}
         _validate_hyphen_integrity(
             text_by_id,
             hyphen_pairs,
-            expected_set,
+            check_set,
             ocr_texts or {},
             hyphen_subs or {},
             guard_config,

@@ -48,6 +48,7 @@ from alto_core.protocols import (
 from alto_core.protocols.provider import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 from alto_core.schemas import (
     DEFAULT_GUARD_CONFIG,
+    DEFAULT_PAIRING_POLICY,
     DEFAULT_RETRY_POLICY,
     BlockManifest,
     ChunkPlannerConfig,
@@ -63,6 +64,7 @@ from alto_core.schemas import (
     LLMResponse,
     LLMUserPayload,
     PageManifest,
+    PairingPolicy,
     PipelineEventType,
     RetryPolicy,
     Usage,
@@ -402,6 +404,7 @@ class CorrectionPipeline:
         config: ChunkPlannerConfig | None = None,
         retry_policy: RetryPolicy | None = None,
         guard_config: GuardConfig | None = None,
+        pairing_policy: PairingPolicy | None = None,
     ) -> None:
         self.provider = provider
         self.observer = observer
@@ -413,24 +416,38 @@ class CorrectionPipeline:
         # F13 — all anti-migration / acceptance thresholds. Default reproduces
         # the historical constants byte-for-byte.
         self.guard_config = guard_config or DEFAULT_GUARD_CONFIG
+        # §11 — provenance only. Hyphen pairing happens at PARSE time, before
+        # the pipeline exists; pass the same PairingPolicy you parsed with so
+        # the configuration fingerprint stamped into the corrected XML covers
+        # every §8.2 policy. The pipeline itself never re-pairs lines.
+        self.pairing_policy = pairing_policy or DEFAULT_PAIRING_POLICY
         # Counters reset on every call to run()
         self._retry_count = 0
         self._fallback_count = 0
         self._reconcile_metrics = ReconcileMetrics()
         self._usage = Usage()
 
-    def _config_fingerprint(self) -> str:
-        """Stable 16-hex hash over the pipeline's policies (§8.2 / §11).
+    def config_fingerprint(self) -> str:
+        """Stable 16-hex hash over the pipeline's §8.2 policies (§11).
 
-        Combines the RetryPolicy, GuardConfig and ChunkPlannerConfig so the
-        provenance ``processingStep`` records the exact configuration a
-        corrected XML was produced under.
+        Public and reproducible from the public API alone: it is the sha256
+        (truncated to 16 hex chars) of the sorted JSON object mapping each
+        policy name to its ``policy_fingerprint()``::
+
+            {"chunk_planner": …, "guard": …, "pairing": …, "retry": …}
+
+        Covers all four §8.2 policies — RetryPolicy, GuardConfig,
+        ChunkPlannerConfig and PairingPolicy — so the ``processingStep``
+        stamped into a corrected XML records the exact configuration it was
+        produced under, and a consumer holding the same policy objects can
+        recompute and verify it.
         """
         payload = json.dumps(
             {
-                "retry": self.retry_policy.model_dump(mode="json"),
-                "guard": self.guard_config.model_dump(mode="json"),
-                "chunk": self.config.model_dump(mode="json"),
+                "chunk_planner": self.config.policy_fingerprint(),
+                "guard": self.guard_config.policy_fingerprint(),
+                "pairing": self.pairing_policy.policy_fingerprint(),
+                "retry": self.retry_policy.policy_fingerprint(),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -591,6 +608,39 @@ class CorrectionPipeline:
             report=report,
         )
 
+    def run_sync(
+        self,
+        *,
+        document_manifest: DocumentManifest,
+        api_key: str,
+        model: str,
+        provider_name: str,
+        source_files: dict[str, Path],
+        run_id: str | None = None,
+        should_abort: Callable[[], bool] | None = None,
+        apply: bool = True,
+    ) -> CorrectionResult:
+        """Synchronous façade over :meth:`run` (§8.1).
+
+        Wraps the coroutine in :func:`asyncio.run` for consumers without an
+        event loop (scripts, notebooks, CLIs). Same parameters and return
+        value as :meth:`run`. Must NOT be called from within a running
+        event loop — ``asyncio.run`` raises ``RuntimeError`` there; use
+        ``await pipeline.run(...)`` instead.
+        """
+        return asyncio.run(
+            self.run(
+                document_manifest=document_manifest,
+                api_key=api_key,
+                model=model,
+                provider_name=provider_name,
+                source_files=source_files,
+                run_id=run_id,
+                should_abort=should_abort,
+                apply=apply,
+            )
+        )
+
     # ------------------------------------------------------------------
     # Per-page orchestration
     # ------------------------------------------------------------------
@@ -659,8 +709,14 @@ class CorrectionPipeline:
                     provider_name=provider_name,
                     traces=traces,
                     cross_page_partners=cross_page_partners,
+                    should_abort=should_abort,
                 )
                 page_reconciled += n
+            except CorrectionAborted:
+                # F10 — the descent-level probe raises inside _run_chunk;
+                # cancellation must propagate, never be downgraded to a
+                # chunk_error event.
+                raise
             except Exception as exc:
                 # ADR-006: pipeline does not log directly; emit an
                 # event the host application can log/trace.
@@ -706,23 +762,29 @@ class CorrectionPipeline:
         traces: dict[str, LineTrace] | None = None,
         cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
         budget: list[int] | None = None,
+        should_abort: Callable[[], bool] | None = None,
     ) -> int:
         """Process one chunk through the LLM, with F1 granularity descent.
 
         On success: reconcile + accept + finalize, return reconciled pairs.
 
         On retry-budget exhaustion at a granularity coarser than LINE:
-        emit ``chunk_downgraded`` and re-plan this chunk's lines one
-        granularity finer (PAGE→BLOCK→WINDOW→LINE), retrying each
-        sub-chunk. Only lines whose LINE-level chunk still fails — or that
-        run out of the shared ``RetryPolicy.per_chunk_budget`` (default 6
-        cumulative attempts) — fall back to OCR source. A non-retryable
-        error (e.g. HTTP 4xx) skips the descent and falls back immediately:
-        smaller chunks would hit the same wall.
+        emit ``chunk_downgraded`` and re-plan **this chunk's TARGET lines**
+        one granularity finer (PAGE→BLOCK→WINDOW→LINE), retrying each
+        sub-chunk. Context lines (F8) are NOT re-planned — they belong to
+        an adjacent chunk, and correcting them here at a finer grain would
+        steal ownership from the window where their context is maximal.
+        Only lines whose LINE-level chunk still fails — or that run out of
+        the shared ``RetryPolicy.per_chunk_budget`` (default 6 cumulative
+        attempts) — fall back to OCR source. A non-retryable error (e.g.
+        HTTP 4xx) skips the descent and falls back immediately: smaller
+        chunks would hit the same wall.
 
         ``budget`` is a 1-element list holding the remaining cumulative
         attempts for this original chunk's whole descent; ``None`` at the
-        top level starts a fresh budget.
+        top level starts a fresh budget. ``should_abort`` (F10) is probed
+        before each sub-chunk of the descent — a long PAGE→…→LINE cascade
+        stays cancellable.
         """
         chunk_lines = [line_by_id[lid] for lid in chunk.line_ids if lid in line_by_id]
         if not chunk_lines:
@@ -775,6 +837,12 @@ class CorrectionPipeline:
         # --- Failure: try a granularity descent (F1). ---
         next_g = downgrade_granularity(chunk.granularity)
         if can_downgrade and next_g is not None and budget[0] > 0:
+            # F1×F8 — only the chunk's TARGET lines descend. Context lines
+            # are owned by an adjacent chunk; re-planning them here would
+            # correct them at a finer grain and make their rightful window
+            # skip them (acceptance ignores already-corrected lines).
+            target_ids = set(chunk.targets())
+            descent_lines = [lm for lm in chunk_lines if lm.line_id in target_ids]
             self.observer.on_event(
                 PipelineEventType.CHUNK_DOWNGRADED,
                 {
@@ -782,17 +850,26 @@ class CorrectionPipeline:
                     "from_granularity": chunk.granularity.value,
                     "to_granularity": next_g.value,
                     "line_count": len(chunk_lines),
+                    "target_count": len(descent_lines),
                     "budget_remaining": budget[0],
                 },
             )
             sub_plan = plan_page(
-                _subpage_for_lines(page, chunk_lines),
+                _subpage_for_lines(page, descent_lines),
                 chunk.document_id,
                 self.config,
                 force_granularity=next_g,
             )
             total = 0
             for sub in sub_plan.chunks:
+                # F10 — the descent can spawn many finest-grain chunks;
+                # keep the run cancellable inside it, not only between
+                # top-level chunks.
+                if should_abort is not None and should_abort():
+                    raise CorrectionAborted(
+                        f"run aborted during granularity descent of chunk "
+                        f"{chunk.chunk_id!r} on page {page.page_id!r}"
+                    )
                 if budget[0] <= 0:
                     # Budget spent mid-descent: OCR-fallback the rest.
                     sub_lines = [
@@ -816,6 +893,7 @@ class CorrectionPipeline:
                     traces=traces,
                     cross_page_partners=cross_page_partners,
                     budget=budget,
+                    should_abort=should_abort,
                 )
             return total
 
@@ -970,6 +1048,12 @@ class CorrectionPipeline:
         hyphen_violation = False
         attempts_used = 0
         last_msg = ""
+        # F14 — token usage accumulated across EVERY call of this chunk's
+        # attempt loop, including calls whose response later failed
+        # validation (tokens were spent regardless). Returned on success so
+        # the chunk_completed event reports the chunk's true total, not
+        # just the final successful call.
+        chunk_usage = Usage()
 
         for attempt in range(1, max_attempts + 1):
             attempts_used = attempt
@@ -1009,6 +1093,7 @@ class CorrectionPipeline:
                 )
                 if usage is not None:
                     self._usage = self._usage + usage
+                    chunk_usage = chunk_usage + usage
 
                 lm_by_id = {lm.line_id: lm for lm in chunk_lines}
                 raw_lines = raw.get("lines", []) if isinstance(raw, dict) else []
@@ -1040,8 +1125,12 @@ class CorrectionPipeline:
                     {lm.line_id: lm.ocr_text for lm in chunk_lines},
                     hyphen_subs if hyphen_subs else None,
                     guard_config=self.guard_config,
+                    # F8 — the 1:1 count is enforced on targets; a missing
+                    # context line's output is not an error (it belongs to
+                    # an adjacent chunk).
+                    target_line_ids=chunk.target_line_ids,
                 )
-                return response, attempts_used, False, "", usage
+                return response, attempts_used, False, "", chunk_usage
 
             except Exception as exc:
                 msg = sanitize_error(str(exc), api_key)
@@ -1288,7 +1377,7 @@ class CorrectionPipeline:
         # §11 — provenance stamped into every corrected file's processingStep.
         from alto_core import __version__ as _lib_version
 
-        config_fingerprint = self._config_fingerprint()
+        config_fingerprint = self.config_fingerprint()
 
         for source_name, xml_path in source_files.items():
             pages_for_file = [

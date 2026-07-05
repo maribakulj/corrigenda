@@ -200,20 +200,6 @@ class DocumentManifest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Chunk planning
-# ---------------------------------------------------------------------------
-
-
-class ChunkPlannerConfig(BaseModel):
-    """Tunables for the chunk planner — character + line budgets per LLM request."""
-
-    max_input_chars_per_request: int = 12000
-    max_lines_per_request: int = 80
-    line_window_size: int = 12
-    line_window_overlap: int = 1
-
-
-# ---------------------------------------------------------------------------
 # Policies (frozen, injectable — §8.2)
 # ---------------------------------------------------------------------------
 
@@ -236,6 +222,19 @@ class FrozenPolicy(BaseModel):
             self.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+class ChunkPlannerConfig(FrozenPolicy):
+    """Tunables for the chunk planner — character + line budgets per LLM request.
+
+    Frozen like every §8.2 policy so a run's configuration is immutable and
+    fingerprintable for provenance (§11).
+    """
+
+    max_input_chars_per_request: int = 12000
+    max_lines_per_request: int = 80
+    line_window_size: int = 12
+    line_window_overlap: int = 1
 
 
 class GuardConfig(FrozenPolicy):
@@ -327,16 +326,24 @@ class PairingPolicy(FrozenPolicy):
     #: Reject a partner whose top is more than this many ALTO units below
     #: the PART1 line's bottom (``candidate.vpos - (part1.vpos + height)``).
     #: ``None`` disables the check (default = historical behaviour).
+    #: Only meaningful WITHIN a page: VPOS restarts on every page, so the
+    #: check is skipped for cross-page candidates (a legitimate cross-page
+    #: pair would otherwise be broken by a spurious negative/huge gap).
     max_vertical_gap: int | None = None
-    #: When ``True``, only pair lines in the same TextBlock. Default
-    #: ``False`` keeps the historical cross-block pairing.
+    #: When ``True``, only pair lines in the same TextBlock. Because a
+    #: cross-page partner is by definition in a different block, this also
+    #: forbids cross-page pairing — intended reading of the constraint.
+    #: Default ``False`` keeps the historical cross-block pairing.
     same_block_only: bool = False
 
     def can_pair(self, part1: LineManifest, candidate: LineManifest) -> bool:
         """Return ``True`` if ``candidate`` may be ``part1``'s PART2 partner."""
         if self.same_block_only and part1.block_id != candidate.block_id:
             return False
-        if self.max_vertical_gap is not None:
+        if (
+            self.max_vertical_gap is not None
+            and part1.page_id == candidate.page_id  # VPOS comparable intra-page only
+        ):
             gap = candidate.coords.vpos - (part1.coords.vpos + part1.coords.height)
             if gap > self.max_vertical_gap:
                 return False

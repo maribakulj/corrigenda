@@ -94,3 +94,48 @@ def test_f2_fast_path_drops_wc_cc_on_changed_content(tmp_path: Path):
     assert s[0].get("STYLEREFS") == "f1"  # style preserved
     assert s[1].get("WC") is None
     assert s[1].get("CC") is None
+
+
+def test_slow_path_sp_geometry_is_recomputed_not_recycled(tmp_path: Path):
+    """Post-audit §6.1 fix — slow-path SPs must carry geometry from the
+    same _compute_geometry pass as the surrounding Strings, not the stale
+    pre-correction HPOS/WIDTH. Pin: the SP sits exactly between its
+    neighbouring Strings (contiguous cursor), not at its old position."""
+    body = (
+        '<TextBlock ID="B1" HPOS="0" VPOS="0" WIDTH="500" HEIGHT="40">'
+        '<TextLine ID="L1" HPOS="0" VPOS="0" WIDTH="500" HEIGHT="40">'
+        '<String ID="S1" CONTENT="un" HPOS="0" VPOS="0" WIDTH="240" HEIGHT="40"/>'
+        '<SP WIDTH="99" HPOS="777" VPOS="0"/>'
+        '<String ID="S2" CONTENT="mot" HPOS="260" VPOS="0" WIDTH="240" HEIGHT="40"/>'
+        "</TextLine></TextBlock>"
+    )
+    xml_path = _write(tmp_path, body)
+    doc = build_document_manifest([(xml_path, xml_path.name)])
+    for page in doc.pages:
+        for lm in page.lines:
+            lm.corrected_text = "un petit mot"  # 2 -> 3 words: slow path
+
+    xml_bytes, _metrics, paths = rewrite_alto_file(
+        xml_path, doc.pages, provider="t", model="m"
+    )
+    assert paths["L1"] == "slow_path"
+
+    root = etree.fromstring(xml_bytes)
+    ns = _detect_namespace(root)
+    tl = root.find(f".//{{{ns}}}TextLine[@ID='L1']")
+    assert tl is not None
+    children = [c for c in tl if isinstance(c.tag, str)]
+
+    cursor = 0
+    for c in children:
+        local = etree.QName(c.tag).localname
+        if local not in ("String", "SP"):
+            continue
+        hpos = int(c.get("HPOS", "-1"))
+        width = int(c.get("WIDTH", "-1"))
+        assert hpos == cursor, f"{local} at HPOS={hpos}, expected {cursor}"
+        assert width >= 1
+        cursor += width
+    # The stale SP position (777) must be gone.
+    sps = [c for c in children if etree.QName(c.tag).localname == "SP"]
+    assert sps and all(sp.get("HPOS") != "777" for sp in sps)

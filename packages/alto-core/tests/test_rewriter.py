@@ -600,8 +600,10 @@ def test_slow_path_part1_preserves_hyp(tmp_path):
     assert hyps[0].get("WIDTH") == "16"
 
 
-def test_slow_path_preserves_sp_attributes(tmp_path):
-    """Slow path: original SP attributes are preserved where possible."""
+def test_slow_path_recomputes_sp_geometry(tmp_path):
+    """Slow path: SP geometry is RECOMPUTED, coherent with the recomputed
+    Strings around it (post-audit §6.1 fix — the old contract recycled the
+    stale pre-correction HPOS/WIDTH, contradicting the new String layout)."""
     lines_xml = """\
 <TextLine ID="TL1" HPOS="10" VPOS="20" WIDTH="400" HEIGHT="30">
   <String ID="S1" CONTENT="un" HPOS="10" VPOS="20" WIDTH="50" HEIGHT="30"/>
@@ -612,11 +614,19 @@ def test_slow_path_preserves_sp_attributes(tmp_path):
     lm = make_line("TL1", "un deux", corrected_text="un deux trois")
     root = write_and_rewrite(tmp_path, lines_xml, [lm])
 
+    tl = root.find(f".//{_ns('TextLine')}[@ID='TL1']")
+    cursor = 10  # line HPOS
+    for c in tl:
+        local = c.tag.rsplit("}", 1)[-1]
+        if local not in ("String", "SP"):
+            continue
+        # Contiguous layout: each child starts where the previous ended.
+        assert int(c.get("HPOS")) == cursor, f"{local} not contiguous"
+        cursor += int(c.get("WIDTH"))
     sps = root.findall(f".//{_ns('SP')}")
-    # First SP reuses original attributes
-    assert sps[0].get("WIDTH") == "12"
-    assert sps[0].get("HPOS") == "60"
-    assert sps[0].get("VPOS") == "22"
+    # VPOS inherited from the line, stale position gone.
+    assert sps[0].get("VPOS") == "20"
+    assert sps[0].get("HPOS") != "60"
 
 
 # ---------------------------------------------------------------------------
