@@ -75,6 +75,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`RetryPolicy`+`GuardConfig`+`ChunkPlannerConfig`) alongside provider/model.
 - **py.typed + `mypy --strict` (F12/§8.3)** — PEP 561 marker shipped in the
   wheel; the package passes `mypy --strict` (new `alto-core-types` CI job).
+- **F12 (relocation)** — `Provider`, `JobStatus`, `JobManifest` (and its
+  `images` map) moved to the backend (`app.schemas.job`); the vestigial
+  `status` field was dropped from `PageManifest`/`DocumentManifest`. The core
+  keeps only the domain enums (`LineStatus`, `ChunkGranularity`, `HyphenRole`,
+  `PipelineEventType`). Top-level public surface is now 34 symbols.
+- **F11** — the algorithm tests were repatriated into
+  `packages/alto-core/tests`; the package gates its own coverage (~86%, gate
+  85%) and its CI job runs pytest with `--cov=alto_core`.
 
 ### Changed
 - **Retry policy on HTTP 4xx (other than 429) is now non-retryable.**

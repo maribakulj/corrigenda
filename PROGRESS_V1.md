@@ -1,5 +1,14 @@
 # PROGRESS_V1 — alto-core v1.0
 
+## ✅ STATUT : v1.0 fonctionnellement COMPLÈTE (F1–F14 + surface API §8/§9/§11)
+Monorepo vert : **lib 277 tests (cov ~86%), backend 265 tests (cov ~84%),
+lib+backend `mypy --strict` clean, ruff clean.** Version NON bumpée (reste
+`0.1.0a1`, tout sous `[Unreleased]`) — le passage à 1.0.0 + le nom PyPI + le
+renommage `corrigenda` sont des décisions produit réservées à l'utilisateur
+(§14). Packaging prêt (py.typed dans le wheel), NON publié.
+Reste optionnel/produit : décision de nom/version, publication PyPI.
+
+
 Suivi de la livraison v1.0 de `packages/alto-core/` selon `SPECS_LIB_V2.md`
 (§7 F1–F14, §8, §9, §11, §13 ligne v1.0). Ce fichier est le point de reprise
 pour une session fraîche : il dit ce qui est fait, ce qui reste, et les
@@ -166,7 +175,13 @@ décisions prises.
         DocumentManifest.status typés JobStatus + `_process_page` fait
         `page.status=JobStatus.COMPLETED`. À retyper (enum interne LineStatus-like
         ou retirer). Corriger imports backend (app/schemas re-exporte ces 3).
-- [ ] **Tranche 5 — F11** (rapatrier tests d'algo dans packages/alto-core/tests)
+- [x] **Tranche 5 — F11 COMPLÈTE** : 8 fichiers de tests algo rapatriés
+      (test_parser/hyphenation/chunk_planner/validator/rewriter/
+      chained_hyphenation/double_dash/x0000002, 159 tests) ; imports
+      app.schemas→alto_core.schemas ; chemin examples/ ajusté.
+      test_line_acceptance RESTE au backend (intégration JobRunner/Store).
+      Couverture séparée : paquet gate 85% (~86%), backend source=["app"]
+      (~84%). Job CI alto-core-tests avec --cov.
   - Candidats backend/tests → paquet : test_parser, test_hyphenation,
     test_chunk_planner, test_validator, test_line_acceptance, test_rewriter,
     test_chained_hyphenation, test_double_dash, test_x0000002. Corriger imports
