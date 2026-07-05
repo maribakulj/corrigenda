@@ -69,6 +69,7 @@ _KNOWN_BACKEND_EVENTS = {
     "chunk_planned",
     "chunk_started",
     "chunk_completed",
+    "chunk_downgraded",
     "retry",
     "warning",
     "chunk_error",

@@ -100,6 +100,9 @@ class PipelineEventType(str, Enum):
     CHUNK_STARTED = "chunk_started"
     CHUNK_COMPLETED = "chunk_completed"
     CHUNK_ERROR = "chunk_error"
+    # F1 — emitted when a chunk's retry budget is exhausted and its lines are
+    # re-planned at the next-finer granularity (PAGE→BLOCK→WINDOW→LINE).
+    CHUNK_DOWNGRADED = "chunk_downgraded"
     RETRY = "retry"
     WARNING = "warning"
     HYPHEN_PARTNER_MISSING = "hyphen_partner_missing"

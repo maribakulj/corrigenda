@@ -221,7 +221,10 @@ async def test_fallback_warning_message_carries_sanitised_truncated_error(
     ``hyphen_integrity_violation`` is RESERVED for the retry event's
     error tag — the warning never uses it."""
     err = ValueError("Persistent JSON error " + "X" * 500)
-    provider = _ScriptedProvider([err, err, err])
+    # F1 — a failed chunk downgrades and retries at finer granularity, so
+    # the failure must persist across the whole per-chunk budget (6) to
+    # reach the terminal OCR fallback that emits the warning.
+    provider = _ScriptedProvider([err] * 6)
     events, _store, _job_id = await _run_and_collect(tmp_path, provider)
 
     warnings = [e for e in events if e.event == "warning"]

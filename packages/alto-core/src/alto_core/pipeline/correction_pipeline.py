@@ -35,7 +35,7 @@ from alto_core.alto.hyphenation import (
 )
 from alto_core.alto.rewriter import extract_output_texts, rewrite_alto_file
 from alto_core.errors import CorrectionAborted
-from alto_core.pipeline.chunk_planner import plan_page
+from alto_core.pipeline.chunk_planner import downgrade_granularity, plan_page
 from alto_core.pipeline.line_acceptance import check_adjacent_duplicates, check_line
 from alto_core.pipeline.validator import HyphenIntegrityError, validate_llm_response
 from alto_core.protocols import (
@@ -48,6 +48,7 @@ from alto_core.protocols.provider import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 from alto_core.schemas import (
     DEFAULT_GUARD_CONFIG,
     DEFAULT_RETRY_POLICY,
+    BlockManifest,
     ChunkPlannerConfig,
     ChunkRequest,
     DocumentManifest,
@@ -217,6 +218,38 @@ def _classify_retry(
         backoff=0,
         error_tag=sanitised_msg[:120],
         is_hyphen_violation=False,
+    )
+
+
+def _subpage_for_lines(page: PageManifest, lines: list[LineManifest]) -> PageManifest:
+    """Build a synthetic single-page manifest holding just ``lines`` (F1).
+
+    Used to re-plan a failed chunk's lines at a finer granularity via the
+    normal chunk planner: the planner needs a ``PageManifest`` with the
+    blocks that own these lines. Blocks are copied with their ``line_ids``
+    filtered to the subset, preserving block order and geometry so BLOCK /
+    WINDOW planning behave exactly as on the real page.
+    """
+    kept_ids = {lm.line_id for lm in lines}
+    sub_blocks = [
+        BlockManifest(
+            block_id=b.block_id,
+            page_id=b.page_id,
+            block_order=b.block_order,
+            coords=b.coords,
+            line_ids=[lid for lid in b.line_ids if lid in kept_ids],
+        )
+        for b in page.blocks
+        if any(lid in kept_ids for lid in b.line_ids)
+    ]
+    return PageManifest(
+        page_id=page.page_id,
+        source_file=page.source_file,
+        page_index=page.page_index,
+        page_width=page.page_width,
+        page_height=page.page_height,
+        blocks=sub_blocks,
+        lines=lines,
     )
 
 
@@ -573,6 +606,7 @@ class CorrectionPipeline:
             try:
                 n = await self._run_chunk(
                     chunk=chunk,
+                    page=page,
                     line_by_id=line_by_id,
                     api_key=api_key,
                     model=model,
@@ -620,20 +654,40 @@ class CorrectionPipeline:
         self,
         *,
         chunk: ChunkRequest,
+        page: PageManifest,
         line_by_id: dict[str, LineManifest],
         api_key: str,
         model: str,
         provider_name: str,
         traces: dict[str, LineTrace] | None = None,
         cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
+        budget: list[int] | None = None,
     ) -> int:
-        """Process one chunk through the LLM. Returns hyphen pairs reconciled."""
+        """Process one chunk through the LLM, with F1 granularity descent.
+
+        On success: reconcile + accept + finalize, return reconciled pairs.
+
+        On retry-budget exhaustion at a granularity coarser than LINE:
+        emit ``chunk_downgraded`` and re-plan this chunk's lines one
+        granularity finer (PAGE→BLOCK→WINDOW→LINE), retrying each
+        sub-chunk. Only lines whose LINE-level chunk still fails — or that
+        run out of the shared ``RetryPolicy.per_chunk_budget`` (default 6
+        cumulative attempts) — fall back to OCR source. A non-retryable
+        error (e.g. HTTP 4xx) skips the descent and falls back immediately:
+        smaller chunks would hit the same wall.
+
+        ``budget`` is a 1-element list holding the remaining cumulative
+        attempts for this original chunk's whole descent; ``None`` at the
+        top level starts a fresh budget.
+        """
         chunk_lines = [line_by_id[lid] for lid in chunk.line_ids if lid in line_by_id]
         if not chunk_lines:
             return 0
 
+        if budget is None:
+            budget = [self.retry_policy.per_chunk_budget]
+
         hyphen_pairs = _build_hyphen_pairs(chunk_lines)
-        all_lines_by_id = line_by_id
 
         self.observer.on_event(
             PipelineEventType.CHUNK_STARTED,
@@ -644,20 +698,97 @@ class CorrectionPipeline:
             },
         )
 
-        response = await self._call_with_retry(
+        attempts_cap = min(self.retry_policy.max_attempts, max(budget[0], 0))
+        response, attempts_used, can_downgrade, last_msg = await self._attempt_chunk(
             chunk=chunk,
             chunk_lines=chunk_lines,
             hyphen_pairs=hyphen_pairs,
-            all_lines_by_id=all_lines_by_id,
+            all_lines_by_id=line_by_id,
             api_key=api_key,
             model=model,
             traces=traces,
+            max_attempts=attempts_cap,
         )
-        if response is None:
-            # All attempts exhausted; _call_with_retry already applied
-            # the OCR fallback and emitted the warning event.
-            return 0
+        budget[0] -= attempts_used
 
+        if response is not None:
+            return self._finish_successful_chunk(
+                chunk=chunk,
+                chunk_lines=chunk_lines,
+                response=response,
+                line_by_id=line_by_id,
+                cross_page_partners=cross_page_partners,
+                traces=traces,
+            )
+
+        # --- Failure: try a granularity descent (F1). ---
+        next_g = downgrade_granularity(chunk.granularity)
+        if can_downgrade and next_g is not None and budget[0] > 0:
+            self.observer.on_event(
+                PipelineEventType.CHUNK_DOWNGRADED,
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "from_granularity": chunk.granularity.value,
+                    "to_granularity": next_g.value,
+                    "line_count": len(chunk_lines),
+                    "budget_remaining": budget[0],
+                },
+            )
+            sub_plan = plan_page(
+                _subpage_for_lines(page, chunk_lines),
+                chunk.document_id,
+                self.config,
+                force_granularity=next_g,
+            )
+            total = 0
+            for sub in sub_plan.chunks:
+                if budget[0] <= 0:
+                    # Budget spent mid-descent: OCR-fallback the rest.
+                    sub_lines = [
+                        line_by_id[lid] for lid in sub.line_ids if lid in line_by_id
+                    ]
+                    self._apply_chunk_fallback(
+                        chunk=sub,
+                        chunk_lines=sub_lines,
+                        traces=traces,
+                        sanitised_msg=last_msg or "per_chunk_budget exhausted",
+                    )
+                    self._fallback_count += 1
+                    continue
+                total += await self._run_chunk(
+                    chunk=sub,
+                    page=page,
+                    line_by_id=line_by_id,
+                    api_key=api_key,
+                    model=model,
+                    provider_name=provider_name,
+                    traces=traces,
+                    cross_page_partners=cross_page_partners,
+                    budget=budget,
+                )
+            return total
+
+        # --- Terminal fallback (LINE grain, budget gone, or hard error). ---
+        self._apply_chunk_fallback(
+            chunk=chunk,
+            chunk_lines=chunk_lines,
+            traces=traces,
+            sanitised_msg=last_msg or "all_attempts_exhausted",
+        )
+        self._fallback_count += 1
+        return 0
+
+    def _finish_successful_chunk(
+        self,
+        *,
+        chunk: ChunkRequest,
+        chunk_lines: list[LineManifest],
+        response: LLMResponse,
+        line_by_id: dict[str, LineManifest],
+        cross_page_partners: dict[tuple[str, str], LineManifest] | None,
+        traces: dict[str, LineTrace] | None,
+    ) -> int:
+        """Reconcile / accept / finalize a chunk whose LLM call succeeded."""
         text_by_id: dict[str, str] = {
             o.line_id: o.corrected_text for o in response.lines
         }
@@ -672,7 +803,7 @@ class CorrectionPipeline:
         self._apply_line_acceptance(
             chunk_lines=chunk_lines,
             text_by_id=text_by_id,
-            all_lines_by_id=all_lines_by_id,
+            all_lines_by_id=line_by_id,
             traces=traces,
         )
         self._finalize_chunk_traces(
@@ -726,7 +857,7 @@ class CorrectionPipeline:
                 fallback_reason=f"all_attempts_exhausted: {sanitised_msg[:120]}",
             )
 
-    async def _call_with_retry(
+    async def _attempt_chunk(
         self,
         *,
         chunk: ChunkRequest,
@@ -736,36 +867,40 @@ class CorrectionPipeline:
         api_key: str,
         model: str,
         traces: dict[str, LineTrace] | None,
-    ) -> LLMResponse | None:
-        """Call the LLM provider with retries; return a validated response.
+        max_attempts: int,
+    ) -> tuple[LLMResponse | None, int, bool, str]:
+        """Call the LLM provider with retries; return the outcome.
 
-        On success: returns the validated ``LLMResponse``.
-        On exhaustion: applies the OCR fallback to every line in
-        ``chunk_lines`` (mutates ``corrected_text`` / ``status`` /
-        ``LineTrace``), emits a ``warning`` event, increments
-        ``self._fallback_count`` (at the call site, mirroring
-        ``self._retry_count``) and returns ``None``. The caller must
-        short-circuit on ``None``.
+        Returns ``(response, attempts_used, can_downgrade, last_msg)``:
+          - ``response`` — the validated :class:`LLMResponse`, or ``None``
+            on failure;
+          - ``attempts_used`` — how many attempts this call consumed
+            (charged against the per-chunk budget by the caller);
+          - ``can_downgrade`` — on failure, ``True`` when the terminal
+            error was retryable (malformed output / transient) and hence
+            worth retrying at a finer granularity (F1); ``False`` for a
+            non-retryable hard error (e.g. 4xx), which won't heal on
+            smaller chunks;
+          - ``last_msg`` — the sanitised terminal error message.
 
-        Retry strategy (pinned by ``test_pipeline_classifies_*`` in the
-        backend and ``test_retry_classification`` in the contract
-        suite):
-          - Up to ``retry_policy.max_attempts`` attempts (F9).
-          - Temperature ramp from ``retry_policy.temperatures``
-            (default 0.0 → 0.3 → 0.5), pinned at 0.0 after a
-            ``HyphenIntegrityError`` (which suggests the LLM
-            mis-handled the hyphen pair — lower temperature is more
-            likely to stick to the source).
-          - Backoff: 0 s for hyphen violations (first occurrence),
-            ``attempt * 2`` for transient HTTP class names,
-            ``attempt`` for any other ValueError / JSONDecodeError.
-            Each retry emits a ``retry`` SSE event with the
-            classification tag.
+        This method NEVER applies the OCR fallback — that decision (and
+        the ``warning`` event) belongs to the caller (:meth:`_run_chunk`),
+        which may instead downgrade the granularity.
+
+        Retry strategy (F9): up to ``max_attempts`` attempts (bounded by
+        the caller to the remaining budget); temperature from
+        ``retry_policy.temperatures`` (default 0.0 → 0.3 → 0.5), pinned at
+        0.0 after a ``HyphenIntegrityError``; backoff 0 s for the first
+        hyphen violation, ``attempt * transient_backoff_base`` for
+        transient HTTP, ``attempt * output_backoff_base`` for other
+        malformed output. Each retry emits a ``retry`` event.
         """
-        max_attempts = self.retry_policy.max_attempts
         hyphen_violation = False
+        attempts_used = 0
+        last_msg = ""
 
         for attempt in range(1, max_attempts + 1):
+            attempts_used = attempt
             # F9 — temperature comes from the injected RetryPolicy. A hyphen
             # violation still pins the next attempt to 0.0 (the LLM mishandled
             # the pair; a colder attempt sticks closer to source).
@@ -832,10 +967,11 @@ class CorrectionPipeline:
                     hyphen_subs if hyphen_subs else None,
                     guard_config=self.guard_config,
                 )
-                return response
+                return response, attempts_used, False, ""
 
             except Exception as exc:
                 msg = sanitize_error(str(exc), api_key)
+                last_msg = msg
                 decision = _classify_retry(
                     exc=exc,
                     sanitised_msg=msg,
@@ -860,20 +996,14 @@ class CorrectionPipeline:
                     self._retry_count += 1
                     continue
 
-                # Attempts exhausted (or non-retryable error class) →
-                # OCR fallback. ADR-006: no log here, the warning event
-                # carries the same information for hosts.
-                self._apply_chunk_fallback(
-                    chunk=chunk,
-                    chunk_lines=chunk_lines,
-                    traces=traces,
-                    sanitised_msg=msg,
-                )
-                self._fallback_count += 1
-                return None
+                # Attempts exhausted (or non-retryable error class). Do NOT
+                # fall back here — the caller decides between a granularity
+                # downgrade (F1) and the OCR fallback. ``can_downgrade`` is
+                # True only when the terminal error was retryable.
+                return None, attempts_used, decision.is_retryable, msg
 
-        # Unreachable: every iteration either returns or continues.
-        return None
+        # max_attempts <= 0 (no budget left): nothing attempted.
+        return None, attempts_used, False, last_msg
 
     # ------------------------------------------------------------------
     # Chunk helpers extracted from _run_chunk (audit A3)

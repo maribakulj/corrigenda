@@ -84,6 +84,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
       'chunk_started',
       'chunk_completed',
       'chunk_error',
+      'chunk_downgraded',
       'hyphen_partner_missing',
       'retry',
       'warning',

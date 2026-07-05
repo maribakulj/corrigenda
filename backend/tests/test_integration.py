@@ -369,12 +369,15 @@ def test_download_multi_zip():
 
 def test_fallback_on_invalid_json():
     """
-    Provider returns invalid JSON for every attempt (3×) → orchestrator falls back
-    to OCR source text for that chunk. Job still completes successfully.
+    Provider returns invalid JSON persistently → orchestrator falls back
+    to OCR source text. Job still completes successfully.
     asyncio.sleep is mocked so the retry back-off doesn't slow the test.
+
+    F1 — a transient burst of invalid JSON now recovers via granularity
+    downgrade, so the failure must persist past the per-chunk budget to
+    force the terminal fallback.
     """
-    # invalid_json_times must be >= max_attempts (3) to exhaust all retries
-    mock = MockProvider(invalid_json_times=3)
+    mock = MockProvider(invalid_json_times=99)
 
     # Patch alto-core directly: the backend shim no longer re-exports
     # the `asyncio` module attribute (Stage 3 audit remediation).

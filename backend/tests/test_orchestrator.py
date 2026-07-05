@@ -248,10 +248,14 @@ async def test_retry_on_invalid_json(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_fallback_on_persistent_failure(tmp_path: Path):
-    """MockProvider fails 3 times → OCR source kept, job still completed."""
+    """Persistent provider failure → OCR source kept, job still completed.
+
+    F1 — a *transient* burst of failures now recovers by downgrading
+    granularity and retrying, so the provider must fail persistently
+    (beyond the per-chunk budget) to force the terminal OCR fallback.
+    """
     store, job_id = _make_store_and_job()
-    # Fail more than max_attempts for the first chunk; succeed for the rest
-    provider = MockProvider(fail_times=3)
+    provider = MockProvider(fail_times=99)
     await _run(job_id, provider, tmp_path, store)
 
     job = store.get_job(job_id)

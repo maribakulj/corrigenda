@@ -254,10 +254,22 @@ class TestTraceFallback:
             )
             assert t.validation_status == "fallback"
             assert t.fallback_reason is not None
-            # Fallback can be drift_guard or all_attempts_exhausted
-            # depending on whether validator or drift guard catches it first
-            assert (
-                "drift_guard" in t.fallback_reason or "all_attempts_exhausted" in t.fallback_reason
+            # The drift can be caught by the chunk-level validator
+            # (all_attempts_exhausted after downgrade) or, for non-hyphen
+            # lines whose LLM call succeeds, by the per-line acceptance
+            # guard. F1 — granularity downgrade means a drifting non-hyphen
+            # line is now individually rejected by check_line (reason
+            # "too_different_from_source" / neighbour / absorption) instead
+            # of being collateral in a whole-chunk hyphen fallback.
+            accepted_reasons = (
+                "drift_guard",
+                "all_attempts_exhausted",
+                "too_different_from_source",
+                "closer_to_",
+                "absorbs_",
+            )
+            assert any(r in t.fallback_reason for r in accepted_reasons), (
+                f"{t.line_id}: unexpected fallback_reason {t.fallback_reason!r}"
             )
 
 
