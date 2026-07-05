@@ -53,7 +53,7 @@ class MockProvider:
 
         if self._invalid_json_times > 0:
             self._invalid_json_times -= 1
-            return {"bad_key": []}  # missing "lines"
+            return {"bad_key": []}, None  # missing "lines"
 
         if self._fail_times > 0:
             self._fail_times -= 1
@@ -68,7 +68,7 @@ class MockProvider:
                     "corrected_text": line_in["ocr_text"],
                 }
             )
-        return {"lines": lines_out}
+        return {"lines": lines_out}, None
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +392,7 @@ class _SlowProvider:
 
     async def complete_structured(self, **kwargs):
         await asyncio.sleep(5.0)  # any value > the test's patched timeout
-        return {"lines": []}
+        return {"lines": []}, None
 
 
 @pytest.mark.asyncio
@@ -572,7 +572,7 @@ class _OneHyphenViolationThenOK:
             {"line_id": line_in["line_id"], "corrected_text": line_in["ocr_text"]}
             for line_in in kwargs["user_payload"].get("lines", [])
         ]
-        return {"lines": lines_out}
+        return {"lines": lines_out}, None
 
 
 async def _capture_sleeps(monkeypatch):
@@ -977,7 +977,7 @@ class _NeverReturnsProvider:
     async def complete_structured(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         # Sleep arbitrarily long; the test will cancel before this fires.
         await asyncio.sleep(60)
-        return {"lines": []}
+        return {"lines": []}, None
 
 
 @pytest.mark.asyncio

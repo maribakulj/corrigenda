@@ -6,8 +6,8 @@ import json
 import re
 from typing import Any
 
-from app.providers.base import call_llm, get_json
-from app.schemas import ModelInfo
+from app.providers.base import call_llm, extract_usage, get_json
+from app.schemas import ModelInfo, Usage
 
 _BASE = "https://api.anthropic.com"
 _VERSION = "2023-06-01"
@@ -102,7 +102,7 @@ class AnthropicProvider:
         user_payload: dict[str, Any],
         json_schema: dict[str, Any],
         temperature: float = 0.0,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], Usage | None]:
         """Force a tool call to get a structured JSON response.
 
         Anthropic's Messages API does not have a ``response_format`` /
@@ -146,7 +146,7 @@ class AnthropicProvider:
             fallback_body=fallback_body,
         )
 
-        return _extract_anthropic_payload(data, tool_name)
+        return _extract_anthropic_payload(data, tool_name), extract_usage(data)
 
 
 def _extract_anthropic_payload(

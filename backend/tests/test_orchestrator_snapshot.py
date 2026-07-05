@@ -59,7 +59,7 @@ class _IdentityProvider:
                 {"line_id": line["line_id"], "corrected_text": line["ocr_text"]}
                 for line in user_payload.get("lines", [])
             ]
-        }
+        }, None
 
 
 def _run_and_capture(xml_path: Path) -> dict[str, Any]:

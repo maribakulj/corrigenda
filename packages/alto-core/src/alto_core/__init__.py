@@ -48,6 +48,7 @@ from alto_core.schemas import (
     PairingPolicy,
     Provider,
     RetryPolicy,
+    Usage,
 )
 
 __version__ = "0.1.0a1"
@@ -93,6 +94,7 @@ __all__ = [
     "PairingPolicy",
     "Provider",
     "RetryPolicy",
+    "Usage",
     # Version
     "__version__",
 ]

@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.providers.base import call_llm, extract_chat_text, get_json
-from app.schemas import ModelInfo
+from app.providers.base import call_llm, extract_chat_text, extract_usage, get_json
+from app.schemas import ModelInfo, Usage
 
 _BASE = "https://api.openai.com"
 
@@ -55,7 +55,7 @@ class OpenAIProvider:
         user_payload: dict[str, Any],
         json_schema: dict[str, Any],
         temperature: float = 0.0,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], Usage | None]:
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -74,4 +74,4 @@ class OpenAIProvider:
         }
 
         data = await call_llm(url=f"{_BASE}/v1/chat/completions", headers=headers, body=body)
-        return extract_chat_text(data, "OpenAI")
+        return extract_chat_text(data, "OpenAI"), extract_usage(data)

@@ -54,7 +54,7 @@ class _CountingProvider:
         user_payload: dict[str, Any],
         json_schema: dict[str, Any],
         temperature: float = 0.0,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], Any]:
         self.calls += 1
         if self.calls <= self.fail_times:
             raise ValueError("mock malformed output")
@@ -63,7 +63,7 @@ class _CountingProvider:
                 {"line_id": ln["line_id"], "corrected_text": ln["ocr_text"]}
                 for ln in user_payload.get("lines", [])
             ]
-        }
+        }, None
 
 
 class _RecordingObserver:

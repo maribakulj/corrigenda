@@ -64,6 +64,7 @@ from alto_core.schemas import (
     PageManifest,
     PipelineEventType,
     RetryPolicy,
+    Usage,
 )
 
 # Patterns to redact common secret formats in error messages.
@@ -376,6 +377,9 @@ class CorrectionResult:
     fallback_count: int
     traces: dict[str, LineTrace]
     reconcile_metrics: ReconcileMetrics
+    #: F14 — aggregate token consumption across every producer call in the
+    #: run (zero when no provider reported usage).
+    usage: Usage
 
 
 class CorrectionPipeline:
@@ -409,6 +413,7 @@ class CorrectionPipeline:
         self._retry_count = 0
         self._fallback_count = 0
         self._reconcile_metrics = ReconcileMetrics()
+        self._usage = Usage()
 
     def _record_reconcile_outcome(self, outcome: str) -> None:
         """Bump the per-job ReconcileMetrics counter for a single pair."""
@@ -452,6 +457,7 @@ class CorrectionPipeline:
         self._retry_count = 0
         self._fallback_count = 0
         self._reconcile_metrics = ReconcileMetrics()
+        self._usage = Usage()
 
         total_hyphen_pairs = sum(
             sum(
@@ -543,6 +549,7 @@ class CorrectionPipeline:
             fallback_count=self._fallback_count,
             traces=traces,
             reconcile_metrics=self._reconcile_metrics,
+            usage=self._usage,
         )
 
     # ------------------------------------------------------------------
@@ -699,7 +706,13 @@ class CorrectionPipeline:
         )
 
         attempts_cap = min(self.retry_policy.max_attempts, max(budget[0], 0))
-        response, attempts_used, can_downgrade, last_msg = await self._attempt_chunk(
+        (
+            response,
+            attempts_used,
+            can_downgrade,
+            last_msg,
+            usage,
+        ) = await self._attempt_chunk(
             chunk=chunk,
             chunk_lines=chunk_lines,
             hyphen_pairs=hyphen_pairs,
@@ -719,6 +732,7 @@ class CorrectionPipeline:
                 line_by_id=line_by_id,
                 cross_page_partners=cross_page_partners,
                 traces=traces,
+                usage=usage,
             )
 
         # --- Failure: try a granularity descent (F1). ---
@@ -787,6 +801,7 @@ class CorrectionPipeline:
         line_by_id: dict[str, LineManifest],
         cross_page_partners: dict[tuple[str, str], LineManifest] | None,
         traces: dict[str, LineTrace] | None,
+        usage: Usage | None = None,
     ) -> int:
         """Reconcile / accept / finalize a chunk whose LLM call succeeded.
 
@@ -827,6 +842,10 @@ class CorrectionPipeline:
                 "line_count": len(chunk_lines),
                 "target_count": len(target_lines),
                 "hyphen_pairs_reconciled": reconciled_count,
+                # F14 — token usage for this chunk's producer call (0 when
+                # the provider did not report it).
+                "input_tokens": usage.input_tokens if usage else 0,
+                "output_tokens": usage.output_tokens if usage else 0,
             },
         )
         return reconciled_count
@@ -884,10 +903,10 @@ class CorrectionPipeline:
         model: str,
         traces: dict[str, LineTrace] | None,
         max_attempts: int,
-    ) -> tuple[LLMResponse | None, int, bool, str]:
+    ) -> tuple[LLMResponse | None, int, bool, str, Usage | None]:
         """Call the LLM provider with retries; return the outcome.
 
-        Returns ``(response, attempts_used, can_downgrade, last_msg)``:
+        Returns ``(response, attempts_used, can_downgrade, last_msg, usage)``:
           - ``response`` — the validated :class:`LLMResponse`, or ``None``
             on failure;
           - ``attempts_used`` — how many attempts this call consumed
@@ -943,7 +962,7 @@ class CorrectionPipeline:
             user_dict = payload.model_dump(exclude_none=True)
 
             try:
-                raw = await self.provider.complete_structured(
+                raw, usage = await self.provider.complete_structured(
                     api_key=api_key,
                     model=model,
                     system_prompt=SYSTEM_PROMPT,
@@ -951,6 +970,8 @@ class CorrectionPipeline:
                     json_schema=OUTPUT_JSON_SCHEMA,
                     temperature=temperature,
                 )
+                if usage is not None:
+                    self._usage = self._usage + usage
 
                 lm_by_id = {lm.line_id: lm for lm in chunk_lines}
                 raw_lines = raw.get("lines", []) if isinstance(raw, dict) else []
@@ -983,7 +1004,7 @@ class CorrectionPipeline:
                     hyphen_subs if hyphen_subs else None,
                     guard_config=self.guard_config,
                 )
-                return response, attempts_used, False, ""
+                return response, attempts_used, False, "", usage
 
             except Exception as exc:
                 msg = sanitize_error(str(exc), api_key)
@@ -1016,10 +1037,10 @@ class CorrectionPipeline:
                 # fall back here — the caller decides between a granularity
                 # downgrade (F1) and the OCR fallback. ``can_downgrade`` is
                 # True only when the terminal error was retryable.
-                return None, attempts_used, decision.is_retryable, msg
+                return None, attempts_used, decision.is_retryable, msg, None
 
         # max_attempts <= 0 (no budget left): nothing attempted.
-        return None, attempts_used, False, last_msg
+        return None, attempts_used, False, last_msg, None
 
     # ------------------------------------------------------------------
     # Chunk helpers extracted from _run_chunk (audit A3)

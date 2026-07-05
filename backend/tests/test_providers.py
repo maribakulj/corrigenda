@@ -225,7 +225,7 @@ async def test_anthropic_complete_structured_uses_tools_api():
         instance.post = AsyncMock(side_effect=capture)
 
         provider = AnthropicProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="fake",
             model="claude-3-5-sonnet-20240620",
             system_prompt="SYS",
@@ -269,7 +269,7 @@ async def test_anthropic_complete_structured_skips_thinking_block():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="fake",
             model="claude-x",
             system_prompt="SYS",
@@ -295,7 +295,7 @@ async def test_anthropic_complete_structured_text_block_fallback():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="fake",
             model="claude-x",
             system_prompt="SYS",
@@ -350,7 +350,7 @@ async def test_openai_complete_structured_uses_json_schema_response_format():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = OpenAIProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="sk-fake",
             model="gpt-4o",
             system_prompt="SYS",
@@ -403,7 +403,7 @@ async def test_mistral_complete_structured_sends_json_schema():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = MistralProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="key-fake",
             model="mistral-large",
             system_prompt="SYS",
@@ -444,7 +444,7 @@ async def test_google_complete_structured_uses_response_schema():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = GoogleProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="AIza-fake",
             model="gemini-1.5-pro",
             system_prompt="SYS",
@@ -726,7 +726,7 @@ async def test_anthropic_fallback_parses_prose_prefixed_json():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="fake",
             model="claude-sonnet-4",
             system_prompt="SYS",
@@ -749,7 +749,7 @@ async def test_anthropic_fallback_parses_code_fenced_json():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="fake",
             model="claude-sonnet-4",
             system_prompt="SYS",

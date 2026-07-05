@@ -74,7 +74,7 @@ class _ScriptedProvider:
                 {"line_id": line["line_id"], "corrected_text": line["ocr_text"]}
                 for line in user_payload.get("lines", [])
             ]
-        }
+        }, None
 
 
 @pytest.fixture

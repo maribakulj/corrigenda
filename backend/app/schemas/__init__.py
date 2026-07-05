@@ -31,6 +31,7 @@ from alto_core.schemas import (
     PageManifest,
     PipelineEventType,
     Provider,
+    Usage,
 )
 
 from app.schemas.http import (
@@ -71,4 +72,5 @@ __all__ = [
     "PipelineEventType",
     "Provider",
     "SSEEvent",
+    "Usage",
 ]

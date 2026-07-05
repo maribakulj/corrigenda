@@ -287,7 +287,7 @@ class TestTraceKeyCollision:
                         {"line_id": l["line_id"], "corrected_text": l["ocr_text"]}
                         for l in kwargs.get("user_payload", {}).get("lines", [])
                     ]
-                }
+                }, None
 
         out_dir = output_dir(job_id)
         asyncio.run(
@@ -353,7 +353,7 @@ class TestLineAcceptanceIntegration:
                         out.append({"line_id": lid, "corrected_text": id_to_text[lines[0].line_id]})
                     else:
                         out.append({"line_id": lid, "corrected_text": l["ocr_text"]})
-                return {"lines": out}
+                return {"lines": out}, None
 
         store = JobStore()
         job_id = store.create_job(Provider.OPENAI, "mock")

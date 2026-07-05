@@ -39,7 +39,7 @@ class _NullProvider:
         return [ModelInfo(id="mock", label="mock")]
 
     async def complete_structured(self, **kwargs: Any) -> dict[str, Any]:
-        return {"lines": []}
+        return {"lines": []}, None
 
 
 def _make_store_and_job() -> tuple[JobStore, str]:

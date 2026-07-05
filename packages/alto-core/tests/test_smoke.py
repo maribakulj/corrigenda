@@ -210,7 +210,7 @@ def test_correction_pipeline_construction_does_not_touch_infrastructure():
             return []
 
         async def complete_structured(self, **_kwargs):  # pragma: no cover
-            return {"lines": []}
+            return {"lines": []}, None
 
     class _NoopObserver:
         def on_event(self, event_type, payload):

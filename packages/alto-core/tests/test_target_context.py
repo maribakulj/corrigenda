@@ -127,7 +127,7 @@ class _IdentityProvider:
                 {"line_id": ln["line_id"], "corrected_text": ln["ocr_text"]}
                 for ln in payload.get("lines", [])
             ]
-        }
+        }, None
 
 
 class _Null:

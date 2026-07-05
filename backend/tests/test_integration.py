@@ -56,13 +56,13 @@ class MockProvider:
     ) -> dict[str, Any]:
         if self._bad > 0:
             self._bad -= 1
-            return {"bad_key": []}  # missing "lines" → validation error
+            return {"bad_key": []}, None  # missing "lines" → validation error
 
         lines_out = [
             {"line_id": line["line_id"], "corrected_text": line["ocr_text"]}
             for line in user_payload.get("lines", [])
         ]
-        return {"lines": lines_out}
+        return {"lines": lines_out}, None
 
 
 # ---------------------------------------------------------------------------

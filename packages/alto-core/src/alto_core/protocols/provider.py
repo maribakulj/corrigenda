@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
-from alto_core.schemas import ModelInfo
+from alto_core.schemas import ModelInfo, Usage
 
 # ---------------------------------------------------------------------------
 # JSON output schema
@@ -131,7 +131,14 @@ class BaseProvider(Protocol):
         user_payload: dict[str, Any],
         json_schema: dict[str, Any],
         temperature: float = 0.0,
-    ) -> dict[str, Any]: ...
+    ) -> tuple[dict[str, Any], Usage | None]:
+        """Return ``(parsed_json, usage)`` (F14).
+
+        ``parsed_json`` matches ``OUTPUT_JSON_SCHEMA``; ``usage`` reports
+        token consumption for the call, or ``None`` when the provider
+        cannot report it.
+        """
+        ...
 
 
 # --- __all__ (Stage 3 audit remediation) ---

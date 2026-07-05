@@ -110,7 +110,7 @@ class _MockProvider:
     ) -> dict[str, Any]:
         if self._invalid_json_times > 0:
             self._invalid_json_times -= 1
-            return {"bad_key": []}
+            return {"bad_key": []}, None
         if self._fail_times > 0:
             self._fail_times -= 1
             raise ValueError("mock LLM error")
@@ -119,7 +119,7 @@ class _MockProvider:
                 {"line_id": line["line_id"], "corrected_text": line["ocr_text"]}
                 for line in user_payload.get("lines", [])
             ]
-        }
+        }, None
 
 
 async def _collect_events(tmp_path: Path, provider: _MockProvider) -> list[str]:

@@ -44,7 +44,7 @@ class MockProvider:
                     "corrected_text": line_in["ocr_text"],
                 }
             )
-        return {"lines": lines_out}
+        return {"lines": lines_out}, None
 
 
 class BadKeyProvider:

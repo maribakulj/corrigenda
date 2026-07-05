@@ -540,6 +540,30 @@ class ModelInfo(BaseModel):
     context_window: int | None = None
 
 
+class Usage(BaseModel):
+    """Token consumption reported by a producer call (F14, §5.1).
+
+    Returned alongside the JSON payload by ``complete_structured`` so the
+    pipeline can aggregate cost across a run and surface it on the report
+    and events. A producer that cannot report tokens returns ``None``
+    instead of a ``Usage``; consumers map these onto their own resource
+    accounting.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    def __add__(self, other: Usage) -> Usage:
+        return Usage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+        )
+
+
 # HTTP DTOs (ListModelsRequest/Response, CreateJobResponse,
 # JobStatusResponse, SSEEvent) live in the consumer package — see
 # `app.schemas.http` in the backend. ARCHITECTURE.md §3.2 keeps the
@@ -605,6 +629,7 @@ __all__ = [
     "LLMLineOutput",
     "LLMResponse",
     "ModelInfo",
+    "Usage",
     "LineTrace",
     "JobTrace",
 ]

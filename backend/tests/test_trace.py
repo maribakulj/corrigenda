@@ -58,7 +58,7 @@ class IdentityProvider:
                 {"line_id": l["line_id"], "corrected_text": l["ocr_text"]}
                 for l in user_payload.get("lines", [])
             ]
-        }
+        }, None
 
 
 class CorrectionProvider:
@@ -84,7 +84,7 @@ class CorrectionProvider:
             lid = l["line_id"]
             text = self._corrections.get(lid, l["ocr_text"])
             lines_out.append({"line_id": lid, "corrected_text": text})
-        return {"lines": lines_out}
+        return {"lines": lines_out}, None
 
 
 class DriftProvider:
@@ -110,7 +110,7 @@ class DriftProvider:
                 }
                 for l in user_payload.get("lines", [])
             ]
-        }
+        }, None
 
 
 # ---------------------------------------------------------------------------
