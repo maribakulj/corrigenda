@@ -84,6 +84,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `packages/alto-core/tests`; the package gates its own coverage (~86%, gate
   85%) and its CI job runs pytest with `--cov=alto_core`.
 
+### Post-audit corrective rounds (same release)
+
+- **F1×F8 fixed** — the granularity descent re-plans a failed chunk's
+  *target* lines only; context lines are no longer stolen from their own
+  window and corrected at a finer grain.
+- **F1×F10 fixed** — `should_abort` is probed inside the descent (before
+  each sub-chunk) and `CorrectionAborted` is never converted into a
+  `chunk_error` event.
+- **F8 (spec letter)** — `validate_llm_response(target_line_ids=…)`: the
+  1:1 count is enforced on targets; a missing context-line output is not an
+  error. Per-entry structural checks stay strict; hyphen integrity runs
+  over the target set. `None` keeps the historical exact-count contract.
+- **`run_sync()` (§8.1)** — synchronous façade over `run()`; refuses a
+  running event loop.
+- **`ChunkPlannerConfig` frozen (§8.2)** — now a `FrozenPolicy` with
+  `policy_fingerprint()`, like the other three policies.
+- **Provenance fingerprint unified (§11)** — public
+  `CorrectionPipeline.config_fingerprint()`, composed from the four
+  policies' public `policy_fingerprint()` values (sorted-JSON sha256/16)
+  and now covering `PairingPolicy` (provenance-only ctor param).
+  Reproducible by consumers from the public API.
+- **Slow-path SP geometry recomputed** *(byte change)* — SPs no longer
+  recycle stale pre-correction HPOS/WIDTH; their geometry comes from the
+  same `_compute_geometry` pass as the surrounding Strings (contiguous
+  layout).
+- **§6.1 whitelist extended with `STYLE`** — inline styling (bold/italics)
+  is preserved on the slow path alongside `ID`/`STYLEREFS`. The spec names
+  only the latter two, but its doctrine targets data *invalidated* by the
+  text change — styling is not; dropping it destroyed real formatting on
+  the non-regression corpus. Flagged for spec ratification.
+- **F6 degenerate floor fixed** — the min-1 deficit is repaid across
+  multiple donors; the exact-sum invariant survives every feasible width.
+- **F7 cross-page gap** — `max_vertical_gap` is skipped for cross-page
+  candidates (VPOS restarts per page).
+- **F14 event semantics** — `chunk_completed` reports the chunk's total
+  usage across all attempts, not just the final successful call.
+- **Byte-parity gate (§13 DoD)** — `test_byte_parity_corpus.py` pins
+  sha256 golden hashes of two deterministic scenarios over the corpus.
+  Verified against the pre-v1.0 baseline (commit 8c4789c): identity
+  corrections are BYTE-IDENTICAL; scripted corrections differ only on
+  documented F2 (WC/CC) and F6/§6.1 (geometry) line classes.
+
 ### Changed
 - **Retry policy on HTTP 4xx (other than 429) is now non-retryable.**
   The previous class-name allowlist (`exc.__class__.__name__ ==

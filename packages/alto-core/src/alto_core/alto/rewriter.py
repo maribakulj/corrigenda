@@ -404,20 +404,28 @@ def _emit_string(
 ) -> None:
     """Append a fresh String child for the slow-path rebuild.
 
-    Spec F2 / §6.1 — the slow path recycles ONLY ``ID`` and ``STYLEREFS``
-    from the original String (positionally). ``HPOS``/``WIDTH`` are
-    recomputed, ``VPOS``/``HEIGHT`` are inherited from the line, and
-    ``WC``/``CC``/``SUBS_*`` are **never** recycled: the confidences
-    describe the old glyph string (and ``CC``'s length would no longer
-    match the new ``CONTENT``), and SUBS attributes are written separately
-    by ``_apply_subs``. Pre-F2 the reuse branch copied every original
-    attribute except SUBS, carrying stale ``WC``/``CC`` onto the rebuilt
-    String.
+    Spec F2 / §6.1 — the slow path recycles ONLY identity and styling from
+    the original String (positionally): ``ID``, ``STYLEREFS``, and
+    ``STYLE``. ``HPOS``/``WIDTH`` are recomputed, ``VPOS``/``HEIGHT`` are
+    inherited from the line, and ``WC``/``CC``/``SUBS_*`` are **never**
+    recycled: the confidences describe the old glyph string (and ``CC``'s
+    length would no longer match the new ``CONTENT``), and SUBS attributes
+    are written separately by ``_apply_subs``. Pre-F2 the reuse branch
+    copied every original attribute except SUBS, carrying stale
+    ``WC``/``CC`` onto the rebuilt String.
+
+    ``STYLE`` (inline bold/italics/…) is a deliberate post-audit EXTENSION
+    of the §6.1 whitelist, which names only ``ID`` and ``STYLEREFS``: the
+    F2 doctrine targets data INVALIDATED by the text change, and styling —
+    like ``STYLEREFS``, its reference-based twin — is not. Dropping it
+    destroyed real formatting on the non-regression corpus (30+ bold/
+    italics Strings in X0000002). Flagged in PROGRESS_V1 for spec
+    ratification.
     """
     s = etree.SubElement(el, _tag("String", ns))
     if str_n < len(orig_string_attribs):
         orig = orig_string_attribs[str_n]
-        for k in ("ID", "STYLEREFS"):
+        for k in ("ID", "STYLEREFS", "STYLE"):
             if k in orig:
                 s.set(k, orig[k])
     else:

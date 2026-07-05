@@ -114,7 +114,7 @@ backend/
 | `HyphenRole`, `LLMLineInput`, `LLMLineOutput` | `alto-core` |
 | `ChunkPlan`, `ChunkGranularity` | `alto-core` |
 | `PipelineConfig`, `PipelineEvent` | `alto-core` |
-| `JobManifest`, `JobStatus`, `Provider` (enum) | `alto-core` (utilisé partout) |
+| `JobManifest`, `JobStatus`, `Provider` (enum) | ~~`alto-core`~~ → **backend `app.schemas.job`** (révisé par SPECS_LIB_V2 F12 : concepts serveur, sortis du cœur en v1.0) |
 | `JobCreateRequest`, `JobCreateResponse`, `ModelsRequest`, etc. (HTTP payloads) | `alto-server` |
 | `SSEEvent`, `LayoutData`, `DiffData`, `TraceData` (réponses API) | `alto-server` |
 

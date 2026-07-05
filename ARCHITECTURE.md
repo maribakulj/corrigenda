@@ -464,26 +464,30 @@ Pour qu'un consommateur tiers étende ou remplace un comportement, il implément
 
 ### 8.1 `BaseProvider`
 
+> **Contrat v1.0 effectif** (SPECS_LIB_V2 §5.1/F14) — `complete_structured`
+> reçoit le payload utilisateur en dict et renvoie `(dict, Usage | None)` :
+> le JSON conforme à `OUTPUT_JSON_SCHEMA` plus la consommation de tokens
+> (ou `None` si le provider ne la rapporte pas).
+
 ```python
+from typing import Any
+
 from alto_core.protocols import BaseProvider
-from alto_core.schemas import LLMLineInput, LLMLineOutput
+from alto_core.schemas import ModelInfo, Usage
 
 class MyCustomProvider(BaseProvider):
-    name: str = "my-custom"
-
-    async def list_models(self, api_key: str) -> list[str]:
+    async def list_models(self, api_key: str) -> list[ModelInfo]:
         ...
 
     async def complete_structured(
         self,
-        *,
         api_key: str,
         model: str,
         system_prompt: str,
-        lines: list[LLMLineInput],
-        json_schema: dict,
+        user_payload: dict[str, Any],
+        json_schema: dict[str, Any],
         temperature: float = 0.0,
-    ) -> list[LLMLineOutput]:
+    ) -> tuple[dict[str, Any], Usage | None]:
         ...
 ```
 
@@ -512,9 +516,15 @@ class MyWriter(OutputWriter):
 
 ### 8.4 `JobStore` (côté `alto-server` uniquement)
 
+> **v1.0 (F12)** — `JobManifest`, `JobStatus` et `Provider` ne vivent plus
+> dans `alto_core.schemas` : ce sont des concepts serveur, déplacés chez le
+> consommateur (`app.schemas.job` dans le backend actuel, `alto_server`
+> à terme). Le cœur n'énumère pas de vendeurs LLM et ne suit pas le cycle
+> de vie d'un job.
+
 ```python
 from alto_server.protocols import JobStore
-from alto_core.schemas import JobManifest
+from alto_server.schemas import JobManifest
 
 class MyJobStore(JobStore):
     async def create_job(self, ...) -> str: ...

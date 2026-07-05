@@ -1,210 +1,101 @@
 # PROGRESS_V1 — alto-core v1.0
 
-## ✅ STATUT : v1.0 fonctionnellement COMPLÈTE (F1–F14 + surface API §8/§9/§11)
-Monorepo vert : **lib 277 tests (cov ~86%), backend 265 tests (cov ~84%),
-lib+backend `mypy --strict` clean, ruff clean.** Version NON bumpée (reste
-`0.1.0a1`, tout sous `[Unreleased]`) — le passage à 1.0.0 + le nom PyPI + le
-renommage `corrigenda` sont des décisions produit réservées à l'utilisateur
-(§14). Packaging prêt (py.typed dans le wheel), NON publié.
-Reste optionnel/produit : décision de nom/version, publication PyPI.
+État de la livraison v1.0 de `packages/alto-core/` selon `SPECS_LIB_V2.md`.
+Point de reprise pour toute session fraîche.
 
+## Statut : v1.0 COMPLÈTE (F1–F14 + surface §8/§9/§11) + rounds correctifs post-audit
 
-Suivi de la livraison v1.0 de `packages/alto-core/` selon `SPECS_LIB_V2.md`
-(§7 F1–F14, §8, §9, §11, §13 ligne v1.0). Ce fichier est le point de reprise
-pour une session fraîche : il dit ce qui est fait, ce qui reste, et les
-décisions prises.
+Vérification finale (voir « Preuves » plus bas) :
+- **lib** : 298 tests, couverture ~86 % (gate 85 %), `mypy --strict` 0 erreur, ruff clean
+- **backend** : 265 tests, couverture ~84 % (gate 80 %), mypy clean, ruff clean
+- **frontend** : `tsc --noEmit` clean, vitest 12/12, eslint clean, prettier clean
+- **sécurité** : bandit clean, `pip-audit --strict` 0 vulnérabilité
+- **byte-parity DoD** : démontrée vs le commit baseline `8c4789c` (voir ci-dessous)
 
-## Contrat / docs
-- `SPECS_LIB_V2.md` (la spec) a été **rajoutée à la racine cette session**
-  (elle n'existait ni dans le working tree ni dans l'historique git ; fournie
-  par l'utilisateur). C'est le contrat.
-- Branche de travail : `claude/alto-core-v1-release-jgj5wl`.
+Version : reste `0.1.0a1`, tout sous `[Unreleased]`. Le bump 1.0.0, le nom
+PyPI (`corrigenda` ? §14) et la publication sont des décisions produit
+réservées à l'utilisateur. Packaging prêt (py.typed dans le wheel), NON publié.
 
-## Baseline (avant toute modif, commit de départ)
-- Lib : `cd packages/alto-core && python -m pytest tests/` → **70 passed**.
-- Backend : `cd backend && PYTHONPATH=. python -m pytest` → **424 passed**.
-- Lib ruff : `ruff check src/` + `ruff format --check src/` → clean.
-- Lib `python -m mypy --strict src/alto_core` → **2 erreurs seulement** :
-  - `pipeline/validator.py:23` `dict` sans paramètres de type (`hyphen_pairs: dict`).
-  - `alto/rewriter.py:398` `dict(el.attrib)` — `_Attrib` incompatible `dict[str,str]`.
-  (mypy/lxml-stubs/pydantic installés dans l'env du paquet ; utiliser
-  `python -m mypy`, pas le `mypy` global qui n'a pas pydantic.)
+## Byte-parity (DoD §13) — démonstration formelle
 
-## Commandes (découvertes depuis pyproject/CI, ne pas inventer)
-- Lib tests : `cd packages/alto-core && python -m pytest tests/`
-- Lib lint : `cd packages/alto-core && ruff check src/ && ruff format --check src/`
-- Lib types : `cd packages/alto-core && python -m mypy --strict src/alto_core`
-- Backend tests : `cd backend && PYTHONPATH=. python -m pytest`
-- Backend types : `cd backend && mypy --explicit-package-bases app`
-- Frontend contrat SSE : couvert par `backend/tests/test_sse_event_contract.py`
-  (compare `frontend/src/hooks/useJobStream.ts::EVENTS`).
+Harnais : deux scénarios déterministes (identité ; scripted = fast path sur
+1 ligne/3, slow path sur 1 ligne/7) sur `examples/{sample,X0000002}.xml`,
+exécutés sur le code baseline (worktree `8c4789c`) ET le code v1.0, puis
+diff classifié par TextLine :
+- **identité : BYTE-IDENTICAL** sur les deux fichiers ;
+- **scripted : uniquement** F2 (WC/CC retirés : 179+5 lignes) et géométrie
+  F6/§6.1 (exactement les 81+2 lignes slow-path). Zéro dérive de texte,
+  zéro dérive de structure.
+Pérennisé par `tests/test_byte_parity_corpus.py` (hashes golden sha256,
+indépendants de la version — rewrite sans arguments de provenance).
 
-## Ordre des tranches (sûr → risqué), 1+ commits par tranche
-1. Robustesse additive : **F3, F5, F6, F13 (GuardConfig), F7 (PairingPolicy)**.
-2. Impact snapshot : **F2, F4** (snapshots mis à jour délibérément).
-3. Pipeline : **F1** (descente granularité + `chunk_downgraded` + EVENTS front),
-   **F8** (cibles vs contexte), **F9** (RetryPolicy), **F10** (should_abort).
-4. Surface API & packaging : **F14** (tuple + Usage), hiérarchie erreurs §8.4,
-   `CorrectionReport` public + dry-run `apply=False`, **F12** (déplacer enums
-   applicatives vers backend — LE PLUS RISQUÉ, en dernier), `py.typed` +
-   `mypy --strict` CI, provenance §11.
-5. **F11** : rapatrier les tests d'algo dans `packages/alto-core/tests/`.
+## Décisions prises à ratifier par l'utilisateur
 
-## Localisation des F-items dans le code actuel (re-vérifiée)
-- **F1** desc. granularité : `chunk_planner.downgrade_granularity` existe mais
-  jamais appelé ; `correction_pipeline._apply_chunk_fallback` (≈L651) reverte
-  tout le chunk. Ajouter re-planif au grain inférieur + événement
-  `chunk_downgraded` + budget `RetryPolicy.per_chunk_budget` (défaut 6).
-- **F2** `rewriter._emit_string` (slow, ≈L329) recopie TOUS les attrs sauf SUBS
-  → limiter à `ID`+`STYLEREFS` ; `_update_content_in_place` (fast, ≈L272) →
-  supprimer `WC`/`CC` quand CONTENT change. **Bouge des snapshots.**
-- **F3** `parser._parse_textline_hyphen_info` `etree.QName(last_child.tag)`
-  (≈L143) lève sur commentaire/PI → filtrer enfants dont `tag` non `str`.
-- **F4** `rewriter._line_text_unchanged` (≈L117) compare non-strippé vs
-  `ocr_text` strippé → stripper les deux côtés. **Bouge des snapshots.**
-- **F5** `_ns._int_attr` (L46) `int(raw)` lève sur `"123.0"` → `int(float(raw))`
-  trunc ; non-numérique lève toujours.
-- **F6** `rewriter._compute_geometry` (≈L72) : espaces pondérés 0.6 hors du
-  total → dernier token absorbe le déficit. Faire entrer 0.6 dans total_weight
-  + répartir l'arrondi. **Bouge des snapshots.**
-- **F7** `parser._link_hyphen_pairs` séquentiel → `PairingPolicy` injectable,
-  défaut = comportement actuel.
-- **F8** fenêtres : lignes cibles vs contexte. Touche `chunk_planner` (window),
-  `ChunkRequest` (champ cibles), `enrich_chunk_lines`, `validator` (compte sur
-  cibles), pipeline.
-- **F9** `correction_pipeline._call_with_retry` rampe temp 0.0/0.3/0.5 codée en
-  dur (≈L725) + `DEFAULT_MAX_ATTEMPTS=3` → `RetryPolicy` injectable.
-  `default()` = actuel à l'octet ; `deterministic()` = temps tous 0.
-- **F10** aucun point d'annulation → `should_abort` sur `run()`, sondé entre
-  chunks/pages → `CorrectionAborted`, sorties non écrites.
-- **F11** tests d'algo dans `backend/tests/` → rapatrier.
-- **F12** `schemas`: sortir `Provider`, `JobManifest`, `JobStatus` (+ `images`)
-  vers backend. **Piège** : `PageManifest.status`/`DocumentManifest.status` sont
-  typés `JobStatus` et `_process_page` fait `page.status = JobStatus.COMPLETED`.
-  À retyper/retirer. `LineStatus`, `PipelineEventType` RESTENT.
-- **F13** seuils dispersés (`line_acceptance` L37-51, `migration_guards`,
-  `validator._check_pair_drift`) → `GuardConfig` frozen, défauts = actuels.
-- **F14** `provider.complete_structured` → renvoyer `(dict, Usage | None)`.
-  Touche 4 providers backend + site d'appel pipeline + ~10 tests backend.
+1. **Liste blanche §6.1 étendue à `STYLE`** (slow path). La lettre de la
+   spec ne cite que `ID`+`STYLEREFS`, mais sa doctrine vise les données
+   *périmées* par le changement de texte — le stylage (bold/italics) ne
+   l'est pas, et le supprimer détruisait du formatage réel sur le corpus
+   (30+ String stylés dans X0000002). Revenir à la lettre = retirer
+   `"STYLE"` du tuple dans `rewriter._emit_string`.
+2. **F8 validateur** : implémenté à la lettre (comptage 1:1 sur les
+   cibles ; sortie contexte optionnelle, mais strictement vérifiée quand
+   présente). L'alternative « exiger toutes les lignes » a été abandonnée.
+3. **`CorrectionPipeline(pairing_policy=…)`** : paramètre AJOUTÉ, à des fins
+   de provenance uniquement (l'appariement se fait au parse) — pour que
+   `config_fingerprint()` couvre les quatre politiques §8.2.
 
-## Notes / pièges confirmés
-- `test_rewriter_byte_stability.py` ne pin QUE UNTOUCHED/SUBS_ONLY → F2/F4/F6
-  n'y touchent pas. Les snapshots qui bougent sont côté backend
-  (`test_orchestrator_snapshot.py`, `test_rewriter.py`) — à re-vérifier.
-- `chunk_downgraded` (F1) : ajouter à `PipelineEventType` + `EVENTS` front +
-  `_KNOWN_BACKEND_EVENTS` dans `test_sse_event_contract.py`.
-- Byte-parity `RetryPolicy.default()` : la rampe actuelle est
-  attempt1=0.0, attempt2=0.3, attempt3=0.5, pinned 0.0 après hyphen violation,
-  max_attempts=3. `default()` doit reproduire EXACTEMENT ça.
-- Providers backend concrets restent hors lib (§12) : F14 change leur signature
-  chez eux, pas d'ajout de provider dans la lib.
+## Signalé, volontairement NON corrigé (hors périmètre autorisé)
 
-## État d'avancement
-- [x] **Tranche 1 — F3, F5, F6, F13, F7** (commits sur `claude/alto-core-v1-release-jgj5wl`)
-  - F3/F5 : parser tolère commentaires/PI + coords flottantes (`c9…`).
-  - F6 : géométrie slow-path rééquilibrée (arrondi cumulatif). Byte change
-    délibéré sur lignes slow-path avec espaces intérieurs ; snapshots backend
-    non impactés (ne pinnent pas la largeur token slow-path).
-  - F13 : `GuardConfig` (frozen, `FrozenPolicy` + `policy_fingerprint()`),
-    seuils des 3 étages, défauts = valeurs actuelles, threadé partout.
-    mypy --strict : 2→1 erreur (reste `rewriter.py` `_Attrib`).
-  - F7 : `PairingPolicy` injectable (défaut = séquentiel actuel), threadé dans
-    `parse_alto_file`/`build_document_manifest`/`_link_hyphen_pairs`.
-  - Baseline maintenu vert : lib 86, backend 424, ruff clean.
-- [x] **Tranche 2 — F2, F4** (impact snapshot délibéré)
-  - F4 : `_line_text_unchanged` strippe les deux côtés (SP de queue → UNTOUCHED).
-  - F2 : fast-path retire WC/CC sur String au CONTENT changé ; slow-path
-    `_emit_string` ne recycle que ID+STYLEREFS, VPOS/HEIGHT hérités ligne.
-  - Snapshots backend bougés délibérément : `test_rewriter.py`
-    (test_fast_path_only_content_changes, test_slow_path_preserves_original_attributes)
-    et `test_corpus_validation.py` (TestFastPathPreservation) mis à jour vers
-    le nouveau contrat (assertions WC/CC → None). Distinction voulu/régression :
-    tous les échecs portaient sur WC/CC, aucune régression fonctionnelle.
-  - lib 88, backend 424, ruff clean.
-- [~] **Tranche 3 — F9, F10, F1 faits ; F8 RESTE**
-  - F9 : `RetryPolicy` (frozen) — max_attempts, temperatures (clampées),
-    per_chunk_budget, transient/output backoff base. `.default()` = actuel,
-    `.deterministic()` = temps 0. Threadé dans `__init__` + `_classify_retry`.
-  - F10 : `should_abort` sur `run()`, sondé entre pages/chunks → `CorrectionAborted`
-    (module `alto_core/errors.py` : `CorrectionError` base + `CorrectionAborted`).
-    Sorties non écrites sur abort.
-  - F1 : descente de granularité. `_call_with_retry` scindé en `_attempt_chunk`
-    (pur, renvoie (response, attempts_used, can_downgrade, last_msg), NE fallback pas)
-    + driver `_run_chunk` (décide downgrade vs fallback, récursif, budget partagé).
-    `_subpage_for_lines` re-planifie via le planner normal (force_granularity).
-    Événement `chunk_downgraded` → PipelineEventType + EVENTS front +
-    `_KNOWN_BACKEND_EVENTS`. Comportement changé : échec transitoire RÉCUPÈRE
-    via downgrade (au lieu de fallback). 4 tests backend basculés sur échec
-    persistant (test_fallback_on_persistent_failure, test_fallback_on_invalid_json,
-    test_fallback_warning_message_*, test_drift_fallback_distinguished élargi).
-  - **F8 RESTE À FAIRE** (lignes cibles vs contexte). Le plus complexe de la
-    tranche. Touche : chunk_planner (window overlap → marquer contexte),
-    ChunkRequest (champ target_line_ids ou context_line_ids), enrich_chunk_lines,
-    validator (compte 1:1 sur cibles seulement), pipeline (n'émettre/accepter que
-    pour les cibles). Voir §7 F8 + §5.2 dernier point.
-  - lib 101, backend 424, ruff clean, mypy --strict = 1 (rewriter `_Attrib`).
-- [x] **Tranche 4 — COMPLÈTE**
-  - F14 (Usage tuple), §8.4 (errors), py.typed+mypy CI, §9 (CorrectionReport +
-    dry-run apply=False), §11 (provenance processingStep), F12 (Provider/
-    JobStatus/JobManifest → backend app/schemas/job.py ; status retiré de
-    Page/DocumentManifest). Détails ci-dessous conservés pour référence.
-  - lib 118, backend 424, lib+backend mypy --strict clean, ruff clean.
-    Symboles publics top-level : 34 (les 3 enums applicatives retirées).
-- [~] **Tranche 4 (détail historique) — en cours**
-  - [x] Hiérarchie erreurs §8.4 : `errors.py` complet (CorrectionError root,
-        ParseError/ValidationError = +ValueError, CorrectionAborted).
-        HyphenIntegrityError → ValidationError. validate_llm_response lève
-        ValidationError. Exportés top-level.
-  - [x] py.typed + `mypy --strict` : marqueur `src/alto_core/py.typed` (dans le
-        wheel), `[tool.mypy] strict` dans pyproject, job CI `alto-core-types`.
-        Dernière erreur mypy corrigée (`_attrib_dict()` helper rewriter).
-        **mypy --strict = 0 erreur.**
-  - [ ] **F14** : `complete_structured` → `(dict, Usage | None)`. Ajouter `Usage`
-        dans schemas, changer le Protocol, le site d'appel `_attempt_chunk`,
-        les 4 providers backend, TOUS les mocks de tests (backend ~8 + paquet 3 :
-        test_should_abort, test_downgrade, test_target_context). Remonter Usage
-        dans CorrectionResult + événements.
-  - [ ] **CorrectionReport public + dry-run `apply=False`** : LineTrace/JobTrace
-        → schéma public versionné (§9) ; `run(apply=False)` exécute tout mais
-        n'appelle pas le writer XML, renvoie le rapport.
-  - [ ] **provenance §11** : processingStep porte version lib + policy_fingerprint.
-        `rewrite_alto_file` reçoit ces infos (signature à étendre + site d'appel
-        `_write_outputs`).
-  - [ ] **F12** (LE PLUS RISQUÉ, EN DERNIER) : sortir Provider/JobManifest/JobStatus
-        (+images) de schemas vers backend. PIÈGE : PageManifest.status /
-        DocumentManifest.status typés JobStatus + `_process_page` fait
-        `page.status=JobStatus.COMPLETED`. À retyper (enum interne LineStatus-like
-        ou retirer). Corriger imports backend (app/schemas re-exporte ces 3).
-- [x] **Tranche 5 — F11 COMPLÈTE** : 8 fichiers de tests algo rapatriés
-      (test_parser/hyphenation/chunk_planner/validator/rewriter/
-      chained_hyphenation/double_dash/x0000002, 159 tests) ; imports
-      app.schemas→alto_core.schemas ; chemin examples/ ajusté.
-      test_line_acceptance RESTE au backend (intégration JobRunner/Store).
-      Couverture séparée : paquet gate 85% (~86%), backend source=["app"]
-      (~84%). Job CI alto-core-tests avec --cov.
-  - Candidats backend/tests → paquet : test_parser, test_hyphenation,
-    test_chunk_planner, test_validator, test_line_acceptance, test_rewriter,
-    test_chained_hyphenation, test_double_dash, test_x0000002. Corriger imports
-    `app.*` → `alto_core.*`. Le backend ne garde que intégration/transport
-    (test_api, test_integration, test_orchestrator*, test_store, test_providers,
-    test_sse_event_contract, test_health*, test_task_registry, test_trace, etc.)
-  - ATTENTION : certains tests algo importent `app.schemas` (re-export) ou des
-    helpers backend ; vérifier chaque fichier. Ceux trop couplés au backend
-    restent (de facto intégration).
-- [ ] CHANGELOG + packaging (py.typed, métadonnées) prêt, NON publié
+- **Progression frontend** : `lines_done += line_count` sur
+  `chunk_completed` surcompte les lignes de recouvrement des fenêtres
+  (préexistant, PAS introduit par v1.0). L'événement expose désormais
+  `target_count` (le compte exact) — le fix frontend est trivial mais la
+  consigne interdit de toucher au frontend au-delà d'EVENTS.
+- **Erratum historique git** : le corps du message du commit F12
+  (`f7f6904`) a été partiellement mangé par des backticks interprétés par
+  le shell. Contenu réel documenté ici et dans le CHANGELOG ; l'historique
+  poussé n'a pas été réécrit.
+- **JobTrace vs CorrectionReport** : deux artefacts quasi identiques
+  (trace.json persistée vs rapport public §9). Unification différée à la
+  v2.0 (changer le schéma de trace.json casserait les consommateurs
+  backend) — candidate à une dépréciation documentée.
 
-## Nouveaux symboles publics ajoutés (top-level __all__)
-GuardConfig, PairingPolicy, RetryPolicy, CorrectionError, CorrectionAborted.
-(schemas expose aussi FrozenPolicy, DEFAULT_GUARD_CONFIG, DEFAULT_PAIRING_POLICY,
-DEFAULT_RETRY_POLICY ; CHUNK_DOWNGRADED sur PipelineEventType.)
+## Ce qui est livré (résumé par tranche)
 
-## Rappel commandes de validation (à relancer après chaque tranche)
-- `cd packages/alto-core && python -m pytest tests/` (101 actuellement)
-- `cd packages/alto-core && ruff check src/ tests/ && ruff format --check src/ tests/`
-- `cd packages/alto-core && python -m mypy --strict src/alto_core` (1 err restante)
-- `cd backend && PYTHONPATH=. python -m pytest` (424)
+1. **F3, F5, F6, F13, F7** — robustesse parser, géométrie slow-path
+   (arrondi cumulatif + plancher dégénéré multi-donneurs), `GuardConfig`,
+   `PairingPolicy` (gap ignoré inter-pages).
+2. **F2, F4** — WC/CC supprimés sur contenu changé ; liste blanche slow
+   path `ID`/`STYLEREFS`/`STYLE` ; SP recalculés (layout contigu) ;
+   comparaison UNTOUCHED strippée.
+3. **F1, F8, F9, F10** — descente de granularité (sur CIBLES uniquement,
+   budget `per_chunk_budget`, événement `chunk_downgraded` dans l'enum +
+   EVENTS front + contrat SSE), cibles vs contexte (planner, pipeline ET
+   validateur), `RetryPolicy` (`default()` byte-identique,
+   `deterministic()`), `should_abort` (sondé entre pages, chunks ET
+   sous-chunks de descente ; jamais avalé en `chunk_error`).
+4. **F14, §8.4, §9, §11, F12, py.typed** — `complete_structured →
+   (dict, Usage|None)` (usage par chunk cumulé sur les retries),
+   hiérarchie `CorrectionError`, `CorrectionReport` versionné + dry-run
+   `apply=False`, provenance (version lib + `config_fingerprint()` public
+   couvrant les 4 politiques), enums applicatives déplacées vers
+   `backend/app/schemas/job.py`, `mypy --strict` + job CI, `run_sync()`,
+   `ChunkPlannerConfig` frozen.
+5. **F11** — 8 fichiers de tests d'algo rapatriés (159 tests) ; couverture
+   séparée paquet (85 %) / backend (`source=["app"]`, 80 %).
 
-## À remonter à l'utilisateur (ne pas décider seul)
-- Renommage paquet `alto-core → corrigenda` (§14) : NON décidé, garder
-  `alto_core`/`alto-core` cette session.
-- Ne pas toucher au frontend au-delà d'ajouter `chunk_downgraded` à EVENTS.
+## Commandes de validation
+
+- lib : `cd packages/alto-core && python -m pytest tests/ --cov=alto_core`
+- lib types : `python -m mypy --strict src/alto_core`
+- lib lint : `ruff check src/ tests/ && ruff format --check src/ tests/`
+- backend : `cd backend && PYTHONPATH=. python -m pytest --cov=app`
+- backend types : `mypy --explicit-package-bases app`
+- frontend : `cd frontend && npx tsc --noEmit && npm run test && npm run lint`
+- sécurité : `bandit -r app -c pyproject.toml && pip-audit -r requirements.txt --strict`
+
+## Reste (produit, à décider par l'utilisateur)
+
+- Ratifier les 3 décisions ci-dessus (surtout STYLE §6.1).
+- Bump `1.0.0` + entrée CHANGELOG datée, nom PyPI (§14), publication.
+- Optionnel : consommer `target_count` côté frontend (progression exacte).

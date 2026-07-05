@@ -16,12 +16,33 @@ alto-llm-corrector monorepo. The API may still shift before 1.0.
   with the Hyphenation Reconciler.
 - `alto_core.pipeline` — chunk planning, LLM-response validation,
   per-line acceptance policy, and the pure `CorrectionPipeline` that
-  ties them together.
-- `alto_core.schemas` — Pydantic models for documents, pages, blocks,
-  and lines (domain only; HTTP DTOs live in the server package).
+  ties them together (`run()` async, `run_sync()` façade).
+- `alto_core.schemas` — Pydantic models for documents, pages, blocks and
+  lines, plus the four **frozen, injectable policies**: `RetryPolicy`
+  (attempt cap / temperature ramp / per-chunk budget — `.default()` is
+  byte-compatible with the historical behaviour, `.deterministic()` pins
+  every temperature to 0), `GuardConfig` (every anti-migration threshold),
+  `ChunkPlannerConfig`, and `PairingPolicy` (hyphen-pairing seam). Each
+  exposes `policy_fingerprint()`; the pipeline combines them into
+  `config_fingerprint()`, stamped into the corrected XML's
+  `processingStep` for provenance.
+- `alto_core.errors` — one root, `CorrectionError`, over `ParseError`,
+  `ValidationError` (both also `ValueError`) and `CorrectionAborted`
+  (raised by the cooperative `should_abort` cancellation probe).
+- `CorrectionResult.report` — a public, versioned `CorrectionReport`
+  (full per-line trace: source → model in/out → projected → re-extracted
+  text, rewriter path, fallback reason). `run(apply=False)` executes the
+  whole pipeline without persisting anything — the report is the
+  deliverable (dry-run / preview / benchmarking).
 - `alto_core.protocols` — ports (`BaseProvider`, `PipelineObserver`,
   `OutputWriter`) that consumers implement to plug the core into their
   own infrastructure.
+- PEP 561 `py.typed` marker — the package type-checks under
+  `mypy --strict` and so can your integration.
+
+Job-level concepts (`JobManifest`, `JobStatus`, the `Provider` vendor
+enum) are deliberately **not** here — the core does not enumerate LLM
+vendors or track a server job's lifecycle; they live in the consumer.
 
 ## What's not
 
@@ -55,12 +76,15 @@ class IdentityProvider:
     async def complete_structured(
         self, api_key, model, system_prompt, user_payload, json_schema, temperature=0.0,
     ):
+        # F14 contract: return (parsed_json, usage). Usage is an
+        # alto_core.schemas.Usage (tokens in/out) or None when the
+        # provider cannot report consumption.
         return {
             "lines": [
                 {"line_id": line["line_id"], "corrected_text": line["ocr_text"]}
                 for line in user_payload["lines"]
             ],
-        }
+        }, None
 
 
 class PrintObserver:
@@ -97,10 +121,17 @@ async def main():
         run_id="local-run",  # optional — auto-generated when omitted
     )
     print(f"reconciled {result.total_reconciled} hyphen pairs across {result.total_chunks} chunks")
+    print(f"tokens: {result.usage.total_tokens}; report lines: {result.report.total_lines}")
 
 
 asyncio.run(main())
 ```
+
+No event loop of your own? `pipeline.run_sync(...)` takes the same
+arguments and wraps `asyncio.run` for you. Pass `apply=False` to either
+form for a dry run (nothing written; inspect `result.report`), and
+`should_abort=callable` for cooperative cancellation (raises
+`CorrectionAborted` between pages/chunks, before any output is written).
 
 ## Releasing
 
