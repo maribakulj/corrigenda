@@ -17,8 +17,6 @@ from alto_core.schemas import (
     Coords,
     DocumentManifest,
     HyphenRole,
-    JobManifest,
-    JobStatus,
     JobTrace,
     LineManifest,
     LineStatus,
@@ -30,7 +28,6 @@ from alto_core.schemas import (
     ModelInfo,
     PageManifest,
     PipelineEventType,
-    Provider,
     Usage,
 )
 
@@ -41,6 +38,9 @@ from app.schemas.http import (
     ListModelsResponse,
     SSEEvent,
 )
+
+# Server-side job enums + record — moved out of alto-core by spec F12.
+from app.schemas.job import JobManifest, JobStatus, Provider
 
 __all__ = [
     # Domain (alto-core)

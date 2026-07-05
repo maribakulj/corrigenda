@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from alto_core.schemas import JobStatus, ModelInfo, PipelineEventType, Provider
+from alto_core.schemas import ModelInfo, PipelineEventType
 from pydantic import BaseModel, Field
+
+from app.schemas.job import JobStatus, Provider
 
 
 class ListModelsRequest(BaseModel):

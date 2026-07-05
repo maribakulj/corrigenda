@@ -16,9 +16,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
 
-from alto_core.schemas import JobManifest, JobStatus, Provider
-
 from app.schemas.http import SSEEvent
+from app.schemas.job import JobManifest, JobStatus, Provider
 
 
 @runtime_checkable

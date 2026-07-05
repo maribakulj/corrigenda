@@ -12,16 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field
 # ---------------------------------------------------------------------------
 
 
-class JobStatus(str, Enum):
-    """Lifecycle state of a correction job, surfaced to API clients."""
-
-    QUEUED = "queued"
-    STARTED = "started"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
 class LineStatus(str, Enum):
     """Per-line outcome after the pipeline has visited a TextLine."""
 
@@ -38,15 +28,6 @@ class ChunkGranularity(str, Enum):
     BLOCK = "block"
     WINDOW = "window"
     LINE = "line"
-
-
-class Provider(str, Enum):
-    """Identifier for an LLM vendor. Each enum value maps to one ``BaseProvider`` implementation."""
-
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
-    MISTRAL = "mistral"
-    GOOGLE = "google"
 
 
 class HyphenRole(str, Enum):
@@ -205,7 +186,6 @@ class PageManifest(BaseModel):
     page_height: int
     blocks: list[BlockManifest]
     lines: list[LineManifest]
-    status: JobStatus = JobStatus.QUEUED
 
 
 class DocumentManifest(BaseModel):
@@ -217,7 +197,6 @@ class DocumentManifest(BaseModel):
     total_pages: int
     total_blocks: int
     total_lines: int
-    status: JobStatus = JobStatus.QUEUED
 
 
 # ---------------------------------------------------------------------------
@@ -449,40 +428,10 @@ class ChunkPlan(BaseModel):
     granularity: ChunkGranularity
 
 
-# ---------------------------------------------------------------------------
-# Job
-# ---------------------------------------------------------------------------
-
-
-class JobManifest(BaseModel):
-    """Server-side record of a correction job — status, counters, and trace data."""
-
-    # L10/F6 — `JobStore.update_job` mutates fields via `setattr(job, k, v)`
-    # in a loop. Pydantic v2's default `validate_assignment=False` would
-    # silently accept any type at assignment time, so a typo like
-    # `update_job(jid, status="garbage")` lands a string into the enum
-    # field; downstream `job.status.value` then crashes far from the
-    # original mistake. Turning validation on at assignment surfaces
-    # the bug at the offending call-site immediately.
-    model_config = ConfigDict(validate_assignment=True)
-
-    job_id: str
-    provider: Provider
-    model: str
-    status: JobStatus = JobStatus.QUEUED
-    document_manifest: DocumentManifest | None = None
-    total_lines: int = 0
-    lines_modified: int = 0
-    chunks_total: int = 0
-    retries: int = 0
-    fallbacks: int = 0
-    duration_seconds: float | None = None
-    error: str | None = None
-    images: dict[str, str] = Field(default_factory=dict)
-    # Per-line text trace through every pipeline stage. Keyed by
-    # f"{page_id}:{line_order_global}:{line_id}" (see _trace_key in
-    # alto_core.pipeline.correction_pipeline).
-    line_traces: dict[str, LineTrace] = Field(default_factory=dict)
+# ``Provider``, ``JobStatus`` and ``JobManifest`` (with its ``images`` map)
+# are server-side concepts and live in the consumer package — see
+# ``app.schemas.job`` in the backend (spec F12). The core does not enumerate
+# LLM vendors or track a job's lifecycle.
 
 
 # ---------------------------------------------------------------------------
@@ -634,10 +583,8 @@ class CorrectionReport(BaseModel):
 
 # --- __all__ (Stage 3 audit remediation) ---
 __all__ = [
-    "JobStatus",
     "LineStatus",
     "ChunkGranularity",
-    "Provider",
     "HyphenRole",
     "PipelineEventType",
     "Coords",
@@ -652,7 +599,6 @@ __all__ = [
     "RetryPolicy",
     "ChunkRequest",
     "ChunkPlan",
-    "JobManifest",
     "LLMLineInput",
     "LLMUserPayload",
     "LLMLineOutput",

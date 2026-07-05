@@ -56,7 +56,6 @@ from alto_core.schemas import (
     DocumentManifest,
     GuardConfig,
     HyphenRole,
-    JobStatus,
     JobTrace,
     LineManifest,
     LineStatus,
@@ -673,8 +672,6 @@ class CorrectionPipeline:
                         "exception_type": type(exc).__name__,
                     },
                 )
-
-        page.status = JobStatus.COMPLETED
 
         page_corrections = sum(
             1
