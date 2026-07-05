@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from alto_core.alto._norm import ncfold
+from alto_core.errors import ValidationError
 from alto_core.schemas import (
     DEFAULT_GUARD_CONFIG,
     GuardConfig,
@@ -13,16 +14,18 @@ from alto_core.schemas import (
 )
 
 
-class HyphenIntegrityError(ValueError):
+class HyphenIntegrityError(ValidationError):
     """Raised when an LLM response broke a hyphen-pair invariant.
 
-    Subclass of ValueError so existing ``except ValueError`` catches
-    continue to work. Carrying the type explicitly lets the pipeline's
-    retry classifier use ``isinstance(exc, HyphenIntegrityError)``
-    instead of substring-matching ``"hyphen_integrity_violation"`` in
-    the exception message — a fragile coupling that prior audit §7.1
-    flagged. The retry SSE event still emits the literal
-    ``"hyphen_integrity_violation"`` tag for the frontend consumer.
+    Subclass of :class:`alto_core.errors.ValidationError` (itself a
+    ``CorrectionError`` and a ``ValueError``, §8.4) so existing
+    ``except ValueError`` catches keep working. Carrying the type
+    explicitly lets the pipeline's retry classifier use ``isinstance(exc,
+    HyphenIntegrityError)`` instead of substring-matching
+    ``"hyphen_integrity_violation"`` in the exception message — a fragile
+    coupling that prior audit §7.1 flagged. The retry SSE event still
+    emits the literal ``"hyphen_integrity_violation"`` tag for the
+    frontend consumer.
     """
 
 
@@ -73,22 +76,22 @@ def validate_llm_response(
     # AND skipped the OCR fallback. Re-raising as ValueError puts
     # the response back on the standard retry path.
     if not isinstance(raw, dict):
-        raise ValueError(
+        raise ValidationError(
             f"LLM response is not a JSON object (got {type(raw).__name__})"
         )
 
     if "lines" not in raw:
-        raise ValueError("Missing key 'lines' in LLM response")
+        raise ValidationError("Missing key 'lines' in LLM response")
 
     lines_raw = raw["lines"]
     if not isinstance(lines_raw, list):
-        raise ValueError("'lines' must be a list")
+        raise ValidationError("'lines' must be a list")
 
     expected_set = set(expected_line_ids)
 
     # --- Count ---
     if len(lines_raw) != len(expected_line_ids):
-        raise ValueError(
+        raise ValidationError(
             f"Line count mismatch: expected {len(expected_line_ids)}, got {len(lines_raw)}"
         )
 
@@ -97,17 +100,17 @@ def validate_llm_response(
 
     for entry in lines_raw:
         if not isinstance(entry, dict):
-            raise ValueError(f"Each line entry must be a dict, got {type(entry)}")
+            raise ValidationError(f"Each line entry must be a dict, got {type(entry)}")
 
         line_id = entry.get("line_id")
         corrected_text = entry.get("corrected_text")
 
         if not line_id:
-            raise ValueError(f"Entry missing 'line_id': {entry}")
+            raise ValidationError(f"Entry missing 'line_id': {entry}")
         if line_id in seen_ids:
-            raise ValueError(f"Duplicate line_id in response: {line_id!r}")
+            raise ValidationError(f"Duplicate line_id in response: {line_id!r}")
         if line_id not in expected_set:
-            raise ValueError(f"Unknown line_id in response: {line_id!r}")
+            raise ValidationError(f"Unknown line_id in response: {line_id!r}")
 
         seen_ids.add(line_id)
 
@@ -117,9 +120,9 @@ def validate_llm_response(
         # `.strip()` catches every whitespace-only case in one check
         # (ASCII spaces + Unicode whitespace incl. NBSP).
         if not isinstance(corrected_text, str) or corrected_text.strip() == "":
-            raise ValueError(f"corrected_text for {line_id!r} is empty or missing")
+            raise ValidationError(f"corrected_text for {line_id!r} is empty or missing")
         if "\n" in corrected_text or "\r" in corrected_text:
-            raise ValueError(
+            raise ValidationError(
                 f"corrected_text for {line_id!r} contains a newline character"
             )
 
@@ -128,7 +131,7 @@ def validate_llm_response(
     # --- Check all expected IDs are present ---
     missing = expected_set - seen_ids
     if missing:
-        raise ValueError(f"Missing line_ids in response: {sorted(missing)}")
+        raise ValidationError(f"Missing line_ids in response: {sorted(missing)}")
 
     # --- Hyphen integrity ---
     if hyphen_pairs:

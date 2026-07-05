@@ -16,7 +16,12 @@ consumers reach for. See the README for a minimal working example.
 
 from alto_core.alto.parser import build_document_manifest, parse_alto_file
 from alto_core.alto.rewriter import extract_output_texts, rewrite_alto_file
-from alto_core.errors import CorrectionAborted, CorrectionError
+from alto_core.errors import (
+    CorrectionAborted,
+    CorrectionError,
+    ParseError,
+    ValidationError,
+)
 from alto_core.pipeline.correction_pipeline import (
     CorrectionPipeline,
     CorrectionResult,
@@ -58,6 +63,8 @@ __all__ = [
     "CorrectionResult",
     # Errors (§8.4)
     "CorrectionError",
+    "ParseError",
+    "ValidationError",
     "CorrectionAborted",
     # Ports
     "BaseProvider",
