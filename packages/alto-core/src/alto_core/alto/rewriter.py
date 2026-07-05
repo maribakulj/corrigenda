@@ -318,7 +318,8 @@ def _update_content_in_place(
         # left byte-identical keeps its confidences untouched.
         if changed:
             for attr in ("WC", "CC"):
-                string_el.attrib.pop(attr, None)
+                if attr in string_el.attrib:
+                    del string_el.attrib[attr]
     return True
 
 

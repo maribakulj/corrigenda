@@ -23,6 +23,7 @@ import asyncio
 import json
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from alto_core.alto.hyphenation import (
     reconcile_hyphen_pair,
 )
 from alto_core.alto.rewriter import extract_output_texts, rewrite_alto_file
+from alto_core.errors import CorrectionAborted
 from alto_core.pipeline.chunk_planner import plan_page
 from alto_core.pipeline.line_acceptance import check_adjacent_duplicates, check_line
 from alto_core.pipeline.validator import HyphenIntegrityError, validate_llm_response
@@ -397,6 +399,7 @@ class CorrectionPipeline:
         provider_name: str,
         source_files: dict[str, Path],
         run_id: str | None = None,
+        should_abort: Callable[[], bool] | None = None,
     ) -> CorrectionResult:
         """Run the full pipeline. Mutates `document_manifest.pages` in place.
 
@@ -404,6 +407,13 @@ class CorrectionPipeline:
         JobTrace so consumers can correlate the trace.json with their
         own job/request id. Generated as a uuid4 when omitted; it never
         leaks back into the public events.
+
+        ``should_abort`` (F10) is an optional cancellation probe. It is
+        polled between pages and between chunks; when it returns ``True``
+        the run raises :class:`CorrectionAborted` and **no output is
+        written** (neither corrected XML nor trace). A provider call
+        already in flight is not interrupted — cancellation is cooperative
+        and observed only at chunk/page boundaries.
         """
         run_id = run_id or str(uuid.uuid4())
         self._retry_count = 0
@@ -449,6 +459,13 @@ class CorrectionPipeline:
         total_reconciled = 0
 
         for page in document_manifest.pages:
+            # F10 — cooperative cancellation between pages, before any work
+            # on this page and before any output is written.
+            if should_abort is not None and should_abort():
+                raise CorrectionAborted(
+                    f"run aborted before page {page.page_id!r} (page {page.page_index})"
+                )
+
             # Cross-page partners needed by this page's lines
             cross_page: dict[tuple[str, str], LineManifest] = {}
             for lm in page.lines:
@@ -472,6 +489,7 @@ class CorrectionPipeline:
                 provider_name=provider_name,
                 traces=traces,
                 cross_page_partners=cross_page if cross_page else None,
+                should_abort=should_abort,
             )
             total_chunks += page_chunks
             total_reconciled += page_reconciled
@@ -508,6 +526,7 @@ class CorrectionPipeline:
         provider_name: str,
         traces: dict[str, LineTrace],
         cross_page_partners: dict[tuple[str, str], LineManifest] | None,
+        should_abort: Callable[[], bool] | None = None,
     ) -> tuple[int, int]:
         line_by_id: dict[str, LineManifest] = {lm.line_id: lm for lm in page.lines}
 
@@ -541,6 +560,15 @@ class CorrectionPipeline:
         page_chunks = 0
 
         for chunk in plan.chunks:
+            # F10 — cooperative cancellation between chunks. Checked before
+            # the per-chunk try/except so CorrectionAborted propagates out
+            # instead of being swallowed as a chunk error.
+            if should_abort is not None and should_abort():
+                raise CorrectionAborted(
+                    f"run aborted before chunk {chunk.chunk_id!r} on page "
+                    f"{page.page_id!r}"
+                )
+
             page_chunks += 1
             try:
                 n = await self._run_chunk(
