@@ -325,6 +325,46 @@ class GuardConfig(FrozenPolicy):
 DEFAULT_GUARD_CONFIG = GuardConfig()
 
 
+class PairingPolicy(FrozenPolicy):
+    """Decides whether a PART1/BOTH line may pair with the following line (F7).
+
+    Hyphen pairing is purely sequential: the parser links a PART1/BOTH line
+    to the line immediately after it, with no geometric check. That is a
+    documented *assumption*, not a proven fact — a PART1 at the bottom of a
+    column and an unrelated line at the top of the next column can be
+    mis-paired. The downstream migration guards (stages A/B/C) already
+    catch the fallout, so the default here stays permissive; this policy is
+    the seam that lets a consumer harden pairing (reject partners too far
+    below, or in an unrelated block) **without forking the parser**.
+
+    Defaults reproduce the historical behaviour exactly: no geometric
+    constraint, cross-block pairing allowed — ``can_pair`` always returns
+    ``True``.
+    """
+
+    #: Reject a partner whose top is more than this many ALTO units below
+    #: the PART1 line's bottom (``candidate.vpos - (part1.vpos + height)``).
+    #: ``None`` disables the check (default = historical behaviour).
+    max_vertical_gap: int | None = None
+    #: When ``True``, only pair lines in the same TextBlock. Default
+    #: ``False`` keeps the historical cross-block pairing.
+    same_block_only: bool = False
+
+    def can_pair(self, part1: LineManifest, candidate: LineManifest) -> bool:
+        """Return ``True`` if ``candidate`` may be ``part1``'s PART2 partner."""
+        if self.same_block_only and part1.block_id != candidate.block_id:
+            return False
+        if self.max_vertical_gap is not None:
+            gap = candidate.coords.vpos - (part1.coords.vpos + part1.coords.height)
+            if gap > self.max_vertical_gap:
+                return False
+        return True
+
+
+#: Module-level default reused wherever a caller passes no PairingPolicy.
+DEFAULT_PAIRING_POLICY = PairingPolicy()
+
+
 class ChunkRequest(BaseModel):
     chunk_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     document_id: str
@@ -487,6 +527,7 @@ __all__ = [
     "ChunkPlannerConfig",
     "FrozenPolicy",
     "GuardConfig",
+    "PairingPolicy",
     "ChunkRequest",
     "ChunkPlan",
     "JobManifest",

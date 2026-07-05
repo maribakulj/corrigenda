@@ -91,7 +91,17 @@ décisions prises.
   chez eux, pas d'ajout de provider dans la lib.
 
 ## État d'avancement
-- [ ] Tranche 1 — F3, F5, F6, F13, F7
+- [x] **Tranche 1 — F3, F5, F6, F13, F7** (commits sur `claude/alto-core-v1-release-jgj5wl`)
+  - F3/F5 : parser tolère commentaires/PI + coords flottantes (`c9…`).
+  - F6 : géométrie slow-path rééquilibrée (arrondi cumulatif). Byte change
+    délibéré sur lignes slow-path avec espaces intérieurs ; snapshots backend
+    non impactés (ne pinnent pas la largeur token slow-path).
+  - F13 : `GuardConfig` (frozen, `FrozenPolicy` + `policy_fingerprint()`),
+    seuils des 3 étages, défauts = valeurs actuelles, threadé partout.
+    mypy --strict : 2→1 erreur (reste `rewriter.py` `_Attrib`).
+  - F7 : `PairingPolicy` injectable (défaut = séquentiel actuel), threadé dans
+    `parse_alto_file`/`build_document_manifest`/`_link_hyphen_pairs`.
+  - Baseline maintenu vert : lib 86, backend 424, ruff clean.
 - [ ] Tranche 2 — F2, F4
 - [ ] Tranche 3 — F1, F8, F9, F10
 - [ ] Tranche 4 — F14, erreurs §8.4, CorrectionReport + dry-run, F12, py.typed/mypy CI, provenance §11

@@ -7,12 +7,14 @@ from lxml import etree
 from alto_core.alto._ns import _detect_namespace, _int_attr, _tag, make_safe_parser
 from alto_core.alto._text import reconstruct_textline
 from alto_core.schemas import (
+    DEFAULT_PAIRING_POLICY,
     BlockManifest,
     Coords,
     DocumentManifest,
     HyphenRole,
     LineManifest,
     PageManifest,
+    PairingPolicy,
 )
 
 # ---------------------------------------------------------------------------
@@ -30,7 +32,10 @@ def _build_ocr_text(textline: etree._Element, ns: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _link_hyphen_pairs(lines: list[LineManifest]) -> None:
+def _link_hyphen_pairs(
+    lines: list[LineManifest],
+    pairing_policy: PairingPolicy = DEFAULT_PAIRING_POLICY,
+) -> None:
     """
     Second pass: link PART1/BOTH lines to their forward partners.
 
@@ -40,6 +45,12 @@ def _link_hyphen_pairs(lines: list[LineManifest]) -> None:
     For PART1:  pair_line_id = forward partner, subs_content = pair subs
     For BOTH:   forward_pair_id = forward partner, forward_subs_content = pair subs
                 (backward fields were already set by a previous iteration)
+
+    ``pairing_policy`` (F7) gates each candidate: when it rejects a pair
+    (e.g. the candidate sits too far below, or in an unrelated block), the
+    link is skipped and the PART1 line is left unpaired for the downstream
+    guards to handle. The default policy accepts every next line — the
+    historical purely-sequential behaviour.
     """
     for i, line in enumerate(lines):
         # Skip lines that don't have a forward (PART1) role
@@ -56,6 +67,10 @@ def _link_hyphen_pairs(lines: list[LineManifest]) -> None:
             HyphenRole.BOTH,
             HyphenRole.NONE,
         ):
+            continue
+
+        # F7 — injectable pairing seam. Default policy always accepts.
+        if not pairing_policy.can_pair(line, candidate):
             continue
 
         # Mark NONE candidate as PART2
@@ -225,9 +240,13 @@ def parse_alto_file(
     source_name: str,
     page_index_offset: int = 0,
     global_line_offset: int = 0,
+    pairing_policy: PairingPolicy = DEFAULT_PAIRING_POLICY,
 ) -> tuple[list[PageManifest], etree._Element]:
     """
     Parse one ALTO XML file and return (list_of_PageManifest, root_element).
+
+    ``pairing_policy`` (F7) is forwarded to the hyphen-pair linker; the
+    default reproduces the historical purely-sequential pairing.
     """
     # Hardened parser shared with rewriter.py + extract_output_texts.
     # See alto_core.alto._ns.make_safe_parser docstring.
@@ -312,7 +331,7 @@ def parse_alto_file(
                 lm.next_line_id = lines[i + 1].line_id
 
         # Second-pass: link hyphen pairs
-        _link_hyphen_pairs(lines)
+        _link_hyphen_pairs(lines, pairing_policy)
 
         pages.append(
             PageManifest(
@@ -375,10 +394,14 @@ def _disambiguate_page_ids(
 
 def build_document_manifest(
     files: list[tuple[Path, str]],
+    pairing_policy: PairingPolicy = DEFAULT_PAIRING_POLICY,
 ) -> DocumentManifest:
     """
     Build a DocumentManifest from a list of (xml_path, source_name) tuples.
     Files are processed in order; page/line indices are continuous.
+
+    ``pairing_policy`` (F7) is applied to both intra-page and cross-page
+    hyphen linking; the default reproduces the historical behaviour.
     """
     source_files: list[str] = []
     page_offset = 0
@@ -387,7 +410,9 @@ def build_document_manifest(
 
     for xml_path, source_name in files:
         source_files.append(source_name)
-        pages, _ = parse_alto_file(xml_path, source_name, page_offset, line_offset)
+        pages, _ = parse_alto_file(
+            xml_path, source_name, page_offset, line_offset, pairing_policy
+        )
         parsed.append((source_name, pages))
         page_offset += len(pages)
         for p in pages:
@@ -418,7 +443,7 @@ def build_document_manifest(
             and not last_line.hyphen_forward_pair_id
         )
         if needs_forward_link:
-            _link_hyphen_pairs([last_line, first_line])
+            _link_hyphen_pairs([last_line, first_line], pairing_policy)
 
     total_blocks = sum(len(p.blocks) for p in all_pages)
     total_lines = sum(len(p.lines) for p in all_pages)

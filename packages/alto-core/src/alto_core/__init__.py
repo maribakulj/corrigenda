@@ -39,6 +39,7 @@ from alto_core.schemas import (
     LLMLineOutput,
     ModelInfo,
     PageManifest,
+    PairingPolicy,
     Provider,
 )
 
@@ -77,6 +78,7 @@ __all__ = [
     "LLMLineOutput",
     "ModelInfo",
     "PageManifest",
+    "PairingPolicy",
     "Provider",
     # Version
     "__version__",
