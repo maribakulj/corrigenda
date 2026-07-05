@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from alto_core.pipeline.chunk_planner import downgrade_granularity, plan_page
 
-from app.schemas import (
+from alto_core.schemas import (
     BlockManifest,
     ChunkGranularity,
     ChunkPlannerConfig,
@@ -17,7 +17,7 @@ from app.schemas import (
     PageManifest,
 )
 
-X0000002_PATH = Path(__file__).parent.parent.parent / "examples" / "X0000002.xml"
+X0000002_PATH = Path(__file__).parent.parent.parent.parent / "examples" / "X0000002.xml"
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +62,9 @@ def _block(block_id: str, line_ids: list[str]) -> BlockManifest:
     )
 
 
-def _page(lines: list[LineManifest], blocks: list[BlockManifest] | None = None) -> PageManifest:
+def _page(
+    lines: list[LineManifest], blocks: list[BlockManifest] | None = None
+) -> PageManifest:
     if blocks is None:
         blocks = [_block("TB1", [lm.line_id for lm in lines])]
     return PageManifest(
@@ -202,7 +204,9 @@ def test_hyphen_pair_not_split_by_window():
     assert plan.granularity == ChunkGranularity.WINDOW
     for chunk in plan.chunks:
         if "L2" in chunk.line_ids:
-            assert "L3" in chunk.line_ids, f"PART1 L2 and PART2 L3 were split: {chunk.line_ids}"
+            assert "L3" in chunk.line_ids, (
+                f"PART1 L2 and PART2 L3 were split: {chunk.line_ids}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +222,9 @@ def test_hyphen_pair_atomic_in_line_mode():
         _line("L3", "TB1", "dd"),
     ]
     page = _page(lines)
-    plan = plan_page(page, "DOC1", _small_config(), force_granularity=ChunkGranularity.LINE)
+    plan = plan_page(
+        page, "DOC1", _small_config(), force_granularity=ChunkGranularity.LINE
+    )
 
     assert plan.granularity == ChunkGranularity.LINE
     for chunk in plan.chunks:
@@ -260,11 +266,15 @@ def test_chain_atomic_in_line_mode():
             hyphen_pair_line_id="L1",
             hyphen_forward_pair_id="L3",
         ),
-        _line("L3", "TB1", "sures nécessaires", HyphenRole.PART2, hyphen_pair_line_id="L2"),
+        _line(
+            "L3", "TB1", "sures nécessaires", HyphenRole.PART2, hyphen_pair_line_id="L2"
+        ),
         _line("L4", "TB1", "dd"),
     ]
     page = _page(lines)
-    plan = plan_page(page, "DOC1", _small_config(), force_granularity=ChunkGranularity.LINE)
+    plan = plan_page(
+        page, "DOC1", _small_config(), force_granularity=ChunkGranularity.LINE
+    )
 
     assert plan.granularity == ChunkGranularity.LINE
 
@@ -291,7 +301,13 @@ def test_long_chain_atomic_in_line_mode():
     """A 5-line chain PART1 → BOTH → BOTH → BOTH → PART2 stays together."""
     lines = [
         _line("L0", "TB1", "aa"),
-        _line("A", "TB1", "pre et d'or, aux la-", HyphenRole.PART1, hyphen_pair_line_id="B"),
+        _line(
+            "A",
+            "TB1",
+            "pre et d'or, aux la-",
+            HyphenRole.PART1,
+            hyphen_pair_line_id="B",
+        ),
         _line(
             "B",
             "TB1",
@@ -320,7 +336,9 @@ def test_long_chain_atomic_in_line_mode():
         _line("L6", "TB1", "zz"),
     ]
     page = _page(lines)
-    plan = plan_page(page, "DOC1", _small_config(), force_granularity=ChunkGranularity.LINE)
+    plan = plan_page(
+        page, "DOC1", _small_config(), force_granularity=ChunkGranularity.LINE
+    )
 
     chain_chunk = [c for c in plan.chunks if "A" in c.line_ids]
     assert len(chain_chunk) == 1
@@ -452,7 +470,9 @@ def test_corpus_chains_never_split():
                     f"{lm.hyphen_forward_pair_id} are in different chunks"
                 )
             if lm.hyphen_role == HyphenRole.PART1 and lm.hyphen_pair_line_id:
-                assert lid_to_chunk.get(lm.line_id) == lid_to_chunk.get(lm.hyphen_pair_line_id), (
+                assert lid_to_chunk.get(lm.line_id) == lid_to_chunk.get(
+                    lm.hyphen_pair_line_id
+                ), (
                     f"PART1 line {lm.line_id} and PART2 partner "
                     f"{lm.hyphen_pair_line_id} are in different chunks"
                 )

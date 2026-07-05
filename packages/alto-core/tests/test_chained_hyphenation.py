@@ -22,7 +22,7 @@ from alto_core.alto.parser import parse_alto_file
 from alto_core.alto.rewriter import rewrite_alto_file
 from lxml import etree
 
-from app.schemas import HyphenRole
+from alto_core.schemas import HyphenRole
 
 NS = "http://www.loc.gov/standards/alto/ns-v3#"
 
@@ -299,7 +299,9 @@ class TestChainedReconciliation:
 
         # Pair 1 coherent
         p1, p2 = lines["TL1"], lines["TL2"]
-        _, _, subs1 = reconcile_hyphen_pair(p1, p2, p1.corrected_text, p2.corrected_text)
+        _, _, subs1 = reconcile_hyphen_pair(
+            p1, p2, p1.corrected_text, p2.corrected_text
+        )
         assert subs1 == "praticables."
 
         # Pair 2 fallback (des+tructions ≠ desservent)
@@ -351,7 +353,9 @@ class TestChainedRewriting:
 # Test 6: Real corpus chained zone from X0000002.xml
 # ===========================================================================
 
-X0000002_PATH = Path(__file__).resolve().parent.parent.parent / "examples" / "X0000002.xml"
+X0000002_PATH = (
+    Path(__file__).resolve().parent.parent.parent.parent / "examples" / "X0000002.xml"
+)
 
 
 @pytest.mark.skipif(not X0000002_PATH.exists(), reason="X0000002.xml not found")

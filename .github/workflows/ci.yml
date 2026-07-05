@@ -103,13 +103,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install alto-core (editable) + pytest
-        # Ship pytest-asyncio so future async tests in alto-core don't
-        # quietly error-out with "asyncio mode not installed".
+        # Ship pytest-asyncio so async tests in alto-core don't quietly
+        # error-out with "asyncio mode not installed"; pytest-cov gates the
+        # package's own coverage (F11 repatriated the algorithm tests here).
         run: |
           pip install -e .
-          pip install pytest pytest-asyncio
-      - name: pytest
-        run: pytest tests/
+          pip install pytest pytest-asyncio pytest-cov
+      - name: pytest + coverage gate (85%)
+        run: pytest tests/ --cov=alto_core --cov-report=term --cov-report=xml
 
   alto-core-build:
     # Catch packaging regressions (broken classifiers, missing files in

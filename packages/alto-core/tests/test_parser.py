@@ -7,7 +7,7 @@ from pathlib import Path
 
 from alto_core.alto.parser import build_document_manifest, parse_alto_file
 
-from app.schemas import HyphenRole
+from alto_core.schemas import HyphenRole
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -550,7 +550,9 @@ def test_detect_namespace_normal_namespaced_tag():
     class FakeElement:
         tag = "{http://www.loc.gov/standards/alto/ns-v3#}alto"
 
-    assert _detect_namespace(FakeElement()) == "http://www.loc.gov/standards/alto/ns-v3#"
+    assert (
+        _detect_namespace(FakeElement()) == "http://www.loc.gov/standards/alto/ns-v3#"
+    )
 
 
 # ---------------------------------------------------------------------------

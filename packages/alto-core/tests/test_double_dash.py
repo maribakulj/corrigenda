@@ -17,7 +17,7 @@ from alto_core.alto.parser import parse_alto_file
 from alto_core.alto.rewriter import rewrite_alto_file
 from lxml import etree
 
-from app.schemas import HyphenRole
+from alto_core.schemas import HyphenRole
 
 NS = "http://www.loc.gov/standards/alto/ns-v3#"
 
@@ -38,7 +38,10 @@ def _write(tmp_path: Path, name: str, xml: str) -> Path:
 
 
 def _make_alto(
-    part1_content: str, hyp_content: str, part2_content: str, subs_content: str = "dénonçait"
+    part1_content: str,
+    hyp_content: str,
+    part2_content: str,
+    subs_content: str = "dénonçait",
 ) -> str:
     """Build minimal ALTO with PART1 (String + HYP) and PART2."""
     return f"""\
@@ -174,7 +177,9 @@ class TestContentPlusHypDash:
 # Test 4: sample.xml regression — no double dash after fix
 # ===========================================================================
 
-SAMPLE_PATH = Path(__file__).resolve().parent.parent.parent / "examples" / "sample.xml"
+SAMPLE_PATH = (
+    Path(__file__).resolve().parent.parent.parent.parent / "examples" / "sample.xml"
+)
 
 
 @pytest.mark.skipif(not SAMPLE_PATH.exists(), reason="sample.xml not found")

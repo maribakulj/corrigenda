@@ -128,10 +128,12 @@ pythonpath = ["."]
 # ---------------------------------------------------------------------------
 
 [tool.coverage.run]
-# Measure both packages: app.* (HTTP + adapters living in backend) and
-# alto_core.* (pure pipeline now extracted). Restricting to `app` alone
-# would only see the re-export shims and undercount real coverage.
-source = ["app", "alto_core"]
+# Measure only app.* (HTTP + adapters living in backend). The pure
+# pipeline (alto_core.*) carries its own tests and coverage gate in
+# packages/alto-core (F11 — the algorithm tests were repatriated there),
+# so measuring it from the backend run would undercount it now that those
+# tests no longer live here.
+source = ["app"]
 branch = true
 omit = [
     "tests/*",

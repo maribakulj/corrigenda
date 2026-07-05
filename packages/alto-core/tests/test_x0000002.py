@@ -23,11 +23,15 @@ from alto_core.alto.hyphenation import (
 from alto_core.alto.parser import parse_alto_file
 from alto_core.alto.rewriter import rewrite_alto_file
 
-from app.schemas import HyphenRole
+from alto_core.schemas import HyphenRole
 
-X0000002_PATH = Path(__file__).resolve().parent.parent.parent / "examples" / "X0000002.xml"
+X0000002_PATH = (
+    Path(__file__).resolve().parent.parent.parent.parent / "examples" / "X0000002.xml"
+)
 
-pytestmark = pytest.mark.skipif(not X0000002_PATH.exists(), reason="X0000002.xml not found")
+pytestmark = pytest.mark.skipif(
+    not X0000002_PATH.exists(), reason="X0000002.xml not found"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +174,9 @@ class TestX0000002Structure:
 
         for lm in linked_p1:
             partner = lines.get(lm.hyphen_pair_line_id)
-            assert partner is not None, f"{lm.line_id} links to missing {lm.hyphen_pair_line_id}"
+            assert partner is not None, (
+                f"{lm.line_id} links to missing {lm.hyphen_pair_line_id}"
+            )
             assert partner.hyphen_role in (HyphenRole.PART2, HyphenRole.BOTH)
 
         # BOTH forward links
@@ -340,7 +346,9 @@ class TestX0000002SimulatedCorrections:
         """Corrections identical to OCR → untouched."""
         pages, _ = parse_alto_file(X0000002_PATH, "X0000002.xml")
         # No corrections at all
-        _, metrics, _paths = rewrite_alto_file(X0000002_PATH, pages, "test", "test-model")
+        _, metrics, _paths = rewrite_alto_file(
+            X0000002_PATH, pages, "test", "test-model"
+        )
         assert metrics.untouched == 566
         assert metrics.fast_path == 0
 
@@ -351,7 +359,9 @@ class TestX0000002SimulatedCorrections:
                 "PAG_00000002_TL000011": "en cet état, presque tous les chemins RU",  # changed last word
             }
         )
-        _, metrics, _paths = rewrite_alto_file(X0000002_PATH, pages, "test", "test-model")
+        _, metrics, _paths = rewrite_alto_file(
+            X0000002_PATH, pages, "test", "test-model"
+        )
         assert metrics.fast_path == 1
         assert metrics.slow_path == 0
 
@@ -362,7 +372,9 @@ class TestX0000002SimulatedCorrections:
                 "PAG_00000002_TL000011": "en cet état presque tous les chemins ruraux vicinaux",  # more words
             }
         )
-        _, metrics, _paths = rewrite_alto_file(X0000002_PATH, pages, "test", "test-model")
+        _, metrics, _paths = rewrite_alto_file(
+            X0000002_PATH, pages, "test", "test-model"
+        )
         assert metrics.slow_path == 1
 
     def test_mixed_paths(self, tmp_path):
@@ -376,7 +388,9 @@ class TestX0000002SimulatedCorrections:
                 "PAG_00000002_TL000026": "G. Dupont.",  # 1→2 words
             }
         )
-        _, metrics, _paths = rewrite_alto_file(X0000002_PATH, pages, "test", "test-model")
+        _, metrics, _paths = rewrite_alto_file(
+            X0000002_PATH, pages, "test", "test-model"
+        )
         assert metrics.fast_path == 2
         assert metrics.slow_path == 1
         assert metrics.untouched == 566 - 3
@@ -405,7 +419,9 @@ class TestX0000002ReconcileInvariant:
         lines = _all_lines(pages)
 
         # Correct both sides preserving structure
-        lines["PAG_00000002_TL000014"].corrected_text = "la municipalité prenne les mesures néces-"
+        lines[
+            "PAG_00000002_TL000014"
+        ].corrected_text = "la municipalité prenne les mesures néces-"
         lines[
             "PAG_00000002_TL000015"
         ].corrected_text = "saires pour y faire les réparations les plus"
@@ -426,7 +442,9 @@ class TestX0000002ReconcileInvariant:
         ].corrected_text = "crient : « Vive la liberté ! » quand on con-"
         lines[
             "PAG_00000002_TL000034"
-        ].corrected_text = "tinue les patriotes qui crient : « Vive"  # con+tinue ≠ condamne
+        ].corrected_text = (
+            "tinue les patriotes qui crient : « Vive"  # con+tinue ≠ condamne
+        )
 
         _reconcile_all_pairs(pages)
 

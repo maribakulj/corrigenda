@@ -54,6 +54,38 @@ include = [
 ]
 
 # ---------------------------------------------------------------------------
+# ruff — CI lints src/ only; this config keeps `ruff check tests/` and the
+# pre-commit hook (which covers packages/alto-core/) clean too. The test
+# ignores mirror the backend's: compact test code uses `l` loop vars, keeps
+# locals for readability, and imports late in a few end-to-end cases.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["E402", "E741", "F841"]
+
+# ---------------------------------------------------------------------------
+# coverage — the package now carries the algorithm tests (F11) and gates its
+# own coverage (~85% DoD; currently ~91%). The `alto-core-tests` CI job runs
+# pytest with --cov=alto_core.
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["alto_core"]
+branch = true
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+
+# ---------------------------------------------------------------------------
 # mypy — the package ships `py.typed` (PEP 561) and is checked in --strict
 # mode (F12 / §8.3). The `alto-core-types` CI job runs
 # `mypy --strict src/alto_core` with lxml-stubs installed.

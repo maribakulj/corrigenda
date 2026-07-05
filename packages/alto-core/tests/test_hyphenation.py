@@ -8,7 +8,7 @@ from alto_core.alto.hyphenation import (
     should_stay_in_same_chunk,
 )
 
-from app.schemas import Coords, HyphenRole, LineManifest
+from alto_core.schemas import Coords, HyphenRole, LineManifest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -205,7 +205,9 @@ def test_reconcile_explicit_subs_mismatch_falls_back():
         hyphen_source_explicit=True,
     )
     # LLM replaced PART2 first word with "urgentes"
-    t1, t2, subs = reconcile_hyphen_pair(part1, part2, "néces-", "urgentes pour y faire")
+    t1, t2, subs = reconcile_hyphen_pair(
+        part1, part2, "néces-", "urgentes pour y faire"
+    )
     assert t1 == "néces-", "PART1 must fall back to OCR"
     assert t2 == "saires pour y faire", "PART2 must fall back to OCR"
     assert subs is None, "SUBS_CONTENT must be neutralised"
@@ -645,7 +647,9 @@ def test_reconcile_subs_content_neutralised_on_mismatch():
         hyphen_source_explicit=True,
     )
     # LLM changed PART2 to start with "urgentes" instead of "bles"
-    _, _, subs = reconcile_hyphen_pair(part1, part2, "pratica-", "urgentes dans ce terrain")
+    _, _, subs = reconcile_hyphen_pair(
+        part1, part2, "pratica-", "urgentes dans ce terrain"
+    )
     assert subs is None, "SUBS_CONTENT must be neutralised on incoherent pair"
 
 
@@ -848,7 +852,9 @@ def test_reconcile_without_explicit_params_uses_manifest():
         hyphen_role=HyphenRole.PART2,
         hyphen_pair_line_id="TL1",
     )
-    final_p1, final_p2, subs = reconcile_hyphen_pair(part1, part2, "Il por-", "te la valise")
+    final_p1, final_p2, subs = reconcile_hyphen_pair(
+        part1, part2, "Il por-", "te la valise"
+    )
     assert subs == "porte"
 
 

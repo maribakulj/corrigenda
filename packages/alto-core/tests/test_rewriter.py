@@ -11,7 +11,13 @@ from alto_core.alto.parser import parse_alto_file
 from alto_core.alto.rewriter import _compute_geometry, _tokenize, rewrite_alto_file
 from lxml import etree
 
-from app.schemas import BlockManifest, Coords, HyphenRole, LineManifest, PageManifest
+from alto_core.schemas import (
+    BlockManifest,
+    Coords,
+    HyphenRole,
+    LineManifest,
+    PageManifest,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -102,7 +108,9 @@ def write_and_rewrite(
         lines=manifests,
     )
 
-    result_bytes, _metrics, _paths = rewrite_alto_file(xml_path, [page], "openai", "gpt-4o")
+    result_bytes, _metrics, _paths = rewrite_alto_file(
+        xml_path, [page], "openai", "gpt-4o"
+    )
     return etree.fromstring(result_bytes)
 
 
@@ -762,7 +770,9 @@ def test_round_trip_normal(tmp_path):
     xml_path.write_text(xml_content, encoding="utf-8")
 
     pages, _ = parse_alto_file(xml_path, "round.xml")
-    result_bytes, _metrics, _paths = rewrite_alto_file(xml_path, pages, "openai", "gpt-4o")
+    result_bytes, _metrics, _paths = rewrite_alto_file(
+        xml_path, pages, "openai", "gpt-4o"
+    )
 
     out_path = tmp_path / "out.xml"
     out_path.write_bytes(result_bytes)
@@ -876,7 +886,9 @@ def test_round_trip_with_hyphen(tmp_path):
     xml_path.write_text(xml_content, encoding="utf-8")
 
     pages, _ = parse_alto_file(xml_path, "hyp.xml")
-    result_bytes, _metrics, _paths = rewrite_alto_file(xml_path, pages, "openai", "gpt-4o")
+    result_bytes, _metrics, _paths = rewrite_alto_file(
+        xml_path, pages, "openai", "gpt-4o"
+    )
 
     root = etree.fromstring(result_bytes)
     hyp_els = root.findall(f".//{{{NS_V3}}}HYP")

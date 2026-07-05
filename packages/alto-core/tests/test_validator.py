@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from alto_core.pipeline.validator import validate_llm_response
 
-from app.schemas import LLMResponse
+from alto_core.schemas import LLMResponse
 
 # ---------------------------------------------------------------------------
 # test_valid_response
@@ -137,7 +137,10 @@ def test_hyphen_part2_empty_violation():
     raw_empty = {
         "lines": [
             {"line_id": "L1", "corrected_text": "por-"},
-            {"line_id": "L2", "corrected_text": ""},  # empty → base validation catches it
+            {
+                "line_id": "L2",
+                "corrected_text": "",
+            },  # empty → base validation catches it
         ]
     }
     with pytest.raises(ValueError):
