@@ -45,6 +45,7 @@ from alto_core.protocols import (
 from alto_core.protocols.provider import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 from alto_core.schemas import (
     DEFAULT_GUARD_CONFIG,
+    DEFAULT_RETRY_POLICY,
     ChunkPlannerConfig,
     ChunkRequest,
     DocumentManifest,
@@ -59,6 +60,7 @@ from alto_core.schemas import (
     LLMUserPayload,
     PageManifest,
     PipelineEventType,
+    RetryPolicy,
 )
 
 # Patterns to redact common secret formats in error messages.
@@ -161,6 +163,7 @@ def _classify_retry(
     sanitised_msg: str,
     attempt: int,
     hyphen_already_seen: bool,
+    policy: RetryPolicy = DEFAULT_RETRY_POLICY,
 ) -> _RetryDecision:
     """Decide what to do with an exception during the LLM retry loop.
 
@@ -196,14 +199,14 @@ def _classify_retry(
     if is_transient_http:
         return _RetryDecision(
             is_retryable=True,
-            backoff=attempt * 2,
+            backoff=attempt * policy.transient_backoff_base,
             error_tag=sanitised_msg[:120],
             is_hyphen_violation=False,
         )
     if is_llm_output_error:
         return _RetryDecision(
             is_retryable=True,
-            backoff=attempt,
+            backoff=attempt * policy.output_backoff_base,
             error_tag=sanitised_msg[:120],
             is_hyphen_violation=False,
         )
@@ -348,20 +351,22 @@ class CorrectionPipeline:
     exposed in the final `CorrectionResult` for the caller to persist.
     """
 
-    DEFAULT_MAX_ATTEMPTS = 3
-
     def __init__(
         self,
         provider: BaseProvider,
         observer: PipelineObserver,
         output_writer: OutputWriter,
         config: ChunkPlannerConfig | None = None,
+        retry_policy: RetryPolicy | None = None,
         guard_config: GuardConfig | None = None,
     ) -> None:
         self.provider = provider
         self.observer = observer
         self.output_writer = output_writer
         self.config = config or ChunkPlannerConfig()
+        # F9 — retry ramp / attempt cap / per-chunk budget. Default reproduces
+        # the historical temperature ramp (0.0/0.3/0.5) and 3-attempt cap.
+        self.retry_policy = retry_policy or DEFAULT_RETRY_POLICY
         # F13 — all anti-migration / acceptance thresholds. Default reproduces
         # the historical constants byte-for-byte.
         self.guard_config = guard_config or DEFAULT_GUARD_CONFIG
@@ -717,8 +722,9 @@ class CorrectionPipeline:
         Retry strategy (pinned by ``test_pipeline_classifies_*`` in the
         backend and ``test_retry_classification`` in the contract
         suite):
-          - Up to ``DEFAULT_MAX_ATTEMPTS`` attempts.
-          - Temperature ramp 0.0 → 0.3 → 0.5, pinned at 0.0 after a
+          - Up to ``retry_policy.max_attempts`` attempts (F9).
+          - Temperature ramp from ``retry_policy.temperatures``
+            (default 0.0 → 0.3 → 0.5), pinned at 0.0 after a
             ``HyphenIntegrityError`` (which suggests the LLM
             mis-handled the hyphen pair — lower temperature is more
             likely to stick to the source).
@@ -728,16 +734,17 @@ class CorrectionPipeline:
             Each retry emits a ``retry`` SSE event with the
             classification tag.
         """
-        max_attempts = self.DEFAULT_MAX_ATTEMPTS
+        max_attempts = self.retry_policy.max_attempts
         hyphen_violation = False
 
         for attempt in range(1, max_attempts + 1):
-            if hyphen_violation or attempt == 1:
+            # F9 — temperature comes from the injected RetryPolicy. A hyphen
+            # violation still pins the next attempt to 0.0 (the LLM mishandled
+            # the pair; a colder attempt sticks closer to source).
+            if hyphen_violation:
                 temperature = 0.0
-            elif attempt == 2:
-                temperature = 0.3
             else:
-                temperature = 0.5
+                temperature = self.retry_policy.temperature_for(attempt)
 
             enriched = enrich_chunk_lines(chunk_lines, all_lines_by_id)
 
@@ -806,6 +813,7 @@ class CorrectionPipeline:
                     sanitised_msg=msg,
                     attempt=attempt,
                     hyphen_already_seen=hyphen_violation,
+                    policy=self.retry_policy,
                 )
 
                 if attempt < max_attempts and decision.is_retryable:

@@ -365,6 +365,59 @@ class PairingPolicy(FrozenPolicy):
 DEFAULT_PAIRING_POLICY = PairingPolicy()
 
 
+class RetryPolicy(FrozenPolicy):
+    """Per-chunk LLM retry strategy (F9), injectable and frozen.
+
+    Pre-F9 the temperature ramp (0.0 → 0.3 → 0.5) and the attempt cap were
+    hard-coded in the pipeline, so *any* retry introduced non-determinism.
+    This policy externalises them:
+
+      - ``max_attempts`` — attempts per chunk at a given granularity.
+      - ``temperatures`` — temperature per attempt (attempt *n* uses
+        ``temperatures[n-1]``, clamped to the last entry). A hyphen-
+        integrity violation still pins temperature to 0.0 on the next
+        attempt regardless of this ramp (handled by the pipeline).
+      - ``transient_backoff_base`` / ``output_backoff_base`` — the retry
+        backoff is ``attempt * base`` seconds; transient-HTTP errors use
+        the first, malformed-output errors the second. Hyphen violations
+        retry immediately (0 s).
+      - ``per_chunk_budget`` — total attempts budget for a chunk across
+        all granularity downgrades (F1). Bounds the PAGE→BLOCK→WINDOW→LINE
+        descent so one malformed line can't burn unbounded calls.
+
+    ``RetryPolicy.default()`` reproduces the historical behaviour to the
+    byte; ``RetryPolicy.deterministic()`` sets every temperature to 0 for
+    reproducible runs.
+    """
+
+    max_attempts: int = 3
+    temperatures: tuple[float, ...] = (0.0, 0.3, 0.5)
+    transient_backoff_base: float = 2.0
+    output_backoff_base: float = 1.0
+    per_chunk_budget: int = 6
+
+    @classmethod
+    def default(cls) -> RetryPolicy:
+        """The historical behaviour (temperature ramp 0.0/0.3/0.5)."""
+        return cls()
+
+    @classmethod
+    def deterministic(cls) -> RetryPolicy:
+        """All temperatures 0.0 — reproducible retries (same attempt cap)."""
+        return cls(temperatures=(0.0,))
+
+    def temperature_for(self, attempt: int) -> float:
+        """Temperature for a 1-based attempt index (clamped to the last)."""
+        if not self.temperatures:
+            return 0.0
+        idx = min(max(attempt, 1) - 1, len(self.temperatures) - 1)
+        return self.temperatures[idx]
+
+
+#: Module-level default reused wherever a caller passes no RetryPolicy.
+DEFAULT_RETRY_POLICY = RetryPolicy()
+
+
 class ChunkRequest(BaseModel):
     chunk_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     document_id: str
@@ -528,6 +581,7 @@ __all__ = [
     "FrozenPolicy",
     "GuardConfig",
     "PairingPolicy",
+    "RetryPolicy",
     "ChunkRequest",
     "ChunkPlan",
     "JobManifest",

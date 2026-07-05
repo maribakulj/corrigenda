@@ -41,6 +41,7 @@ from alto_core.schemas import (
     PageManifest,
     PairingPolicy,
     Provider,
+    RetryPolicy,
 )
 
 __version__ = "0.1.0a1"
@@ -80,6 +81,7 @@ __all__ = [
     "PageManifest",
     "PairingPolicy",
     "Provider",
+    "RetryPolicy",
     # Version
     "__version__",
 ]
