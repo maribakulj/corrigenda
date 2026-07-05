@@ -144,7 +144,16 @@ def _get_hyp_children(el: etree._Element, ns: str) -> list[etree._Element]:
 
 
 def _line_text_unchanged(el: etree._Element, corrected: str, ns: str) -> bool:
-    return reconstruct_textline(el, ns) == nfc(corrected)
+    # Spec F4 — compare STRIPPED forms on both sides. The parser derives
+    # ``ocr_text`` as ``reconstruct_textline(...).replace("\r", "").strip()``
+    # (parser._build_ocr_text) while this comparison used the raw, un-stripped
+    # reconstruction. A line whose XML reconstructs with a trailing space
+    # (e.g. a trailing ``<SP/>``) but whose corrected text equals the stripped
+    # ``ocr_text`` therefore never matched — it was needlessly rewritten and
+    # the UNTOUCHED metric under-counted. Stripping both sides restores the
+    # UNTOUCHED path for such lines.
+    source = reconstruct_textline(el, ns).replace("\r", "").strip()
+    return source == nfc(corrected).replace("\r", "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +308,17 @@ def _update_content_in_place(
     if len(words) != len(orig_strings):
         return False
     for string_el, word in zip(orig_strings, words):
-        string_el.set("CONTENT", clean_content(word))
+        new_content = clean_content(word)
+        changed = string_el.get("CONTENT") != new_content
+        string_el.set("CONTENT", new_content)
+        # Spec F2 — a changed CONTENT invalidates the OCR confidences: WC
+        # (word confidence) and CC (per-character confidences) describe the
+        # OLD glyph string and CC's length no longer matches the new CONTENT.
+        # Drop them on any String whose CONTENT actually changes; a String
+        # left byte-identical keeps its confidences untouched.
+        if changed:
+            for attr in ("WC", "CC"):
+                string_el.attrib.pop(attr, None)
     return True
 
 
@@ -352,23 +371,31 @@ def _emit_string(
     vpos: int,
     height: int,
 ) -> None:
-    """Append a fresh String child, reusing the nth original String attribs
-    when present (except SUBS_* which are written separately by _apply_subs)."""
+    """Append a fresh String child for the slow-path rebuild.
+
+    Spec F2 / §6.1 — the slow path recycles ONLY ``ID`` and ``STYLEREFS``
+    from the original String (positionally). ``HPOS``/``WIDTH`` are
+    recomputed, ``VPOS``/``HEIGHT`` are inherited from the line, and
+    ``WC``/``CC``/``SUBS_*`` are **never** recycled: the confidences
+    describe the old glyph string (and ``CC``'s length would no longer
+    match the new ``CONTENT``), and SUBS attributes are written separately
+    by ``_apply_subs``. Pre-F2 the reuse branch copied every original
+    attribute except SUBS, carrying stale ``WC``/``CC`` onto the rebuilt
+    String.
+    """
     s = etree.SubElement(el, _tag("String", ns))
     if str_n < len(orig_string_attribs):
-        for k, v in orig_string_attribs[str_n].items():
-            if k not in ("SUBS_TYPE", "SUBS_CONTENT"):
-                s.set(k, v)
-        s.set("CONTENT", clean_content(token))
-        s.set("HPOS", str(tok_hpos))
-        s.set("WIDTH", str(tok_width))
+        orig = orig_string_attribs[str_n]
+        for k in ("ID", "STYLEREFS"):
+            if k in orig:
+                s.set(k, orig[k])
     else:
         s.set("ID", f"{line_id}_STR_{str_n:04d}")
-        s.set("CONTENT", clean_content(token))
-        s.set("HPOS", str(tok_hpos))
-        s.set("VPOS", str(vpos))
-        s.set("WIDTH", str(tok_width))
-        s.set("HEIGHT", str(height))
+    s.set("CONTENT", clean_content(token))
+    s.set("HPOS", str(tok_hpos))
+    s.set("VPOS", str(vpos))
+    s.set("WIDTH", str(tok_width))
+    s.set("HEIGHT", str(height))
 
 
 def _append_trailing_hyp(

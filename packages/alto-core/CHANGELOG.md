@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### v1.0 normative corrections (SPECS_LIB_V2 §7) — in progress
+
+- **F3** — the parser tolerates comments / processing-instructions among a
+  `TextLine`'s children (they carry a callable `tag`); a trailing comment
+  no longer aborts the whole file.
+- **F5** — `_int_attr` parses float-valued coordinates (`"123.0"`, `"800.9"`)
+  via `int(float(...))`, truncating toward zero. Non-numeric values still
+  raise.
+- **F6** *(byte change)* — slow-path token geometry: the 0.6 space weight now
+  enters the total weight and rounding is spread by cumulative rounding.
+  Widths still sum exactly to the line width; the final token only absorbs
+  residual rounding instead of every space's accumulated deficit. Changes
+  output bytes on slow-path lines with interior spaces (UNTOUCHED /
+  SUBS_ONLY / FAST paths unaffected).
+- **F13** — `GuardConfig` (frozen, injectable) gathers every anti-migration /
+  acceptance threshold from the three guard stages; defaults reproduce the
+  historical constants byte-for-byte. `FrozenPolicy.policy_fingerprint()`
+  gives a stable hash for provenance (§11). Threaded through `check_line`,
+  `check_adjacent_duplicates`, `reconcile_hyphen_pair`,
+  `validate_llm_response`, and `CorrectionPipeline(guard_config=…)`.
+- **F7** — `PairingPolicy` (frozen, injectable) makes hyphen pairing a seam;
+  default reproduces the historical purely-sequential pairing. Forwarded
+  through `build_document_manifest` / `parse_alto_file`.
+- **F2** *(byte change)* — a changed `CONTENT` drops the now-stale `WC`/`CC`
+  confidences (fast path, per changed String); the slow-path rebuild
+  recycles only `ID` and `STYLEREFS` (§6.1 whitelist), inherits `VPOS`/
+  `HEIGHT` from the line, recomputes `HPOS`/`WIDTH`, and never carries
+  `WC`/`CC`/`SUBS_*`. Changes output bytes on slow-path lines and on
+  fast-path Strings whose CONTENT changed.
+- **F4** — the UNTOUCHED comparison strips both sides, matching the parser's
+  `ocr_text` derivation; a line with a trailing `<SP/>` under identity
+  correction now takes the UNTOUCHED path instead of being rewritten.
+
 ### Changed
 - **Retry policy on HTTP 4xx (other than 429) is now non-retryable.**
   The previous class-name allowlist (`exc.__class__.__name__ ==

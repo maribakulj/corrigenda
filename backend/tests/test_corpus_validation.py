@@ -554,7 +554,8 @@ class TestUnchangedLineIdentity:
 
 
 class TestFastPathPreservation:
-    """Fast path (word count same) only changes CONTENT, preserves all else."""
+    """Fast path (word count same) changes CONTENT + drops stale WC/CC (F2),
+    preserving identity/geometry/style."""
 
     def test_fast_path_attributes(self, tmp_path):
         xml_content = _alto_xml("""\
@@ -573,7 +574,10 @@ class TestFastPathPreservation:
         tl = root.find(f".//{_ns('TextLine')}[@ID='TL1']")
         strings = [c for c in tl if c.tag == _ns("String")]
         assert strings[0].get("CONTENT") == "Bonjour"
-        assert strings[0].get("WC") == "0.70"
+        # F2 — changed CONTENT drops the stale word confidence
+        assert strings[0].get("WC") is None
+        assert strings[1].get("WC") is None
+        # identity + style preserved
         assert strings[0].get("STYLEREFS") == "font1"
         assert strings[0].get("ID") == "S1"
         assert strings[1].get("CONTENT") == "monde"

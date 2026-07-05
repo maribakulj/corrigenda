@@ -311,7 +311,12 @@ def test_subs_only_update_removes_stale_subs(tmp_path):
 
 
 def test_fast_path_only_content_changes(tmp_path):
-    """Fast path: only CONTENT changes; ID, geometry, WC, CC preserved."""
+    """Fast path: CONTENT changes; ID/geometry/STYLEREFS kept, WC/CC dropped.
+
+    Spec F2 — a changed CONTENT invalidates the OCR confidences, so WC
+    (word confidence) and CC (per-character confidences) are stripped from
+    every String whose CONTENT actually changes.
+    """
     lines_xml = """\
 <TextLine ID="TL1" HPOS="10" VPOS="20" WIDTH="400" HEIGHT="30">
   <String ID="S1" CONTENT="Helo" HPOS="10" VPOS="20" WIDTH="180" HEIGHT="30"
@@ -330,19 +335,21 @@ def test_fast_path_only_content_changes(tmp_path):
     assert strings[0].get("CONTENT") == "Hello"
     assert strings[1].get("CONTENT") == "world"
 
-    # Everything else preserved
+    # Identity + geometry + style preserved
     assert strings[0].get("ID") == "S1"
     assert strings[0].get("HPOS") == "10"
     assert strings[0].get("VPOS") == "20"
     assert strings[0].get("WIDTH") == "180"
     assert strings[0].get("HEIGHT") == "30"
-    assert strings[0].get("WC") == "0.72"
-    assert strings[0].get("CC") == "0900"
     assert strings[0].get("STYLEREFS") == "font1"
-
     assert strings[1].get("ID") == "S2"
     assert strings[1].get("HPOS") == "200"
-    assert strings[1].get("WC") == "0.65"
+
+    # F2 — confidences dropped on both changed Strings
+    assert strings[0].get("WC") is None
+    assert strings[0].get("CC") is None
+    assert strings[1].get("WC") is None
+    assert strings[1].get("CC") is None
 
     # SP preserved
     sps = root.findall(f".//{_ns('SP')}")
@@ -493,7 +500,13 @@ def test_fast_path_subs_not_on_wrong_token(tmp_path):
 
 
 def test_slow_path_preserves_original_attributes(tmp_path):
-    """Slow path: attributes from original Strings are preserved where possible."""
+    """Slow path: recycles ONLY ID + STYLEREFS; WC/CC never recycled.
+
+    Spec F2 / §6.1 — the slow-path rebuild reuses ``ID`` and ``STYLEREFS``
+    positionally, recomputes ``HPOS``/``WIDTH``, inherits ``VPOS``/``HEIGHT``
+    from the line, and never carries the stale ``WC``/``CC`` confidences
+    (CC's length would no longer match the rebuilt CONTENT).
+    """
     lines_xml = """\
 <TextLine ID="TL1" HPOS="10" VPOS="20" WIDTH="400" HEIGHT="30">
   <String ID="S1" CONTENT="old" HPOS="10" VPOS="20" WIDTH="100" HEIGHT="30"
@@ -506,15 +519,16 @@ def test_slow_path_preserves_original_attributes(tmp_path):
     strings = root.findall(f".//{_ns('String')}")
     assert len(strings) == 2
 
-    # First String reuses original attributes (except CONTENT, HPOS, WIDTH)
+    # First String recycles ID + STYLEREFS; VPOS/HEIGHT inherited from line
     s1 = strings[0]
     assert s1.get("ID") == "S1"
     assert s1.get("CONTENT") == "hello"
     assert s1.get("VPOS") == "20"
     assert s1.get("HEIGHT") == "30"
-    assert s1.get("WC") == "0.95"
-    assert s1.get("CC") == "999"
     assert s1.get("STYLEREFS") == "font1"
+    # F2 — stale confidences never recycled
+    assert s1.get("WC") is None
+    assert s1.get("CC") is None
 
     # Second String gets generated ID
     s2 = strings[1]

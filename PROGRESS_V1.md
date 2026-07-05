@@ -102,7 +102,16 @@ décisions prises.
   - F7 : `PairingPolicy` injectable (défaut = séquentiel actuel), threadé dans
     `parse_alto_file`/`build_document_manifest`/`_link_hyphen_pairs`.
   - Baseline maintenu vert : lib 86, backend 424, ruff clean.
-- [ ] Tranche 2 — F2, F4
+- [x] **Tranche 2 — F2, F4** (impact snapshot délibéré)
+  - F4 : `_line_text_unchanged` strippe les deux côtés (SP de queue → UNTOUCHED).
+  - F2 : fast-path retire WC/CC sur String au CONTENT changé ; slow-path
+    `_emit_string` ne recycle que ID+STYLEREFS, VPOS/HEIGHT hérités ligne.
+  - Snapshots backend bougés délibérément : `test_rewriter.py`
+    (test_fast_path_only_content_changes, test_slow_path_preserves_original_attributes)
+    et `test_corpus_validation.py` (TestFastPathPreservation) mis à jour vers
+    le nouveau contrat (assertions WC/CC → None). Distinction voulu/régression :
+    tous les échecs portaient sur WC/CC, aucune régression fonctionnelle.
+  - lib 88, backend 424, ruff clean.
 - [ ] Tranche 3 — F1, F8, F9, F10
 - [ ] Tranche 4 — F14, erreurs §8.4, CorrectionReport + dry-run, F12, py.typed/mypy CI, provenance §11
 - [ ] Tranche 5 — F11
