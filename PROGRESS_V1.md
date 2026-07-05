@@ -134,14 +134,31 @@ décisions prises.
     validator (compte 1:1 sur cibles seulement), pipeline (n'émettre/accepter que
     pour les cibles). Voir §7 F8 + §5.2 dernier point.
   - lib 101, backend 424, ruff clean, mypy --strict = 1 (rewriter `_Attrib`).
-- [ ] Tranche 4 — F14, erreurs §8.4 (base déjà posée dans errors.py — reste
-      ParseError, ValidationError, reparent HyphenIntegrityError sous
-      CorrectionError+ValueError), CorrectionReport public + dry-run `apply=False`,
-      F12 (bouger Provider/JobManifest/JobStatus+images vers backend ; PIÈGE
-      PageManifest.status/DocumentManifest.status typés JobStatus + _process_page
-      fait page.status=JobStatus.COMPLETED), py.typed + `mypy --strict` en CI +
-      corriger la dernière erreur mypy (dict(_Attrib) rewriter L~427/454),
-      provenance §11 (version lib + policy_fingerprint dans processingStep).
+- [~] **Tranche 4 — en cours**
+  - [x] Hiérarchie erreurs §8.4 : `errors.py` complet (CorrectionError root,
+        ParseError/ValidationError = +ValueError, CorrectionAborted).
+        HyphenIntegrityError → ValidationError. validate_llm_response lève
+        ValidationError. Exportés top-level.
+  - [x] py.typed + `mypy --strict` : marqueur `src/alto_core/py.typed` (dans le
+        wheel), `[tool.mypy] strict` dans pyproject, job CI `alto-core-types`.
+        Dernière erreur mypy corrigée (`_attrib_dict()` helper rewriter).
+        **mypy --strict = 0 erreur.**
+  - [ ] **F14** : `complete_structured` → `(dict, Usage | None)`. Ajouter `Usage`
+        dans schemas, changer le Protocol, le site d'appel `_attempt_chunk`,
+        les 4 providers backend, TOUS les mocks de tests (backend ~8 + paquet 3 :
+        test_should_abort, test_downgrade, test_target_context). Remonter Usage
+        dans CorrectionResult + événements.
+  - [ ] **CorrectionReport public + dry-run `apply=False`** : LineTrace/JobTrace
+        → schéma public versionné (§9) ; `run(apply=False)` exécute tout mais
+        n'appelle pas le writer XML, renvoie le rapport.
+  - [ ] **provenance §11** : processingStep porte version lib + policy_fingerprint.
+        `rewrite_alto_file` reçoit ces infos (signature à étendre + site d'appel
+        `_write_outputs`).
+  - [ ] **F12** (LE PLUS RISQUÉ, EN DERNIER) : sortir Provider/JobManifest/JobStatus
+        (+images) de schemas vers backend. PIÈGE : PageManifest.status /
+        DocumentManifest.status typés JobStatus + `_process_page` fait
+        `page.status=JobStatus.COMPLETED`. À retyper (enum interne LineStatus-like
+        ou retirer). Corriger imports backend (app/schemas re-exporte ces 3).
 - [ ] Tranche 5 — F11 (rapatrier tests d'algo dans packages/alto-core/tests)
 - [ ] CHANGELOG + packaging (py.typed, métadonnées) prêt, NON publié
 
