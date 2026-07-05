@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from enum import Enum
 
@@ -229,6 +231,100 @@ class ChunkPlannerConfig(BaseModel):
     line_window_overlap: int = 1
 
 
+# ---------------------------------------------------------------------------
+# Policies (frozen, injectable — §8.2)
+# ---------------------------------------------------------------------------
+
+
+class FrozenPolicy(BaseModel):
+    """Base for the injectable, immutable policy objects (§8.2).
+
+    Every policy is a frozen Pydantic model whose defaults reproduce the
+    library's current behaviour. ``policy_fingerprint()`` returns a stable
+    short hash of the sorted JSON dump, embedded in the corrected XML's
+    ``processingStep`` (§11) so an output records the exact policy it was
+    produced under.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    def policy_fingerprint(self) -> str:
+        """Stable 16-hex-char hash of this policy's sorted JSON dump."""
+        payload = json.dumps(
+            self.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+class GuardConfig(FrozenPolicy):
+    """All anti-migration / acceptance thresholds in one frozen object (F13).
+
+    The pipeline runs three stages of text-migration guards, each with its
+    own thresholds (see ``pipeline/migration_guards.py`` for the A/B/C
+    matrix). Pre-F13 those numbers were scattered as module constants
+    across ``line_acceptance.py``, ``migration_guards.py`` and the
+    validator. They are gathered here so a consumer can tune them
+    coherently — **the three stages must be tuned together**: tightening
+    one stage without adjusting the others can leak a migration through
+    the gap.
+
+    Every default equals the pre-F13 constant, so ``GuardConfig()`` is
+    byte-for-byte compatible with the historical behaviour.
+
+    A future ``GuardConfig.vision()`` profile (spec §5.2 bis / v2.x) will
+    relax the *source-similarity* stage for VLM producers while keeping
+    the inter-line migration guards intact — not shipped until a vision
+    producer benchmarks it.
+    """
+
+    # --- Stage C: line-level acceptance (line_acceptance.check_line) ---
+    #: Minimum SequenceMatcher ratio between source OCR and correction.
+    min_source_similarity: float = 0.35
+    #: Reject if the correction resembles a neighbour more than its own
+    #: source by at least this margin (text migration suspected).
+    neighbour_margin: float = 0.15
+    #: Two adjacent corrections are duplicates above this similarity …
+    duplicate_threshold: float = 0.85
+    #: … but only when their sources were below this (genuinely distinct).
+    duplicate_source_min_diff: float = 0.70
+    #: Absorption fires only when the correction is this much longer …
+    absorption_length_ratio: float = 1.2
+    #: … and matches source+neighbour concatenated above this similarity.
+    absorption_concat_similarity: float = 0.8
+
+    # --- Stage B: hyphen-pair reconciliation (migration_guards) ---
+    #: PART1 corrected word count may exceed OCR by at most this many.
+    part1_max_word_growth: int = 1
+    #: PART1 last word may grow by at most this many characters.
+    part1_last_word_char_growth: int = 3
+    #: PART1 total char length may grow by ratio*len + slack.
+    part1_char_growth_ratio: float = 1.4
+    part1_char_growth_slack: int = 8
+    #: PART2 collapsed if corrected word count < ratio * OCR word count.
+    part2_collapse_ratio: float = 0.4
+    #: PART2 expansion allowance: OCR word count + max(floor, ratio*OCR).
+    part2_expansion_floor: int = 3
+    part2_expansion_ratio: float = 0.4
+    #: Boundary-word continuity: shared leading-char count required …
+    boundary_prefix_len: int = 2
+    #: … within this corrected/OCR first-word length ratio band.
+    boundary_len_ratio_min: float = 0.5
+    boundary_len_ratio_max: float = 2.0
+
+    # --- Stage A: pre-retry pair drift (validator._check_pair_drift) ---
+    #: PART1 grew by more than this many words → drift (retry).
+    pair_drift_part1_word_growth: int = 2
+    #: PART2 checked for collapse only when OCR had at least this many words.
+    pair_drift_part2_min_words: int = 2
+    #: PART2 collapsed if corrected word count < ratio * OCR word count.
+    pair_drift_part2_collapse_ratio: float = 0.4
+
+
+#: Module-level default reused wherever a caller passes no GuardConfig, so
+#: the historical behaviour needs no allocation per call.
+DEFAULT_GUARD_CONFIG = GuardConfig()
+
+
 class ChunkRequest(BaseModel):
     chunk_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     document_id: str
@@ -389,6 +485,8 @@ __all__ = [
     "PageManifest",
     "DocumentManifest",
     "ChunkPlannerConfig",
+    "FrozenPolicy",
+    "GuardConfig",
     "ChunkRequest",
     "ChunkPlan",
     "JobManifest",

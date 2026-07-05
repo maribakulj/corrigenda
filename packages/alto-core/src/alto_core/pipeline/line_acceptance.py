@@ -28,27 +28,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-# ---------------------------------------------------------------------------
-# Thresholds (intentionally conservative)
-# ---------------------------------------------------------------------------
+from alto_core.schemas import DEFAULT_GUARD_CONFIG, GuardConfig
 
-# Minimum SequenceMatcher ratio between source OCR and correction.
-# Below this the correction is considered too different.
-MIN_SOURCE_SIMILARITY = 0.35
-
-# If the correction is more similar to a neighbour than to the source
-# by at least this margin, reject it (text migration suspected).
-NEIGHBOUR_MARGIN = 0.15
-
-# Two adjacent corrected lines are considered duplicates if their
-# similarity exceeds this AND their sources were below it.
-DUPLICATE_THRESHOLD = 0.85
-DUPLICATE_SOURCE_MIN_DIFF = 0.70  # sources must be below this to flag
-
-# Absorption: correction must be at least this much longer than source
-# AND look like source + neighbour concatenated at this similarity.
-ABSORPTION_LENGTH_RATIO = 1.2
-ABSORPTION_CONCAT_SIMILARITY = 0.8
+# Thresholds live on ``GuardConfig`` (F13). The stage-C guards below read
+# them from the passed ``config`` (defaulting to ``DEFAULT_GUARD_CONFIG``,
+# whose values reproduce the historical constants byte-for-byte). See the
+# migration-guard matrix in ``migration_guards.py`` — the three stages
+# tune together.
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +75,8 @@ def check_line(
     corrected: str,
     prev_ocr: str | None = None,
     next_ocr: str | None = None,
+    *,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
 ) -> AcceptanceResult:
     """Decide whether *corrected* is safe to accept for *source_ocr*.
 
@@ -115,7 +103,7 @@ def check_line(
 
     # --- Guard 1: source similarity ---
     sim_source = _similarity(source_ocr, corrected)
-    if sim_source < MIN_SOURCE_SIMILARITY:
+    if sim_source < config.min_source_similarity:
         return AcceptanceResult(
             accepted=False,
             text=source_ocr,
@@ -125,7 +113,7 @@ def check_line(
     # --- Guard 2: neighbour proximity ---
     if prev_ocr is not None:
         sim_prev = _similarity(prev_ocr, corrected)
-        if sim_prev > sim_source + NEIGHBOUR_MARGIN:
+        if sim_prev > sim_source + config.neighbour_margin:
             return AcceptanceResult(
                 accepted=False,
                 text=source_ocr,
@@ -134,7 +122,7 @@ def check_line(
 
     if next_ocr is not None:
         sim_next = _similarity(next_ocr, corrected)
-        if sim_next > sim_source + NEIGHBOUR_MARGIN:
+        if sim_next > sim_source + config.neighbour_margin:
             return AcceptanceResult(
                 accepted=False,
                 text=source_ocr,
@@ -145,18 +133,18 @@ def check_line(
     # Detects when the correction is source + neighbour concatenated.
     src_len = max(len(source_ocr), 1)
 
-    if next_ocr and len(corrected) > src_len * ABSORPTION_LENGTH_RATIO:
+    if next_ocr and len(corrected) > src_len * config.absorption_length_ratio:
         concat_fwd = source_ocr + " " + next_ocr
-        if _similarity(corrected, concat_fwd) > ABSORPTION_CONCAT_SIMILARITY:
+        if _similarity(corrected, concat_fwd) > config.absorption_concat_similarity:
             return AcceptanceResult(
                 accepted=False,
                 text=source_ocr,
                 reason="absorbs_next_line",
             )
 
-    if prev_ocr and len(corrected) > src_len * ABSORPTION_LENGTH_RATIO:
+    if prev_ocr and len(corrected) > src_len * config.absorption_length_ratio:
         concat_bwd = prev_ocr + " " + source_ocr
-        if _similarity(corrected, concat_bwd) > ABSORPTION_CONCAT_SIMILARITY:
+        if _similarity(corrected, concat_bwd) > config.absorption_concat_similarity:
             return AcceptanceResult(
                 accepted=False,
                 text=source_ocr,
@@ -168,6 +156,8 @@ def check_line(
 
 def check_adjacent_duplicates(
     lines: list[tuple[str, str, str]],
+    *,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
 ) -> dict[str, str]:
     """Detect adjacent duplicate corrections.
 
@@ -192,12 +182,12 @@ def check_adjacent_duplicates(
 
         # Corrections must be very similar
         sim_corrected = _similarity(cor_a, cor_b)
-        if sim_corrected < DUPLICATE_THRESHOLD:
+        if sim_corrected < config.duplicate_threshold:
             continue
 
         # Sources must be clearly different (otherwise the duplication is genuine)
         sim_sources = _similarity(src_a, src_b)
-        if sim_sources >= DUPLICATE_SOURCE_MIN_DIFF:
+        if sim_sources >= config.duplicate_source_min_diff:
             continue
 
         # Flag both lines

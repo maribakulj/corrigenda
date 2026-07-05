@@ -8,7 +8,13 @@ from alto_core.pipeline.migration_guards import (
     part2_boundary_word_diverged as _part2_boundary_word_diverged,
     part2_text_migrated as _part2_text_migrated,
 )
-from alto_core.schemas import HyphenRole, LineManifest, LLMLineInput
+from alto_core.schemas import (
+    DEFAULT_GUARD_CONFIG,
+    GuardConfig,
+    HyphenRole,
+    LineManifest,
+    LLMLineInput,
+)
 
 _SENTINEL = object()  # distinguishes "not passed" from None
 
@@ -131,6 +137,7 @@ def reconcile_hyphen_pair(
     *,
     subs_content: str | None = _SENTINEL,  # type: ignore[assignment]
     source_explicit: bool | None = None,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
 ) -> tuple[str, str, str | None]:
     """
     Validate and reconcile LLM corrections for a hyphenated pair.
@@ -164,9 +171,9 @@ def reconcile_hyphen_pair(
     _fallback = (part1.ocr_text, part2.ocr_text, None)
 
     # --- Migration check (PART1 extended or PART2 collapsed) ---
-    if _part1_text_migrated(part1.ocr_text, corrected_part1):
+    if _part1_text_migrated(part1.ocr_text, corrected_part1, config):
         return _fallback
-    if _part2_text_migrated(part2.ocr_text, corrected_part2):
+    if _part2_text_migrated(part2.ocr_text, corrected_part2, config):
         return _fallback
 
     # --- PART1 must still end with a trailing hyphen ---
@@ -194,7 +201,7 @@ def reconcile_hyphen_pair(
                 return _fallback
 
         # No subs_content reference — use boundary word check as safety net
-        if _part2_boundary_word_diverged(part2.ocr_text, corrected_part2):
+        if _part2_boundary_word_diverged(part2.ocr_text, corrected_part2, config):
             return _fallback
         return corrected_part1, corrected_part2, None
 
@@ -203,7 +210,7 @@ def reconcile_hyphen_pair(
     # However, if a subs_content was explicitly provided (e.g. from a
     # BOTH line's forward side), preserve it rather than discarding.
     # =================================================================
-    if _part2_boundary_word_diverged(part2.ocr_text, corrected_part2):
+    if _part2_boundary_word_diverged(part2.ocr_text, corrected_part2, config):
         return _fallback
 
     preserved_subs = effective_subs if subs_content is not _SENTINEL else None

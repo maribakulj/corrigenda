@@ -50,17 +50,22 @@ without adjusting the others can leak migrations through the gap.
 from __future__ import annotations
 
 from alto_core.alto._norm import ncfold
+from alto_core.schemas import DEFAULT_GUARD_CONFIG, GuardConfig
 
 
-def part1_text_migrated(ocr_text: str, corrected_text: str) -> bool:
+def part1_text_migrated(
+    ocr_text: str,
+    corrected_text: str,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
+) -> bool:
     """Stage-B pair guard: PART1 appears extended or pulled from PART2.
 
-    Returns ``True`` when any of:
-      - corrected word count exceeds OCR by more than 1
-        (text pulled in from the next line);
-      - last word grew by more than 3 characters
-        (word completion, e.g. ``"néces" → "nécessaires"``);
-      - overall character length grew by more than 40% + 8.
+    Returns ``True`` when any of (thresholds from ``GuardConfig``):
+      - corrected word count exceeds OCR by more than
+        ``part1_max_word_growth`` (text pulled in from the next line);
+      - last word grew by more than ``part1_last_word_char_growth``
+        characters (word completion, e.g. ``"néces" → "nécessaires"``);
+      - overall char length grew past ``ratio*len + slack``.
     """
     ocr_bare = ocr_text.rstrip("-").rstrip()
     corrected_bare = corrected_text.rstrip("-").rstrip(".")
@@ -68,43 +73,63 @@ def part1_text_migrated(ocr_text: str, corrected_text: str) -> bool:
     ocr_words = ocr_bare.split()
     corrected_words = corrected_bare.split()
 
-    if len(corrected_words) > len(ocr_words) + 1:
+    if len(corrected_words) > len(ocr_words) + config.part1_max_word_growth:
         return True
 
     if ocr_words and corrected_words:
         ocr_last = ocr_words[-1].rstrip("-")
         corrected_last = corrected_words[-1].rstrip("-")
-        if len(corrected_last) > len(ocr_last) + 3:
+        if len(corrected_last) > len(ocr_last) + config.part1_last_word_char_growth:
             return True
 
-    if len(corrected_bare) > len(ocr_bare) * 1.4 + 8:
+    if (
+        len(corrected_bare)
+        > len(ocr_bare) * config.part1_char_growth_ratio
+        + config.part1_char_growth_slack
+    ):
         return True
 
     return False
 
 
-def part2_text_migrated(ocr_text: str, corrected_text: str) -> bool:
+def part2_text_migrated(
+    ocr_text: str,
+    corrected_text: str,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
+) -> bool:
     """Stage-B pair guard: PART2 appears collapsed or pulled from next.
 
-    Returns ``True`` when:
-      - corrected word count is less than 40% of OCR
+    Returns ``True`` when (thresholds from ``GuardConfig``):
+      - corrected word count is less than ``part2_collapse_ratio`` of OCR
         (text absorbed by PART1); or
       - corrected word count exceeds OCR by more than
-        ``max(3, 40% of OCR)`` (text pulled in from after PART2).
+        ``max(part2_expansion_floor, part2_expansion_ratio * OCR)``
+        (text pulled in from after PART2).
     """
     ocr_words = ocr_text.split()
     corrected_words = corrected_text.split()
 
-    if ocr_words and len(corrected_words) < len(ocr_words) * 0.4:
+    if (
+        ocr_words
+        and len(corrected_words) < len(ocr_words) * config.part2_collapse_ratio
+    ):
         return True
 
-    if len(corrected_words) > len(ocr_words) + max(3, int(len(ocr_words) * 0.4)):
+    expansion = max(
+        config.part2_expansion_floor,
+        int(len(ocr_words) * config.part2_expansion_ratio),
+    )
+    if len(corrected_words) > len(ocr_words) + expansion:
         return True
 
     return False
 
 
-def part2_boundary_word_diverged(ocr_text: str, corrected_text: str) -> bool:
+def part2_boundary_word_diverged(
+    ocr_text: str,
+    corrected_text: str,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
+) -> bool:
     """Stage-B pair guard: PART2's first word lost its OCR continuity.
 
     The first word of PART2 is the continuation of the hyphenated word
@@ -127,11 +152,13 @@ def part2_boundary_word_diverged(ocr_text: str, corrected_text: str) -> bool:
     if ocr_first == cor_first:
         return False
 
-    prefix_len = min(2, len(ocr_first), len(cor_first))
+    prefix_len = min(config.boundary_prefix_len, len(ocr_first), len(cor_first))
     if (
-        prefix_len >= 2
+        prefix_len >= config.boundary_prefix_len
         and ocr_first[:prefix_len] == cor_first[:prefix_len]
-        and 0.5 <= len(cor_first) / max(1, len(ocr_first)) <= 2.0
+        and config.boundary_len_ratio_min
+        <= len(cor_first) / max(1, len(ocr_first))
+        <= config.boundary_len_ratio_max
     ):
         return False
 

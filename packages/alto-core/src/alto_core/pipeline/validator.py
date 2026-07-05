@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from alto_core.alto._norm import ncfold
-from alto_core.schemas import LLMLineOutput, LLMResponse
+from alto_core.schemas import (
+    DEFAULT_GUARD_CONFIG,
+    GuardConfig,
+    LLMLineOutput,
+    LLMResponse,
+)
 
 
 class HyphenIntegrityError(ValueError):
@@ -20,11 +27,13 @@ class HyphenIntegrityError(ValueError):
 
 
 def validate_llm_response(
-    raw: dict,
+    raw: dict[str, Any],
     expected_line_ids: list[str],
     hyphen_pairs: dict[str, str] | None = None,
     ocr_texts: dict[str, str] | None = None,
     hyphen_subs: dict[str, str] | None = None,
+    *,
+    guard_config: GuardConfig = DEFAULT_GUARD_CONFIG,
 ) -> LLMResponse:
     """
     Validate an LLM response dict and return a typed LLMResponse.
@@ -130,6 +139,7 @@ def validate_llm_response(
             expected_set,
             ocr_texts or {},
             hyphen_subs or {},
+            guard_config,
         )
 
     return LLMResponse(lines=outputs)
@@ -141,6 +151,7 @@ def _validate_hyphen_integrity(
     chunk_ids: set[str],
     ocr_texts: dict[str, str],
     hyphen_subs: dict[str, str],
+    guard_config: GuardConfig = DEFAULT_GUARD_CONFIG,
 ) -> None:
     """
     Check that no hyphen-pair line has been illegally merged or shifted.
@@ -181,7 +192,7 @@ def _validate_hyphen_integrity(
         ocr_a = ocr_texts.get(id_a, "")
         ocr_b = ocr_texts.get(id_b, "")
         if ocr_a and ocr_b:
-            _check_pair_drift(id_a, id_b, text_a, text_b, ocr_a, ocr_b)
+            _check_pair_drift(id_a, id_b, text_a, text_b, ocr_a, ocr_b, guard_config)
 
     # 4. Fusion check: PART1 contains the full logical word
     for part1_id, subs_content in hyphen_subs.items():
@@ -208,6 +219,7 @@ def _check_pair_drift(
     text_b: str,
     ocr_a: str,
     ocr_b: str,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
 ) -> None:
     """Raise if corrected texts diverge too much from their OCR sources."""
     ocr_a_wc = len(ocr_a.split())
@@ -215,15 +227,18 @@ def _check_pair_drift(
     cor_a_wc = len(text_a.split())
     cor_b_wc = len(text_b.split())
 
-    # PART1 grew by more than 2 words → probably pulled from PART2
-    if cor_a_wc > ocr_a_wc + 2:
+    # PART1 grew by more than the allowed word budget → probably pulled from PART2
+    if cor_a_wc > ocr_a_wc + config.pair_drift_part1_word_growth:
         raise HyphenIntegrityError(
             f"hyphen_integrity_violation: PART1 line {id_a!r} grew from "
             f"{ocr_a_wc} to {cor_a_wc} words (text migration suspected)"
         )
 
-    # PART2 shrank to less than 40% of original → absorbed by PART1
-    if ocr_b_wc >= 2 and cor_b_wc < ocr_b_wc * 0.4:
+    # PART2 shrank below the collapse ratio → absorbed by PART1
+    if (
+        ocr_b_wc >= config.pair_drift_part2_min_words
+        and cor_b_wc < ocr_b_wc * config.pair_drift_part2_collapse_ratio
+    ):
         raise HyphenIntegrityError(
             f"hyphen_integrity_violation: PART2 line {id_b!r} shrank from "
             f"{ocr_b_wc} to {cor_b_wc} words (text migration suspected)"

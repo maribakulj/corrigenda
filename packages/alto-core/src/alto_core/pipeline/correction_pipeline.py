@@ -44,9 +44,11 @@ from alto_core.protocols import (
 )
 from alto_core.protocols.provider import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 from alto_core.schemas import (
+    DEFAULT_GUARD_CONFIG,
     ChunkPlannerConfig,
     ChunkRequest,
     DocumentManifest,
+    GuardConfig,
     HyphenRole,
     JobStatus,
     JobTrace,
@@ -265,6 +267,7 @@ def _reconcile_one_pair(
     text_by_id: dict[str, str],
     *,
     is_forward: bool,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
 ) -> str:
     """Apply reconcile_hyphen_pair and write results back onto the manifests.
 
@@ -284,6 +287,7 @@ def _reconcile_one_pair(
             corrected_p2,
             subs_content=lm.hyphen_forward_subs_content,
             source_explicit=lm.hyphen_forward_explicit,
+            config=config,
         )
     else:
         corrected_p1 = text_by_id.get(lm.line_id, lm.ocr_text)
@@ -292,6 +296,7 @@ def _reconcile_one_pair(
             part2,
             corrected_p1,
             corrected_p2,
+            config=config,
         )
 
     outcome = classify_reconcile_outcome(
@@ -351,11 +356,15 @@ class CorrectionPipeline:
         observer: PipelineObserver,
         output_writer: OutputWriter,
         config: ChunkPlannerConfig | None = None,
+        guard_config: GuardConfig | None = None,
     ) -> None:
         self.provider = provider
         self.observer = observer
         self.output_writer = output_writer
         self.config = config or ChunkPlannerConfig()
+        # F13 — all anti-migration / acceptance thresholds. Default reproduces
+        # the historical constants byte-for-byte.
+        self.guard_config = guard_config or DEFAULT_GUARD_CONFIG
         # Counters reset on every call to run()
         self._retry_count = 0
         self._fallback_count = 0
@@ -786,6 +795,7 @@ class CorrectionPipeline:
                     hyphen_pairs if hyphen_pairs else None,
                     {lm.line_id: lm.ocr_text for lm in chunk_lines},
                     hyphen_subs if hyphen_subs else None,
+                    guard_config=self.guard_config,
                 )
                 return response
 
@@ -875,7 +885,9 @@ class CorrectionPipeline:
             part2_key = (part2.page_id, part2.line_id)
             if part2_key in processed_part2:
                 continue
-            outcome = _reconcile_one_pair(lm, part2, text_by_id, is_forward=False)
+            outcome = _reconcile_one_pair(
+                lm, part2, text_by_id, is_forward=False, config=self.guard_config
+            )
             self._record_reconcile_outcome(outcome)
             processed_part2.add(part2_key)
             reconciled_count += 1
@@ -904,7 +916,9 @@ class CorrectionPipeline:
             part2_key = (part2.page_id, part2.line_id)
             if part2_key in processed_part2:
                 continue
-            outcome = _reconcile_one_pair(lm, part2, text_by_id, is_forward=True)
+            outcome = _reconcile_one_pair(
+                lm, part2, text_by_id, is_forward=True, config=self.guard_config
+            )
             self._record_reconcile_outcome(outcome)
             processed_part2.add(part2_key)
             reconciled_count += 1
@@ -956,7 +970,9 @@ class CorrectionPipeline:
                 if lm.next_line_id and lm.next_line_id in all_lines_by_id
                 else None
             )
-            result = check_line(lm.ocr_text, corrected, prev_ocr, next_ocr)
+            result = check_line(
+                lm.ocr_text, corrected, prev_ocr, next_ocr, config=self.guard_config
+            )
             lm.corrected_text = result.text
             if result.accepted:
                 lm.status = LineStatus.CORRECTED
@@ -982,7 +998,9 @@ class CorrectionPipeline:
             (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text)
             for lm in chunk_lines
         ]
-        dup_reverts = check_adjacent_duplicates(accepted_lines)
+        dup_reverts = check_adjacent_duplicates(
+            accepted_lines, config=self.guard_config
+        )
         for lm in chunk_lines:
             if lm.line_id in dup_reverts:
                 lm.corrected_text = lm.ocr_text
