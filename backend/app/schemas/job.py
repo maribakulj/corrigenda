@@ -1,8 +1,8 @@
-"""Server-side job enums and record (moved out of alto-core by spec F12).
+"""Server-side job enums and record (moved out of corrigenda by spec F12).
 
 ``Provider``, ``JobStatus`` and ``JobManifest`` (with its ``images`` map)
 are backend concerns — the pure correction core does not enumerate LLM
-vendors or track a server job's lifecycle. They live here now; alto-core
+vendors or track a server job's lifecycle. They live here now; corrigenda
 keeps only the domain enums (``LineStatus``, ``ChunkGranularity``,
 ``HyphenRole``, ``PipelineEventType``).
 """
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from alto_core.schemas import DocumentManifest, LineTrace
+from corrigenda.schemas import DocumentManifest, LineTrace
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -61,7 +61,7 @@ class JobManifest(BaseModel):
     images: dict[str, str] = Field(default_factory=dict)
     # Per-line text trace through every pipeline stage. Keyed by
     # f"{page_id}:{line_order_global}:{line_id}" (see _trace_key in
-    # alto_core.pipeline.correction_pipeline).
+    # corrigenda.pipeline.correction_pipeline).
     line_traces: dict[str, LineTrace] = Field(default_factory=dict)
 
 

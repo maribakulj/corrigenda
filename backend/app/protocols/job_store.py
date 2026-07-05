@@ -1,8 +1,8 @@
-"""JobStore Protocol — alto-server's concern, not alto-core's.
+"""JobStore Protocol — alto-server's concern, not corrigenda's.
 
 Defined in backend because it represents the persistence + SSE fan-out
 layer of the FastAPI server. ARCHITECTURE.md §8.4 keeps this Protocol
-out of alto-core to avoid coupling the pure pipeline to server-side
+out of corrigenda to avoid coupling the pure pipeline to server-side
 infrastructure. When the eventual `alto-server` package is extracted
 (Phase 3), this file moves there.
 

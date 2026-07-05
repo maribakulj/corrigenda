@@ -28,12 +28,12 @@ frontend/dist
 **/.coverage
 **/coverage.xml
 
-# alto-core build/test artefacts (image needs the installed package,
+# corrigenda build/test artefacts (image needs the installed package,
 # not its tests or wheel cache)
-packages/alto-core/tests
-packages/alto-core/dist
-packages/alto-core/build
-packages/alto-core/*.egg-info
+packages/corrigenda/tests
+packages/corrigenda/dist
+packages/corrigenda/build
+packages/corrigenda/*.egg-info
 
 # Docker itself
 Dockerfile

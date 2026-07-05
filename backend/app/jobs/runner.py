@@ -16,8 +16,8 @@ import time
 import warnings
 from pathlib import Path
 
-from alto_core import CorrectionPipeline, CorrectionResult, sanitize_error
-from alto_core.schemas import PipelineEventType
+from corrigenda import CorrectionPipeline, CorrectionResult, sanitize_error
+from corrigenda.schemas import PipelineEventType
 
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore, OutputWriter
@@ -229,7 +229,7 @@ class JobRunner:
         )
 
         # Fan events out to the job store (for SSE clients) and to the
-        # standard logger (for operators). ADR-006: alto-core never
+        # standard logger (for operators). ADR-006: corrigenda never
         # logs by itself — adapters here own the routing.
         pipeline = CorrectionPipeline(
             provider=provider,
@@ -238,7 +238,7 @@ class JobRunner:
             ),
             output_writer=output_writer,
         )
-        # `run_id` is alto-core's generic identifier; we feed it the
+        # `run_id` is corrigenda's generic identifier; we feed it the
         # server-side `job_id` so trace.json correlates with the API.
         result = await pipeline.run(
             document_manifest=document_manifest,

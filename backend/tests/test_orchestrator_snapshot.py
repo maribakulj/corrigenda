@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alto_core.alto.parser import build_document_manifest
+from corrigenda.alto.parser import build_document_manifest
 from lxml import etree
 
 from app.jobs.runner import JobRunner

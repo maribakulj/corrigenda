@@ -177,7 +177,7 @@ export default function App() {
         <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between">
           <div>
             <h1 className="font-serif text-xl font-bold text-slate-100 tracking-tight">
-              ALTO LLM Corrector
+              Corrigenda
             </h1>
             <p className="font-mono text-xs text-slate-500 mt-0.5">Post-OCR correction via LLM</p>
           </div>
@@ -406,7 +406,7 @@ export default function App() {
       {/* Footer */}
       <footer className="border-t border-slate-800 mt-16 py-6">
         <p className="font-mono text-xs text-slate-700 text-center">
-          ALTO LLM Corrector — post-OCR correction only, no OCR, no resegmentation
+          Corrigenda — post-OCR correction only, no OCR, no resegmentation
         </p>
       </footer>
     </div>

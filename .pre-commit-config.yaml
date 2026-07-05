@@ -23,13 +23,13 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.14
     hooks:
-      # Run on both backend/ and packages/alto-core/ so local commits
-      # surface alto-core lint issues before CI does.
+      # Run on both backend/ and packages/corrigenda/ so local commits
+      # surface corrigenda lint issues before CI does.
       - id: ruff-check
         args: [--fix]
-        files: ^(backend|packages/alto-core)/
+        files: ^(backend|packages/corrigenda)/
       - id: ruff-format
-        files: ^(backend|packages/alto-core)/
+        files: ^(backend|packages/corrigenda)/
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.15.0
@@ -37,12 +37,12 @@ repos:
       - id: mypy
         files: ^backend/app/
         # NOTE: this hook runs in an isolated sandbox and cannot reach
-        # the in-tree alto-core sibling package, so it ignores
-        # `from alto_core.X import Y` imports (via mypy's
+        # the in-tree corrigenda sibling package, so it ignores
+        # `from corrigenda.X import Y` imports (via mypy's
         # `ignore_missing_imports = true` in pyproject.toml). CI's
-        # `backend-types` job installs alto-core editable and catches
+        # `backend-types` job installs corrigenda editable and catches
         # those imports for real. Run that job locally with:
-        #   pip install -e packages/alto-core
+        #   pip install -e packages/corrigenda
         #   cd backend && mypy --explicit-package-bases app
         args: [--config-file=backend/pyproject.toml, --explicit-package-bases]
         additional_dependencies:

@@ -4,7 +4,7 @@
 # in lockstep. Each package keeps its own `pyproject.toml` with its
 # own dependencies and version. Backward-compatible: existing `pip
 # install -r backend/requirements*.txt` flow still works because
-# backend declares its dependency on alto-core via a relative path.
+# backend declares its dependency on corrigenda via a relative path.
 
 [project]
 name = "alto-llm-corrector-workspace"
@@ -14,5 +14,5 @@ requires-python = ">=3.11"
 
 [tool.uv.workspace]
 members = [
-    "packages/alto-core",
+    "packages/corrigenda",
 ]

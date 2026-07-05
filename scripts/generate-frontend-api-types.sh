@@ -5,7 +5,7 @@
 # Usage:
 #   scripts/generate-frontend-api-types.sh
 #
-# Requires the backend Python env (alto-core editable + backend deps)
+# Requires the backend Python env (corrigenda editable + backend deps)
 # to be set up locally. See CONTRIBUTING.md for the install recipe.
 #
 # Output:

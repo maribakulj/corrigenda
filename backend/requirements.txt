@@ -1,10 +1,10 @@
 # Pinned 2026-04-14 — reproducible builds.
 #
-# NOTE: alto-core is a sibling package in this monorepo, NOT listed here.
+# NOTE: corrigenda is a sibling package in this monorepo, NOT listed here.
 # Install it separately before backend (so the cwd-relative path doesn't
 # bite us depending on where pip is run from):
 #
-#   pip install -e packages/alto-core   # from the repo root
+#   pip install -e packages/corrigenda   # from the repo root
 #   pip install -r backend/requirements.txt -r backend/requirements-dev.txt
 #
 # CI follows this two-step install. The Dockerfiles do too. See

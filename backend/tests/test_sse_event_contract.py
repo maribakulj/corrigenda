@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alto_core.alto.parser import build_document_manifest
+from corrigenda.alto.parser import build_document_manifest
 
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore

@@ -11,13 +11,13 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Two-step Python install:
-#   1. alto-core (sibling package) — editable, absolute path so cwd
+#   1. corrigenda (sibling package) — editable, absolute path so cwd
 #      doesn't matter.
-#   2. backend requirements.txt — alto-core no longer lives in there
+#   2. backend requirements.txt — corrigenda no longer lives in there
 #      since Stage 6 of the audit remediation (decoupled to avoid the
-#      cwd-relative `-e ../packages/alto-core` failure mode).
-COPY packages/alto-core /app/packages/alto-core
-RUN pip install --no-cache-dir -e /app/packages/alto-core
+#      cwd-relative `-e ../packages/corrigenda` failure mode).
+COPY packages/corrigenda /app/packages/corrigenda
+RUN pip install --no-cache-dir -e /app/packages/corrigenda
 
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt

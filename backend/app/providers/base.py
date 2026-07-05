@@ -1,7 +1,7 @@
 """HTTP helpers for the bundled provider implementations.
 
 The LLM contract — :class:`BaseProvider`, :data:`OUTPUT_JSON_SCHEMA`,
-:data:`SYSTEM_PROMPT` — was moved to :mod:`alto_core.protocols.provider`
+:data:`SYSTEM_PROMPT` — was moved to :mod:`corrigenda.protocols.provider`
 and is re-exported here so existing imports from ``app.providers.base``
 keep working.
 
@@ -19,14 +19,14 @@ from typing import Any
 
 import httpx
 
-# Re-exports — public LLM contract lives in alto-core now.
-from alto_core.protocols.provider import (  # noqa: F401  re-exported
+# Re-exports — public LLM contract lives in corrigenda now.
+from corrigenda.protocols.provider import (  # noqa: F401  re-exported
     OUTPUT_JSON_SCHEMA,
     SYSTEM_PROMPT,
     BaseProvider,
     ProviderTransientError,
 )
-from alto_core.schemas import Usage
+from corrigenda.schemas import Usage
 
 logger = logging.getLogger(__name__)
 

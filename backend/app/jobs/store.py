@@ -21,7 +21,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from alto_core.schemas import DocumentManifest, LineTrace, PipelineEventType
+from corrigenda.schemas import DocumentManifest, LineTrace, PipelineEventType
 
 from app.schemas import JobManifest, JobStatus, Provider, SSEEvent
 

@@ -1,6 +1,6 @@
-# PROGRESS_V1 — alto-core v1.0
+# PROGRESS_V1 — corrigenda v1.0
 
-État de la livraison v1.0 de `packages/alto-core/` selon `SPECS_LIB_V2.md`.
+État de la livraison v1.0 de `packages/corrigenda/` selon `SPECS_LIB_V2.md`.
 Point de reprise pour toute session fraîche.
 
 ## Statut : v1.0 COMPLÈTE (F1–F14 + surface §8/§9/§11) + rounds correctifs post-audit
@@ -86,16 +86,36 @@ indépendants de la version — rewrite sans arguments de provenance).
 
 ## Commandes de validation
 
-- lib : `cd packages/alto-core && python -m pytest tests/ --cov=alto_core`
-- lib types : `python -m mypy --strict src/alto_core`
+- lib : `cd packages/corrigenda && python -m pytest tests/ --cov=corrigenda`
+- lib types : `python -m mypy --strict src/corrigenda`
 - lib lint : `ruff check src/ tests/ && ruff format --check src/ tests/`
 - backend : `cd backend && PYTHONPATH=. python -m pytest --cov=app`
 - backend types : `mypy --explicit-package-bases app`
 - frontend : `cd frontend && npx tsc --noEmit && npm run test && npm run lint`
 - sécurité : `bandit -r app -c pyproject.toml && pip-audit -r requirements.txt --strict`
 
+## Renommage §14 — DÉCIDÉ ET EXÉCUTÉ : **corrigenda**
+
+Validé par le mainteneur (juillet 2026). Stratégie B (avant toute
+publication → zéro alias) : distribution `alto-core` → `corrigenda`,
+import `alto_core` → `corrigenda`, répertoire `packages/corrigenda/`,
+jobs CI `corrigenda-*`, workflow `publish-corrigenda.yml`, script
+`release-corrigenda.sh`, marque frontend « Corrigenda » (App.tsx,
+index.html, smoke test), README racine/HF, marque de provenance
+`processingStep` → `corrigenda` (sans effet sur les goldens byte-parity :
+le corpus n'a pas d'élément Processing). Les docs historiques
+(SPECS*/AUDIT/LEDGER/ROADMAP/MIGRATION/ARCHITECTURE) gardent l'ancien nom
+comme trace d'époque.
+
+**Restes manuels (actions mainteneur, hors conteneur) :**
+- Renommer le dépôt GitHub `alto-llm-corrector` → `corrigenda`
+  (Settings → Rename ; GitHub redirige les anciennes URLs), puis mettre à
+  jour `[project.urls]` du pyproject et le slug HF Spaces.
+- Sur PyPI : le nom `corrigenda` était libre au 5 juillet 2026 (vérifié) —
+  le réserver vite via une première publication TestPyPI→PyPI.
+
 ## Reste (produit, à décider par l'utilisateur)
 
 - Ratifier les 3 décisions ci-dessus (surtout STYLE §6.1).
-- Bump `1.0.0` + entrée CHANGELOG datée, nom PyPI (§14), publication.
+- Bump `1.0.0` + entrée CHANGELOG datée, publication PyPI sous `corrigenda`.
 - Optionnel : consommer `target_count` côté frontend (progression exacte).

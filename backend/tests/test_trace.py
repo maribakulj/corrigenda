@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alto_core.alto.parser import build_document_manifest, parse_alto_file
-from alto_core.alto.rewriter import extract_output_texts, rewrite_alto_file
+from corrigenda.alto.parser import build_document_manifest, parse_alto_file
+from corrigenda.alto.rewriter import extract_output_texts, rewrite_alto_file
 
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore

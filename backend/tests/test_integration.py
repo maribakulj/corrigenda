@@ -11,7 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from alto_core.alto.parser import build_document_manifest, parse_alto_file
+from corrigenda.alto.parser import build_document_manifest, parse_alto_file
 from fastapi.testclient import TestClient
 from lxml import etree
 
@@ -379,10 +379,10 @@ def test_fallback_on_invalid_json():
     """
     mock = MockProvider(invalid_json_times=99)
 
-    # Patch alto-core directly: the backend shim no longer re-exports
+    # Patch corrigenda directly: the backend shim no longer re-exports
     # the `asyncio` module attribute (Stage 3 audit remediation).
     with patch(
-        "alto_core.pipeline.correction_pipeline.asyncio.sleep", new=AsyncMock(return_value=None)
+        "corrigenda.pipeline.correction_pipeline.asyncio.sleep", new=AsyncMock(return_value=None)
     ):
         job_id, out_files, store = _run_job_directly(
             {SAMPLE_XML.name: SAMPLE_XML.read_bytes()},

@@ -9,7 +9,7 @@ import zipfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from alto_core.alto.parser import build_document_manifest
+from corrigenda.alto.parser import build_document_manifest
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from sse_starlette.sse import EventSourceResponse

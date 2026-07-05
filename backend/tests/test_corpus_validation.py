@@ -17,13 +17,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from alto_core.alto.hyphenation import (
+from corrigenda.alto.hyphenation import (
     ReconcileMetrics,
     classify_reconcile_outcome,
     reconcile_hyphen_pair,
 )
-from alto_core.alto.parser import parse_alto_file
-from alto_core.alto.rewriter import RewriterMetrics, rewrite_alto_file
+from corrigenda.alto.parser import parse_alto_file
+from corrigenda.alto.rewriter import RewriterMetrics, rewrite_alto_file
 from lxml import etree
 
 from app.schemas import HyphenRole

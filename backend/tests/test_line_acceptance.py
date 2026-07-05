@@ -6,8 +6,8 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from alto_core.alto.parser import build_document_manifest, parse_alto_file
-from alto_core.pipeline.line_acceptance import (
+from corrigenda.alto.parser import build_document_manifest, parse_alto_file
+from corrigenda.pipeline.line_acceptance import (
     check_adjacent_duplicates,
     check_line,
 )

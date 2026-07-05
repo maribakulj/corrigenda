@@ -34,7 +34,7 @@ import App from './App'
 describe('App (smoke)', () => {
   it('mounts without throwing and shows the header brand', () => {
     render(<App />)
-    expect(screen.getByText('ALTO LLM Corrector')).toBeInTheDocument()
+    expect(screen.getByText('Corrigenda')).toBeInTheDocument()
     expect(screen.getByText(/Post-OCR correction via LLM/i)).toBeInTheDocument()
   })
 

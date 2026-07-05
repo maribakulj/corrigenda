@@ -1,6 +1,6 @@
 """Backend's schema surface.
 
-Domain models come from the pure ``alto_core.schemas`` package. HTTP
+Domain models come from the pure ``corrigenda.schemas`` package. HTTP
 DTOs (request/response payloads, SSE events) live next door in
 :mod:`app.schemas.http` — they're server-layer concerns, not domain.
 
@@ -8,7 +8,7 @@ This module re-exports both groups so existing
 ``from app.schemas import X`` call sites keep working.
 """
 
-from alto_core.schemas import (
+from corrigenda.schemas import (
     BlockManifest,
     ChunkGranularity,
     ChunkPlan,
@@ -39,11 +39,11 @@ from app.schemas.http import (
     SSEEvent,
 )
 
-# Server-side job enums + record — moved out of alto-core by spec F12.
+# Server-side job enums + record — moved out of corrigenda by spec F12.
 from app.schemas.job import JobManifest, JobStatus, Provider
 
 __all__ = [
-    # Domain (alto-core)
+    # Domain (corrigenda)
     "BlockManifest",
     "ChunkGranularity",
     "ChunkPlan",

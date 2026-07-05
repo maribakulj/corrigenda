@@ -16,7 +16,7 @@ invariants that L4 doesn't cover:
      ``message`` field, not the fixed hyphen tag.
 
 These were the three holes I caught when writing my own retry tests on
-the pre-extraction codebase; they survived the alto-core extraction
+the pre-extraction codebase; they survived the corrigenda extraction
 because the classifier didn't change.
 """
 
@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alto_core.alto.parser import build_document_manifest
-from alto_core.pipeline.validator import HyphenIntegrityError
+from corrigenda.alto.parser import build_document_manifest
+from corrigenda.pipeline.validator import HyphenIntegrityError
 
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore

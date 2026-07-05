@@ -19,11 +19,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  alto-core-lint:
+  corrigenda-lint:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: packages/alto-core
+        working-directory: packages/corrigenda
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,7 +39,7 @@ jobs:
       - name: Version coherence (__init__.py ↔ CHANGELOG.md)
         # Roadmap L7 / P5 — bumping `__version__` without a matching
         # CHANGELOG entry was caught only at release-script time
-        # (scripts/release-alto-core.sh:55-59); now CI blocks the
+        # (scripts/release-corrigenda.sh:55-59); now CI blocks the
         # commit. The check accepts both `## [X.Y.Z]` and
         # `## [X.Y.Z] — date` heading shapes already used in the file.
         # The regex's optional `(?::\s*[^=]+)?` clause tolerates a future
@@ -49,10 +49,10 @@ jobs:
         run: |
           VERSION=$(python -c "
           import re, pathlib
-          init = pathlib.Path('src/alto_core/__init__.py').read_text()
+          init = pathlib.Path('src/corrigenda/__init__.py').read_text()
           m = re.search(r\"__version__\\s*(?::\\s*[^=]+)?=\\s*['\\\"]([^'\\\"]+)['\\\"]\", init)
           if not m:
-              raise SystemExit('__version__ not found in src/alto_core/__init__.py')
+              raise SystemExit('__version__ not found in src/corrigenda/__init__.py')
           print(m.group(1))
           ")
           echo "Detected __version__: ${VERSION}"
@@ -62,27 +62,27 @@ jobs:
           fi
           echo "Version coherence OK: __init__.py == CHANGELOG.md == ${VERSION}"
 
-  alto-core-types:
+  corrigenda-types:
     # F12 / §8.3 — the package ships py.typed and must pass mypy --strict.
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: packages/alto-core
+        working-directory: packages/corrigenda
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install alto-core (editable) + mypy + stubs
+      - name: Install corrigenda (editable) + mypy + stubs
         run: |
           pip install -e .
           pip install mypy==1.15.0 lxml-stubs
       - name: mypy --strict
-        run: mypy --strict src/alto_core
+        run: mypy --strict src/corrigenda
 
-  alto-core-tests:
-    # Matrix the test suite across every Python version alto-core's
+  corrigenda-tests:
+    # Matrix the test suite across every Python version corrigenda's
     # `requires-python` and Trove classifiers claim to support. Without
     # this, the 3.12/3.13 classifiers in pyproject.toml were unverified
     # promises and a 3.12-only regression would only surface to PyPI
@@ -95,27 +95,27 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     defaults:
       run:
-        working-directory: packages/alto-core
+        working-directory: packages/corrigenda
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install alto-core (editable) + pytest
-        # Ship pytest-asyncio so async tests in alto-core don't quietly
+      - name: Install corrigenda (editable) + pytest
+        # Ship pytest-asyncio so async tests in corrigenda don't quietly
         # error-out with "asyncio mode not installed"; pytest-cov gates the
         # package's own coverage (F11 repatriated the algorithm tests here).
         run: |
           pip install -e .
           pip install pytest pytest-asyncio pytest-cov
       - name: pytest + coverage gate (85%)
-        run: pytest tests/ --cov=alto_core --cov-report=term --cov-report=xml
+        run: pytest tests/ --cov=corrigenda --cov-report=term --cov-report=xml
 
-  alto-core-build:
+  corrigenda-build:
     # Catch packaging regressions (broken classifiers, missing files in
     # the wheel/sdist) here, before they bite us at PyPI release time.
-    # Matrix mirrors `alto-core-tests` so the wheel smoke-install is
+    # Matrix mirrors `corrigenda-tests` so the wheel smoke-install is
     # exercised under every supported Python — a 3.13-only metadata
     # incompatibility (eg. a hatchling plugin) would otherwise sail
     # past CI and break consumers downstream.
@@ -126,7 +126,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     defaults:
       run:
-        working-directory: packages/alto-core
+        working-directory: packages/corrigenda
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -145,8 +145,8 @@ jobs:
         # that hatchling emits — false positive on wheel quality.)
         #
         # _smoke_imports.py is the single source of truth shared with
-        # the publish workflow and scripts/release-alto-core.sh — it
-        # iterates `alto_core.__all__` so any drift trips here. See
+        # the publish workflow and scripts/release-corrigenda.sh — it
+        # iterates `corrigenda.__all__` so any drift trips here. See
         # roadmap L5 / B6.
         run: |
           python -m venv /tmp/wheel-smoke
@@ -160,8 +160,8 @@ jobs:
         if: matrix.python-version == '3.11'
         uses: actions/upload-artifact@v4
         with:
-          name: alto-core-dist
-          path: packages/alto-core/dist/
+          name: corrigenda-dist
+          path: packages/corrigenda/dist/
           if-no-files-found: error
 
   backend-lint:
@@ -183,9 +183,9 @@ jobs:
         run: ruff format --check .
 
   backend-types:
-    # Block on alto-core tests: the shims forward to it, so any breakage
+    # Block on corrigenda tests: the shims forward to it, so any breakage
     # there would surface as confusing mypy errors here.
-    needs: [alto-core-tests]
+    needs: [corrigenda-tests]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -193,8 +193,8 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install alto-core (editable, sibling package)
-        run: pip install -e packages/alto-core
+      - name: Install corrigenda (editable, sibling package)
+        run: pip install -e packages/corrigenda
       - name: Install backend dependencies
         working-directory: backend
         run: pip install -r requirements.txt -r requirements-dev.txt
@@ -203,9 +203,9 @@ jobs:
         run: mypy --explicit-package-bases app
 
   backend-tests:
-    # Block on alto-core tests so a flaky backend run doesn't mask a
+    # Block on corrigenda tests so a flaky backend run doesn't mask a
     # broken core package.
-    needs: [alto-core-tests]
+    needs: [corrigenda-tests]
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: backend
@@ -215,8 +215,8 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install alto-core (editable, sibling package)
-        run: pip install -e packages/alto-core
+      - name: Install corrigenda (editable, sibling package)
+        run: pip install -e packages/corrigenda
       - name: Install backend dependencies
         working-directory: backend
         run: pip install -r requirements.txt -r requirements-dev.txt
@@ -239,12 +239,12 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install alto-core + backend deps + security tools
-        # alto-core lives next door; install editable so backend imports
+      - name: Install corrigenda + backend deps + security tools
+        # corrigenda lives next door; install editable so backend imports
         # resolve. Audit the resolved environment after install
         # (pip-audit -r doesn't understand editable lines).
         run: |
-          pip install -e packages/alto-core
+          pip install -e packages/corrigenda
           pip install -r backend/requirements.txt
           pip install bandit[toml]==1.9.4 pip-audit==2.10.0
       - name: bandit (static analysis)
@@ -253,10 +253,10 @@ jobs:
       - name: pip-audit (dependency CVEs)
         # Audit from ``backend/requirements.txt`` rather than the
         # resolved env. The previous resolved-env approach tried to
-        # audit alto-core (editable sibling package, not on PyPI) and
+        # audit corrigenda (editable sibling package, not on PyPI) and
         # failed in ``--strict`` mode — ``--skip-editable`` still
         # surfaces the failure as a strict-mode collection error. The
-        # requirements file no longer contains editable lines (alto-core
+        # requirements file no longer contains editable lines (corrigenda
         # is installed separately upstream of this job), so the file-
         # based audit cleanly resolves and audits all backend deps,
         # transitive deps included, against the PyPI advisory DB.
