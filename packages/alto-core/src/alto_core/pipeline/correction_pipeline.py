@@ -20,6 +20,7 @@ update its job state.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import uuid
@@ -51,6 +52,7 @@ from alto_core.schemas import (
     BlockManifest,
     ChunkPlannerConfig,
     ChunkRequest,
+    CorrectionReport,
     DocumentManifest,
     GuardConfig,
     HyphenRole,
@@ -380,6 +382,9 @@ class CorrectionResult:
     #: F14 — aggregate token consumption across every producer call in the
     #: run (zero when no provider reported usage).
     usage: Usage
+    #: §9 — public, versioned correction report (same line traces, promoted
+    #: to a documented artefact). Present on every run, including dry runs.
+    report: CorrectionReport
 
 
 class CorrectionPipeline:
@@ -415,6 +420,24 @@ class CorrectionPipeline:
         self._reconcile_metrics = ReconcileMetrics()
         self._usage = Usage()
 
+    def _config_fingerprint(self) -> str:
+        """Stable 16-hex hash over the pipeline's policies (§8.2 / §11).
+
+        Combines the RetryPolicy, GuardConfig and ChunkPlannerConfig so the
+        provenance ``processingStep`` records the exact configuration a
+        corrected XML was produced under.
+        """
+        payload = json.dumps(
+            {
+                "retry": self.retry_policy.model_dump(mode="json"),
+                "guard": self.guard_config.model_dump(mode="json"),
+                "chunk": self.config.model_dump(mode="json"),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
     def _record_reconcile_outcome(self, outcome: str) -> None:
         """Bump the per-job ReconcileMetrics counter for a single pair."""
         if outcome == "coherent":
@@ -438,6 +461,7 @@ class CorrectionPipeline:
         source_files: dict[str, Path],
         run_id: str | None = None,
         should_abort: Callable[[], bool] | None = None,
+        apply: bool = True,
     ) -> CorrectionResult:
         """Run the full pipeline. Mutates `document_manifest.pages` in place.
 
@@ -452,6 +476,14 @@ class CorrectionPipeline:
         written** (neither corrected XML nor trace). A provider call
         already in flight is not interrupted — cancellation is cooperative
         and observed only at chunk/page boundaries.
+
+        ``apply`` (§9 dry-run) — when ``False``, the full pipeline runs
+        (production, guards, reconciliation, and an in-memory rewrite so the
+        report's ``rewriter_path`` / ``output_alto_text`` are populated) but
+        the injected ``OutputWriter`` is **never called**: no corrected XML
+        and no trace are persisted. The returned :class:`CorrectionResult`
+        (and its :class:`CorrectionReport`) is the whole deliverable —
+        useful for preview or for a consumer benchmarking without writing.
         """
         run_id = run_id or str(uuid.uuid4())
         self._retry_count = 0
@@ -540,6 +572,13 @@ class CorrectionPipeline:
             model=model,
             traces=traces,
             run_id=run_id,
+            apply=apply,
+        )
+
+        report = CorrectionReport(
+            run_id=run_id,
+            total_lines=len(traces),
+            lines=list(traces.values()),
         )
 
         return CorrectionResult(
@@ -550,6 +589,7 @@ class CorrectionPipeline:
             traces=traces,
             reconcile_metrics=self._reconcile_metrics,
             usage=self._usage,
+            report=report,
         )
 
     # ------------------------------------------------------------------
@@ -1238,8 +1278,21 @@ class CorrectionPipeline:
         model: str,
         traces: dict[str, LineTrace],
         run_id: str,
+        apply: bool = True,
     ) -> None:
-        """Rewrite corrected ALTO files, update traces, persist via writer."""
+        """Rewrite corrected ALTO files, update traces, and (when ``apply``)
+        persist via the writer.
+
+        §9 dry-run — the rewrite always runs in memory so the report's
+        ``rewriter_path`` / ``output_alto_text`` are populated, but when
+        ``apply`` is ``False`` the injected ``OutputWriter`` is never
+        called: nothing is persisted.
+        """
+        # §11 — provenance stamped into every corrected file's processingStep.
+        from alto_core import __version__ as _lib_version
+
+        config_fingerprint = self._config_fingerprint()
+
         for source_name, xml_path in source_files.items():
             pages_for_file = [
                 p for p in document_manifest.pages if p.source_file == source_name
@@ -1252,11 +1305,14 @@ class CorrectionPipeline:
                 pages_for_file,
                 provider_name,
                 model,
+                lib_version=_lib_version,
+                config_fingerprint=config_fingerprint,
             )
-            self.output_writer.write_corrected(
-                source_stem=xml_path.stem,
-                xml_bytes=xml_bytes,
-            )
+            if apply:
+                self.output_writer.write_corrected(
+                    source_stem=xml_path.stem,
+                    xml_bytes=xml_bytes,
+                )
             # rewriter_stats observability event — pure read-only diagnostic
             # surfacing how each line classified (UNTOUCHED / SUBS_ONLY /
             # FAST_PATH / SLOW_PATH). Zero impact on the corrected XML.
@@ -1292,14 +1348,15 @@ class CorrectionPipeline:
                     if t is not None:
                         t.output_alto_text = otxt
 
-        job_trace = JobTrace(
-            job_id=run_id,
-            total_lines=len(traces),
-            lines=list(traces.values()),
-        )
-        self.output_writer.write_trace(
-            traces_payload=job_trace.model_dump_json(indent=2),
-        )
+        if apply:
+            job_trace = JobTrace(
+                job_id=run_id,
+                total_lines=len(traces),
+                lines=list(traces.values()),
+            )
+            self.output_writer.write_trace(
+                traces_payload=job_trace.model_dump_json(indent=2),
+            )
 
 
 # --- __all__ (Stage 3 audit remediation) ---

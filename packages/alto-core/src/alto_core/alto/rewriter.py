@@ -554,6 +554,9 @@ def rewrite_alto_file(
     page_manifests: list[PageManifest],
     provider: str,
     model: str,
+    *,
+    lib_version: str | None = None,
+    config_fingerprint: str | None = None,
 ) -> tuple[bytes, RewriterMetrics, dict[str, str]]:
     """
     Rewrite an ALTO XML file with corrected text from page_manifests.
@@ -618,7 +621,7 @@ def rewrite_alto_file(
         metrics.slow_path += 1
         line_paths[line_id] = "slow_path"
 
-    _add_processing_entry(root, ns, provider, model)
+    _add_processing_entry(root, ns, provider, model, lib_version, config_fingerprint)
     # pretty_print=False: avoid gratuitously reformatting the entire XML
     # (whitespace between elements) when the user only changed CONTENT on a
     # handful of lines. Users comparing source vs. output should see only
@@ -656,7 +659,17 @@ def _add_processing_entry(
     ns: str,
     provider: str,
     model: str,
+    lib_version: str | None = None,
+    config_fingerprint: str | None = None,
 ) -> None:
+    """Record a ``processingStep`` documenting the correction pass (§11).
+
+    Beyond the provider/model already written, the step now carries the
+    **library version** and a **configuration fingerprint** (§8.2) so a
+    corrected XML says by what and under which policy it was produced. Both
+    are optional for backward compatibility; when omitted the historical
+    description is emitted verbatim.
+    """
     desc = root.find(_tag("Description", ns))
     if desc is None:
         return
@@ -665,9 +678,15 @@ def _add_processing_entry(
         return
     step = etree.SubElement(processing, _tag("processingStep", ns))
     step.set("type", "contentModification")
+
+    provenance = "alto-llm-corrector"
+    if lib_version:
+        provenance += f" {lib_version}"
+    if config_fingerprint:
+        provenance += f"; config {config_fingerprint}"
     step.set(
         "description",
-        f"Post-OCR correction via {provider}/{model} (alto-llm-corrector)",
+        f"Post-OCR correction via {provider}/{model} ({provenance})",
     )
 
 

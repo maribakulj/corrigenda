@@ -603,6 +603,35 @@ class JobTrace(BaseModel):
     lines: list[LineTrace] = Field(default_factory=list)
 
 
+#: Bumped on any breaking change to the CorrectionReport JSON shape (§9).
+CORRECTION_REPORT_VERSION = "1.0"
+
+
+class CorrectionReport(BaseModel):
+    """Public, versioned correction report (§9).
+
+    Promotes the per-line :class:`LineTrace` from a backend-internal
+    ``trace.json`` to a documented output artefact with a **stable,
+    versioned JSON schema**. Each line records its full journey — source
+    OCR → model input → model output → projected text → re-extracted ALTO
+    text — plus the rewriter path taken and any fallback reason, so a
+    consumer can render a diff/preview or measure a run without re-deriving
+    anything. Returned on every run and, for a dry run
+    (``run(apply=False)``), it is the whole point: the report is produced
+    without writing any XML.
+    """
+
+    report_version: str = CORRECTION_REPORT_VERSION
+    run_id: str
+    total_lines: int = 0
+    lines: list[LineTrace] = Field(default_factory=list)
+
+    @property
+    def fallback_lines(self) -> list[LineTrace]:
+        """Lines that fell back to OCR (a quick health signal for consumers)."""
+        return [ln for ln in self.lines if ln.validation_status == "fallback"]
+
+
 # --- __all__ (Stage 3 audit remediation) ---
 __all__ = [
     "JobStatus",
@@ -632,4 +661,5 @@ __all__ = [
     "Usage",
     "LineTrace",
     "JobTrace",
+    "CorrectionReport",
 ]

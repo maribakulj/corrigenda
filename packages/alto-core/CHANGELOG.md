@@ -54,6 +54,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (default 6). Only lines whose finest-grain chunk still fails fall back to OCR;
   a transient burst now recovers instead of reverting the whole chunk. New
   `chunk_downgraded` event added to the SSE contract.
+- **F8** — overlapping windows distinguish *target* vs *context* lines
+  (`ChunkRequest.target_line_ids`): each line is corrected in exactly one
+  window (its best-following-context window), hyphen pairs kept together;
+  overlaps become pure context. No effect on PAGE-granularity documents.
+- **F14** *(pre-1.0 break)* — `BaseProvider.complete_structured` returns
+  `(dict, Usage | None)`. New `Usage` model; `CorrectionResult.usage`
+  aggregates the run; per-chunk tokens on the `chunk_completed` event.
+- **Error hierarchy (§8.4)** — `alto_core.errors`: `CorrectionError` root with
+  `ParseError`, `ValidationError` (both also `ValueError`), `CorrectionAborted`;
+  `HyphenIntegrityError` is now a `ValidationError`. `validate_llm_response`
+  raises `ValidationError`.
+- **CorrectionReport + dry-run (§9)** — the per-line trace is promoted to a
+  public, versioned `CorrectionReport` (`report_version` "1.0"), returned on
+  `CorrectionResult.report`. `run(apply=False)` runs the full pipeline
+  (production, guards, reconciliation, in-memory rewrite) but never calls the
+  `OutputWriter` — the report is the deliverable.
+- **Provenance (§11)** — the corrected XML's `processingStep` now records the
+  library version and a configuration fingerprint
+  (`RetryPolicy`+`GuardConfig`+`ChunkPlannerConfig`) alongside provider/model.
+- **py.typed + `mypy --strict` (F12/§8.3)** — PEP 561 marker shipped in the
+  wheel; the package passes `mypy --strict` (new `alto-core-types` CI job).
 
 ### Changed
 - **Retry policy on HTTP 4xx (other than 429) is now non-retryable.**
