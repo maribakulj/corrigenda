@@ -62,6 +62,25 @@ jobs:
           fi
           echo "Version coherence OK: __init__.py == CHANGELOG.md == ${VERSION}"
 
+  alto-core-types:
+    # F12 / §8.3 — the package ships py.typed and must pass mypy --strict.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/alto-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install alto-core (editable) + mypy + stubs
+        run: |
+          pip install -e .
+          pip install mypy==1.15.0 lxml-stubs
+      - name: mypy --strict
+        run: mypy --strict src/alto_core
+
   alto-core-tests:
     # Matrix the test suite across every Python version alto-core's
     # `requires-python` and Trove classifiers claim to support. Without

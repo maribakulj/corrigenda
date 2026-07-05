@@ -52,3 +52,20 @@ include = [
     "CHANGELOG.md",
     "LICENSE",
 ]
+
+# ---------------------------------------------------------------------------
+# mypy — the package ships `py.typed` (PEP 561) and is checked in --strict
+# mode (F12 / §8.3). The `alto-core-types` CI job runs
+# `mypy --strict src/alto_core` with lxml-stubs installed.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/alto_core"]
+
+[[tool.mypy.overrides]]
+# lxml ships partial stubs (lxml-stubs); a few dynamic corners remain
+# untyped. We install lxml-stubs in CI; this keeps the odd residual
+# module import from failing strict mode.
+module = ["lxml.*"]
+ignore_missing_imports = true

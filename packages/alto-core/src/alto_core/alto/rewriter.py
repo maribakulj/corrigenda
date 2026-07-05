@@ -123,6 +123,16 @@ def _compute_geometry(
 # ---------------------------------------------------------------------------
 
 
+def _attrib_dict(el: etree._Element) -> dict[str, str]:
+    """Snapshot an element's attributes as a plain ``dict[str, str]``.
+
+    lxml types ``_Attrib`` keys/values as ``str | bytes``; ALTO attributes
+    are always text, so we coerce to ``str`` — this also satisfies
+    ``mypy --strict`` where ``dict(el.attrib)`` does not.
+    """
+    return {str(k): str(v) for k, v in el.attrib.items()}
+
+
 def _get_string_children(el: etree._Element, ns: str) -> list[etree._Element]:
     tag = _tag("String", ns)
     return [c for c in el if c.tag == tag]
@@ -446,13 +456,13 @@ def _rebuild_line(
     is_part1_like = manifest.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
     is_normal = manifest.hyphen_role == HyphenRole.NONE
 
-    orig_string_attribs = [dict(s.attrib) for s in _get_string_children(el, ns)]
-    orig_sp_attribs = [dict(s.attrib) for s in _get_sp_children(el, ns)]
+    orig_string_attribs = [_attrib_dict(s) for s in _get_string_children(el, ns)]
+    orig_sp_attribs = [_attrib_dict(s) for s in _get_sp_children(el, ns)]
 
     if is_part1_like:
         orig_hyps = _get_hyp_children(el, ns)
         orig_hyp_attribs: dict[str, str] = (
-            dict(orig_hyps[0].attrib) if orig_hyps else {}
+            _attrib_dict(orig_hyps[0]) if orig_hyps else {}
         )
         saved_hyp: list[etree._Element] = []
     elif is_normal:
