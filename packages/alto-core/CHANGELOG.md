@@ -39,6 +39,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **F4** — the UNTOUCHED comparison strips both sides, matching the parser's
   `ocr_text` derivation; a line with a trailing `<SP/>` under identity
   correction now takes the UNTOUCHED path instead of being rewritten.
+- **F9** — `RetryPolicy` (frozen, injectable) externalises the temperature
+  ramp, attempt cap, backoff bases and per-chunk budget.
+  `RetryPolicy.default()` reproduces the historical ramp (0.0/0.3/0.5, cap 3)
+  to the byte; `RetryPolicy.deterministic()` sets every temperature to 0.
+  `CorrectionPipeline(retry_policy=…)`.
+- **F10** — `CorrectionPipeline.run(should_abort=…)` cooperative cancellation,
+  probed between pages and chunks; raises `CorrectionAborted` (new
+  `alto_core.errors` module, `CorrectionError` root) before any output is
+  written. In-flight provider calls are not interrupted.
+- **F1** *(behaviour change on failure paths)* — a chunk whose retry budget is
+  exhausted is re-planned one granularity finer (PAGE→BLOCK→WINDOW→LINE) and
+  retried (`chunk_downgraded` event), bounded by `RetryPolicy.per_chunk_budget`
+  (default 6). Only lines whose finest-grain chunk still fails fall back to OCR;
+  a transient burst now recovers instead of reverting the whole chunk. New
+  `chunk_downgraded` event added to the SSE contract.
 
 ### Changed
 - **Retry policy on HTTP 4xx (other than 429) is now non-retryable.**

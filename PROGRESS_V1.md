@@ -112,10 +112,49 @@ décisions prises.
     le nouveau contrat (assertions WC/CC → None). Distinction voulu/régression :
     tous les échecs portaient sur WC/CC, aucune régression fonctionnelle.
   - lib 88, backend 424, ruff clean.
-- [ ] Tranche 3 — F1, F8, F9, F10
-- [ ] Tranche 4 — F14, erreurs §8.4, CorrectionReport + dry-run, F12, py.typed/mypy CI, provenance §11
-- [ ] Tranche 5 — F11
+- [~] **Tranche 3 — F9, F10, F1 faits ; F8 RESTE**
+  - F9 : `RetryPolicy` (frozen) — max_attempts, temperatures (clampées),
+    per_chunk_budget, transient/output backoff base. `.default()` = actuel,
+    `.deterministic()` = temps 0. Threadé dans `__init__` + `_classify_retry`.
+  - F10 : `should_abort` sur `run()`, sondé entre pages/chunks → `CorrectionAborted`
+    (module `alto_core/errors.py` : `CorrectionError` base + `CorrectionAborted`).
+    Sorties non écrites sur abort.
+  - F1 : descente de granularité. `_call_with_retry` scindé en `_attempt_chunk`
+    (pur, renvoie (response, attempts_used, can_downgrade, last_msg), NE fallback pas)
+    + driver `_run_chunk` (décide downgrade vs fallback, récursif, budget partagé).
+    `_subpage_for_lines` re-planifie via le planner normal (force_granularity).
+    Événement `chunk_downgraded` → PipelineEventType + EVENTS front +
+    `_KNOWN_BACKEND_EVENTS`. Comportement changé : échec transitoire RÉCUPÈRE
+    via downgrade (au lieu de fallback). 4 tests backend basculés sur échec
+    persistant (test_fallback_on_persistent_failure, test_fallback_on_invalid_json,
+    test_fallback_warning_message_*, test_drift_fallback_distinguished élargi).
+  - **F8 RESTE À FAIRE** (lignes cibles vs contexte). Le plus complexe de la
+    tranche. Touche : chunk_planner (window overlap → marquer contexte),
+    ChunkRequest (champ target_line_ids ou context_line_ids), enrich_chunk_lines,
+    validator (compte 1:1 sur cibles seulement), pipeline (n'émettre/accepter que
+    pour les cibles). Voir §7 F8 + §5.2 dernier point.
+  - lib 101, backend 424, ruff clean, mypy --strict = 1 (rewriter `_Attrib`).
+- [ ] Tranche 4 — F14, erreurs §8.4 (base déjà posée dans errors.py — reste
+      ParseError, ValidationError, reparent HyphenIntegrityError sous
+      CorrectionError+ValueError), CorrectionReport public + dry-run `apply=False`,
+      F12 (bouger Provider/JobManifest/JobStatus+images vers backend ; PIÈGE
+      PageManifest.status/DocumentManifest.status typés JobStatus + _process_page
+      fait page.status=JobStatus.COMPLETED), py.typed + `mypy --strict` en CI +
+      corriger la dernière erreur mypy (dict(_Attrib) rewriter L~427/454),
+      provenance §11 (version lib + policy_fingerprint dans processingStep).
+- [ ] Tranche 5 — F11 (rapatrier tests d'algo dans packages/alto-core/tests)
 - [ ] CHANGELOG + packaging (py.typed, métadonnées) prêt, NON publié
+
+## Nouveaux symboles publics ajoutés (top-level __all__)
+GuardConfig, PairingPolicy, RetryPolicy, CorrectionError, CorrectionAborted.
+(schemas expose aussi FrozenPolicy, DEFAULT_GUARD_CONFIG, DEFAULT_PAIRING_POLICY,
+DEFAULT_RETRY_POLICY ; CHUNK_DOWNGRADED sur PipelineEventType.)
+
+## Rappel commandes de validation (à relancer après chaque tranche)
+- `cd packages/alto-core && python -m pytest tests/` (101 actuellement)
+- `cd packages/alto-core && ruff check src/ tests/ && ruff format --check src/ tests/`
+- `cd packages/alto-core && python -m mypy --strict src/alto_core` (1 err restante)
+- `cd backend && PYTHONPATH=. python -m pytest` (424)
 
 ## À remonter à l'utilisateur (ne pas décider seul)
 - Renommage paquet `alto-core → corrigenda` (§14) : NON décidé, garder
