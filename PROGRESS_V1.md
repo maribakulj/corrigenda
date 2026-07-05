@@ -134,7 +134,14 @@ décisions prises.
     validator (compte 1:1 sur cibles seulement), pipeline (n'émettre/accepter que
     pour les cibles). Voir §7 F8 + §5.2 dernier point.
   - lib 101, backend 424, ruff clean, mypy --strict = 1 (rewriter `_Attrib`).
-- [~] **Tranche 4 — en cours**
+- [x] **Tranche 4 — COMPLÈTE**
+  - F14 (Usage tuple), §8.4 (errors), py.typed+mypy CI, §9 (CorrectionReport +
+    dry-run apply=False), §11 (provenance processingStep), F12 (Provider/
+    JobStatus/JobManifest → backend app/schemas/job.py ; status retiré de
+    Page/DocumentManifest). Détails ci-dessous conservés pour référence.
+  - lib 118, backend 424, lib+backend mypy --strict clean, ruff clean.
+    Symboles publics top-level : 34 (les 3 enums applicatives retirées).
+- [~] **Tranche 4 (détail historique) — en cours**
   - [x] Hiérarchie erreurs §8.4 : `errors.py` complet (CorrectionError root,
         ParseError/ValidationError = +ValueError, CorrectionAborted).
         HyphenIntegrityError → ValidationError. validate_llm_response lève
@@ -159,7 +166,16 @@ décisions prises.
         DocumentManifest.status typés JobStatus + `_process_page` fait
         `page.status=JobStatus.COMPLETED`. À retyper (enum interne LineStatus-like
         ou retirer). Corriger imports backend (app/schemas re-exporte ces 3).
-- [ ] Tranche 5 — F11 (rapatrier tests d'algo dans packages/alto-core/tests)
+- [ ] **Tranche 5 — F11** (rapatrier tests d'algo dans packages/alto-core/tests)
+  - Candidats backend/tests → paquet : test_parser, test_hyphenation,
+    test_chunk_planner, test_validator, test_line_acceptance, test_rewriter,
+    test_chained_hyphenation, test_double_dash, test_x0000002. Corriger imports
+    `app.*` → `alto_core.*`. Le backend ne garde que intégration/transport
+    (test_api, test_integration, test_orchestrator*, test_store, test_providers,
+    test_sse_event_contract, test_health*, test_task_registry, test_trace, etc.)
+  - ATTENTION : certains tests algo importent `app.schemas` (re-export) ou des
+    helpers backend ; vérifier chaque fichier. Ceux trop couplés au backend
+    restent (de facto intégration).
 - [ ] CHANGELOG + packaging (py.typed, métadonnées) prêt, NON publié
 
 ## Nouveaux symboles publics ajoutés (top-level __all__)
