@@ -15,6 +15,10 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
         args: [--maxkb=1024]
+        # Non-regression corpora are deliberately large (word-level
+        # polygons on full newspaper pages): examples/page/newseye-fr/*.xml
+        # is ~2.4 MB per page. Everything else keeps the 1 MB guard.
+        exclude: ^examples/page/newseye-fr/.*\.xml$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.14

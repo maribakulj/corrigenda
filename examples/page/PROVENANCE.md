@@ -1,5 +1,10 @@
 # Corpus PAGE XML — provenance et usage
 
+Deux sous-corpus complémentaires : **OCR17plus** (livres, triplets
+PAGE/ALTO de la même page, vérité corrigée, `¬`) et **NewsEye-FR**
+(`newseye-fr/`, presse en colonnes — la mise en page la plus complexe :
+ReadingOrder multi-colonnes, densité de césures, OCR brut réel).
+
 Corpus de non-régression pour le support **PAGE XML** (SPECS_LIB_V2 §6.2,
 v1.1) et les **tests de parité inter-formats** (§6.3). Équivalent PAGE du
 corpus ALTO BnF (`examples/X0000002.xml`) : imprimés français, même
@@ -60,6 +65,45 @@ théâtre en vers) ; pour chacune, un **triplet** de la même page :
   par contenu/géométrie, pas par index naïf.
 - **Bonus** : le couple raw/corrected est un banc de post-correction réel
   (entrée OCR fautive → sortie attendue).
+
+## Sous-corpus `newseye-fr/` — presse française en colonnes
+
+**Source** : fichiers fournis par le mainteneur (juillet 2026) ; métadonnées
+internes `TranskribusMetadata docId="545185"` (pageNr 95/96, status="GT",
+créés 2018-12-18) — presse française ~1900 produite par Transkribus dans le
+cadre NewsEye/READ, cohérent avec le jeu BnF
+[Zenodo 4293602](https://zenodo.org/records/4293602) /
+[5654841](https://zenodo.org/records/5654841) (**licence CC BY 4.0 présumée
+— à confirmer contre le record Zenodo avant toute redistribution hors de ce
+dépôt**).
+
+| Fichier | Régions | Lignes | Words | Césures `-` |
+|---|---|---|---|---|
+| `0250199004.xml` | 310 | 820 | 5 491 | 95 |
+| `0253902003.xml` | 235 | 914 | 5 647 | ~100 |
+
+Ce que ce sous-corpus apporte de plus qu'OCR17plus :
+
+- **La complexité maximale de mise en page** : presse multi-colonnes,
+  310/235 TextRegions par page, **élément `<ReadingOrder>` explicite**
+  (OrderedGroup indexé) — le vrai test d'I3 (l'ordre du XML n'est pas
+  l'ordre de lecture) et du chunk planner à l'échelle (820–914 lignes,
+  ~15–25× OCR17plus).
+- **Le jumeau presse exact de `examples/X0000002.xml`** (même monde BnF,
+  même densité, même genre éditorial) — c'est l'équivalent PAGE demandé.
+- **OCR brut réel non corrigé** (« organisée nar », « c°nff'el n™nicipal ») :
+  l'*entrée* type de la bibliothèque de post-correction, à l'échelle d'une
+  vraie page de journal.
+- **TextEquiv aux trois niveaux** (région/ligne/mot, ~6 600 par page) avec
+  **2 désaccords mot↔ligne réels** dans `0250199004.xml` → cas naturels du
+  chemin P2 « en cas de désaccord, le texte ligne fait foi (signalé) ».
+- `custom readingOrder` sur ~6 600 éléments (groupes sans offsets, P6).
+
+Toujours absents ici aussi : `@conf`, `custom textStyle{offset:…}`,
+`¬`/`⸗` (césures en `-` simple), namespace 2019. Régions sans `@type`.
+
+Note taille : ~2,4 Mo/page (polygones au mot) — exclusion dédiée dans
+`.pre-commit-config.yaml` (hook check-added-large-files).
 
 ## Lacunes connues (à compléter)
 
