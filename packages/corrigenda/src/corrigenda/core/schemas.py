@@ -593,6 +593,14 @@ class CorrectionReport(BaseModel):
     run_id: str
     total_lines: int = 0
     lines: list[LineTrace] = Field(default_factory=list)
+    #: Format-specific granularity losses aggregated over the run — e.g. the
+    #: PAGE rewriter reports ``words_dropped`` / ``custom_offset_stripped`` /
+    #: ``alt_textequiv_dropped`` (6.2 P4/P6) here. ``None`` when the format
+    #: has nothing to report (ALTO's per-path counts already live on the
+    #: line traces). Additive and optional, so this does NOT bump
+    #: ``report_version`` — the field's contract is to bump only on a
+    #: *breaking* JSON change, and a new optional key is backward-compatible.
+    format_losses: dict[str, int] | None = None
 
     @property
     def fallback_lines(self) -> list[LineTrace]:

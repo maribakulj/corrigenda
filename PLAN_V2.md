@@ -30,15 +30,33 @@ même release. Version de travail : `0.1.0a1` jusqu'au tag final `1.0.0`.
 - [x] **P2 — Couture de format** (fusionnée avec P1) : port `FormatAdapter`
   (rewrite_file/extract_texts) dans core/protocols ; `AltoFormatAdapter`
   dans formats/alto ; le pipeline n'importe plus le rewriter ALTO.
-- [ ] **P3 — PAGE XML** (spec §6.2 P1–P7 + parité §6.3) : parser/rewriter
-  4 chemins formats/page ; polygones conservés (champ polygone sur
-  Coords) ; césure heuristique `- ¬ ⸗ U+00AD`, caractère préservé (E5
-  étendu) ; custom sans offsets préservé / à offsets retiré+compté ;
-  make_safe_parser + extension du test-contrat grep ; provenance
-  MetadataItem(2019+)/Comments ; compteurs CorrectionReport (bump schéma) ;
-  parité par APPARIEMENT contenu/géométrie (les segmentations des corpus
-  divergent de ±1 ligne) ; goldens PAGE. Fixtures synthétiques pour
-  @conf, custom à offsets, ns 2019, ⸗ (corpus réels lacunaires).
+- [x] **P3 — PAGE XML** (spec §6.2 P1–P7 + parité §6.3) : `formats/page/`
+  (`_ns`, `_text`, `_custom`, `parser`, `rewriter`, `adapter`).
+  Polygones conservés verbatim sur `Coords.polygon`, bbox englobante
+  dérivée pour le planner (P1) ; texte canonique P2/P3 (TextEquiv `@index`
+  minimal, repli concat des Word) ; césure heuristique `- ¬ ⸗ U+00AD`
+  (`core.pairing.trailing_hyphen_char`, détection BOTH chaînée),
+  `hyphen_source_explicit=False` systématique (P5) ; réécriture 3 chemins
+  UNTOUCHED/fast/slow — jamais de réécriture géométrique (P1) ; P3
+  (canonical TextEquiv, drop `@conf`, drop alternatives, MàJ PlainText) ;
+  P4 (Word fast/slow, granularité perdue comptée) ; P5 caractère de césure
+  préservé (E5 étendu, un swap seul → UNTOUCHED) ; P6 `custom` groupes sans
+  offsets préservés verbatim / à offsets retirés+comptés ; P7
+  make_safe_parser (contrat grep couvre déjà `formats/**`), provenance
+  `MetadataItem` (2019+) sinon `Metadata/Comments`, sans horodatage →
+  sortie déterministe. Compteurs de pertes exposés via
+  `PageRewriterMetrics.as_losses()` et `CorrectionReport.format_losses`
+  (champ **additif** ⇒ `report_version` inchangé "1.0" : le contrat du
+  champ est de bumper sur rupture, pas sur ajout). Parité §6.3 prouvée :
+  la page LaFayette PAGE parse 13 lignes byte-identiques à son export ALTO4
+  (14ᵉ ligne ALTO = réclame, divergence ±1 documentée) ; rôles de césure
+  identiques entre variantes raw/corrected ; round-trip identité stable
+  (NewsEye 820 lignes, LaFayette). Fixtures synthétiques : `@conf`,
+  alternatives, PlainText, `custom` à offsets, ns 2019, ⸗ (corpus réels
+  lacunaires). **Note archi** : `make_safe_parser` reste canonique dans
+  `formats/alto/_ns` et est réexporté par `formats/page/_ns` (réutilisation
+  d'une primitive de sécurité ; nettoyage possible = module `formats/_xml`
+  partagé, non bloquant).
 - [ ] **P4 — Protocole d'édition** (spec §4/§5) : core/editing.py
   (ReplaceLine/ReplaceSpan, MatchAnchor→RangeAnchor, E1–E6 ; E4 neutre sur
   replace_line) ; ré-expression replace_line PROUVÉE par les goldens ;

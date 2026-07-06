@@ -31,6 +31,7 @@ from lxml import etree
 from corrigenda.core._norm import nfc
 from corrigenda.core.pairing import HYPHEN_CHARS, trailing_hyphen_char
 from corrigenda.core.schemas import LineManifest, PageManifest
+from corrigenda.formats.page._custom import strip_offset_groups
 from corrigenda.formats.page._ns import (
     _detect_namespace,
     _tag,
@@ -68,6 +69,7 @@ class PageRewriterMetrics:
     words_dropped: int = 0
     conf_dropped: int = 0
     alt_textequiv_dropped: int = 0
+    custom_offset_stripped: int = 0
     hyphen_preserved: int = 0
     line_word_disagreement: int = 0
 
@@ -78,6 +80,18 @@ class PageRewriterMetrics:
     @property
     def total_lines(self) -> int:
         return self.untouched + self.total_processed
+
+    def as_losses(self) -> dict[str, int]:
+        """Non-zero PAGE-specific counters, for ``CorrectionReport.format_losses``."""
+        raw = {
+            "words_dropped": self.words_dropped,
+            "conf_dropped": self.conf_dropped,
+            "alt_textequiv_dropped": self.alt_textequiv_dropped,
+            "custom_offset_stripped": self.custom_offset_stripped,
+            "hyphen_preserved": self.hyphen_preserved,
+            "line_word_disagreement": self.line_word_disagreement,
+        }
+        return {k: v for k, v in raw.items() if v}
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +193,26 @@ def _remove_words(
     for w_el in word_els:
         tl.remove(w_el)
         metrics.words_dropped += 1
+
+
+def _strip_custom_offsets(el: etree._Element, metrics: PageRewriterMetrics) -> None:
+    """P6: drop offset-anchored ``custom`` groups whose ranges are now stale.
+
+    Structural groups (readingOrder/structure) are preserved verbatim. When
+    nothing offset-anchored remains the attribute is left as-is; when it
+    empties out entirely it is removed rather than left blank.
+    """
+    custom = el.get("custom")
+    if not custom:
+        return
+    new_custom, removed = strip_offset_groups(custom)
+    if removed == 0:
+        return
+    metrics.custom_offset_stripped += removed
+    if new_custom:
+        el.set("custom", new_custom)
+    else:
+        del el.attrib["custom"]
 
 
 def _preserve_hyphen(source_text: str, corrected: str) -> str:
@@ -318,10 +352,15 @@ def rewrite_page_file(
         else:
             if word_els:
                 _update_words_fast(tl, word_els, words, ns, metrics)
+                # P6 — surviving Words: strip their stale offset groups.
+                for w_el in word_els:
+                    _strip_custom_offsets(w_el, metrics)
             path = "fast_path"
 
         # --- P3 line-level update (both paths) ---
         _update_line_textequiv(tl, corrected, ns, metrics)
+        # --- P6 line-level custom: offsets into the old text are now stale ---
+        _strip_custom_offsets(tl, metrics)
 
         if path == "fast_path":
             metrics.fast_path += 1

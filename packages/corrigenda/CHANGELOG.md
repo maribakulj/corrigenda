@@ -84,6 +84,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `packages/corrigenda/tests`; the package gates its own coverage (~86%, gate
   85%) and its CI job runs pytest with `--cov=corrigenda`.
 
+### PAGE XML support (SPECS_LIB_V2 §6.2 / §6.3, P1–P7)
+
+- New `formats/page/` backend (parser, rewriter, adapter) producing the
+  **same `DocumentManifest`** as ALTO — the pure core is reused unchanged.
+- **P1** — geometry is polygons. `Coords@points` is kept verbatim on the
+  new `Coords.polygon` field; the enclosing bbox is derived for the
+  planner. Geometry is **never rewritten** (no geometric slow path).
+- **P2/P3** — canonical line text = the minimal-`@index` line `TextEquiv`
+  (absent index ≡ 0), else the space-joined `Word` Unicode; NFC + strip.
+  On rewrite the canonical `TextEquiv` is updated (Unicode + `PlainText`),
+  its stale `@conf` dropped and alternative `TextEquiv` removed.
+- **P4** — words: fast path (count unchanged) updates each `Word`'s
+  `TextEquiv` in place and keeps its `Coords`; slow path (count changed)
+  drops the `Word` children (text lives at line level) and counts the lost
+  granularity.
+- **P5** — heuristic-only hyphenation over `- ¬ ⸗ U+00AD` with chained
+  `BOTH` detection; the source hyphen character is preserved verbatim on
+  rewrite (E5 extended — no `¬` → `-`). The core reconciler's PART1 check
+  now accepts the whole repertoire (`-` retained ⇒ ALTO byte-parity intact).
+- **P6** — `custom` microformat: structural groups (`readingOrder`,
+  `structure`) preserved verbatim; offset-anchored groups (`textStyle`,
+  tags with `offset`/`length`) dropped when the line text changes and
+  counted.
+- **P7** — `make_safe_parser` throughout (the grep contract already spans
+  `formats/**`); provenance as a `MetadataItem` on 2019+ schemas, else
+  appended to `Metadata/Comments`; no wall-clock timestamp ⇒ deterministic
+  output.
+- **Shared pairing** — the second-pass hyphen linker, page-id
+  disambiguation and cross-page linking moved to the pure `core.pairing`
+  (both formats call it; §6.3 parity holds by construction).
+- **`CorrectionReport.format_losses`** — optional aggregate of
+  format-specific granularity losses (`words_dropped`,
+  `custom_offset_stripped`, …), fed by `PageRewriterMetrics.as_losses()`.
+  Additive/optional ⇒ `report_version` stays `"1.0"`.
+- Validated on the real corpus (OCR17plus triplets, NewsEye columnar
+  press): LaFayette parses 13 lines byte-identical to its ALTO4 export;
+  identity round-trip is text-stable; synthetic fixtures pin `@index`,
+  `@conf`, alternatives, `PlainText`, `custom` offsets, the 2019 namespace
+  and the ⸗ Fraktur hyphen.
+
 ### Renamed (§14 — pre-publication, no aliases)
 
 - Distribution **alto-core → corrigenda**, import package **alto_core →
