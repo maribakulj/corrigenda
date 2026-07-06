@@ -312,6 +312,19 @@ class GuardConfig(FrozenPolicy):
     #: PART2 collapsed if corrected word count < ratio * OCR word count.
     pair_drift_part2_collapse_ratio: float = 0.4
 
+    # --- Edit protocol E4: per-op span drift (core/editing.py) ---
+    # These bound a ``replace_span`` op ONLY. ``replace_line`` (the historical
+    # whole-line path) is deliberately NOT gated here — it is governed by the
+    # existing three-stage guard matrix (E6), so re-expressing today's
+    # response as ``replace_line`` ops stays byte-for-byte identical.
+    #: A span replacement may be at most this many times as long as the span
+    #: it replaces (``len(replacement) <= ratio * max(1, span_len)``).
+    edit_span_max_growth_ratio: float = 4.0
+    #: Total characters a line may gain/lose across all its span ops
+    #: (``sum(|replacement| - |span|)`` in absolute value). Generous by
+    #: default; a rules pre-pass makes small, local edits well under it.
+    edit_line_max_changed_chars: int = 200
+
 
 #: Module-level default reused wherever a caller passes no GuardConfig, so
 #: the historical behaviour needs no allocation per call.
