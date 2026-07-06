@@ -1,14 +1,17 @@
 """Pure correction pipeline.
 
 The pipeline takes a parsed :class:`DocumentManifest`, drives the chunk
-planner, calls the LLM provider, validates responses, reconciles hyphen
+planner, asks the injected :class:`EditProducer` for an
+:class:`EditScript` per chunk, validates the result, reconciles hyphen
 pairs, and writes outputs via the injected :class:`OutputWriter`. It
-depends only on the three Protocols in :mod:`corrigenda.core.protocols` — no
+depends only on the Protocols in :mod:`corrigenda.core.protocols` — no
 job store, no FastAPI, no filesystem path manipulation beyond reading
-source files.
+source files. Credentials never reach the pipeline: an LLM's API key
+lives inside its producer (see :class:`LLMEditProducer` and the
+:meth:`CorrectionPipeline.for_provider` convenience).
 
 Side effects:
-  - LLM HTTP calls via :class:`BaseProvider`
+  - producer calls via :class:`EditProducer` (LLM HTTP, rules engine, …)
   - Event notifications via :class:`PipelineObserver`
   - Persistence via :class:`OutputWriter`
 
@@ -32,8 +35,9 @@ from pathlib import Path
 from corrigenda.core.editing import (
     EditOp,
     EditScript,
+    ReplaceLine,
+    ReplaceSpan,
     apply_edit_script,
-    replace_line_script,
 )
 from corrigenda.core.hyphenation import (
     ReconcileMetrics,
@@ -46,11 +50,13 @@ from corrigenda.core.planner import downgrade_granularity, plan_page
 from corrigenda.core.guards import check_adjacent_duplicates, check_line
 from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
 from corrigenda.core.protocols import (
-    FormatAdapter,
     BaseProvider,
+    EditProducer,
+    FormatAdapter,
     OutputWriter,
     PipelineObserver,
     ProviderTransientError,
+    require_source_images,
 )
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
@@ -63,6 +69,7 @@ from corrigenda.core.schemas import (
     DocumentManifest,
     GuardConfig,
     HyphenRole,
+    ImageRef,
     LineManifest,
     LineStatus,
     LineTrace,
@@ -123,21 +130,6 @@ def _default_format_adapter() -> FormatAdapter:
     from corrigenda.formats.alto.adapter import AltoFormatAdapter
 
     return AltoFormatAdapter()
-
-
-def _default_llm_contract() -> tuple[str, dict[str, Any]]:
-    """Composition-boundary default for the LLM prompt contract (§3).
-
-    Prompts and output schemas are PRODUCER concerns; the v1 pipeline
-    still drives ``BaseProvider`` directly, so it resolves the default
-    contract lazily here (function-local import — core never imports
-    producers statically; pinned by the import-contract test). Inject
-    ``system_prompt`` / ``output_schema`` on the pipeline to override.
-    P4 (EditProducer) absorbs this into the producer itself.
-    """
-    from corrigenda.producers.llm import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
-
-    return SYSTEM_PROMPT, OUTPUT_JSON_SCHEMA
 
 
 def sanitize_error(msg: str, api_key: str | None = None) -> str:
@@ -430,16 +422,23 @@ class CorrectionResult:
 
 
 class CorrectionPipeline:
-    """Pure orchestration of the LLM-based ALTO correction pipeline.
+    """Pure orchestration of the correction pipeline over an EditProducer.
 
     Dependencies are injected via the constructor; the pipeline never
     reaches for global state. Counters track stats locally and are
     exposed in the final `CorrectionResult` for the caller to persist.
+
+    §5.1 resorption — the pipeline is constructed around an
+    :class:`EditProducer`; there is no ``api_key``/``model`` anywhere on
+    the pipeline surface. For the common LLM case, use
+    :meth:`for_provider`, which wraps a :class:`BaseProvider` +
+    credentials into an ``LLMEditProducer`` and sets the provenance
+    labels in one call.
     """
 
     def __init__(
         self,
-        provider: BaseProvider,
+        producer: EditProducer,
         observer: PipelineObserver,
         output_writer: OutputWriter,
         config: ChunkPlannerConfig | None = None,
@@ -447,10 +446,11 @@ class CorrectionPipeline:
         guard_config: GuardConfig | None = None,
         pairing_policy: PairingPolicy | None = None,
         format_adapter: FormatAdapter | None = None,
-        system_prompt: str | None = None,
-        output_schema: dict[str, Any] | None = None,
+        *,
+        provider_name: str = "unknown",
+        model: str = "unknown",
     ) -> None:
-        self.provider = provider
+        self.producer = producer
         self.observer = observer
         self.output_writer = output_writer
         self.config = config or ChunkPlannerConfig()
@@ -468,9 +468,10 @@ class CorrectionPipeline:
         # §3 format seam — None resolves to the lazy ALTO default at
         # write time (_default_format_adapter); inject for other formats.
         self.format_adapter = format_adapter
-        # LLM contract — None resolves to producers.llm defaults lazily.
-        self._system_prompt = system_prompt
-        self._output_schema = output_schema
+        # §11 — provenance labels stamped into the corrected XML's
+        # processingStep. Pure strings: the pipeline never dials a vendor.
+        self.provider_name = provider_name
+        self.model = model
         # Counters reset on every call to run()
         self._retry_count = 0
         self._fallback_count = 0
@@ -478,14 +479,58 @@ class CorrectionPipeline:
         self._usage = Usage()
         # §4 — EditScript ops accumulated during a run (reset in run()).
         self._edit_ops: list[EditOp] = []
+        # §4.1 vision envelope — populated per-run from run(source_images=…).
+        self._image_ref_by_page_id: dict[str, ImageRef] = {}
+        self._page_dims: dict[str, tuple[int, int]] = {}
 
-    def _llm_contract(self) -> tuple[str, dict[str, Any]]:
-        prompt, schema = self._system_prompt, self._output_schema
-        if prompt is None or schema is None:
-            d_prompt, d_schema = _default_llm_contract()
-            prompt = prompt if prompt is not None else d_prompt
-            schema = schema if schema is not None else d_schema
-        return prompt, schema
+    @classmethod
+    def for_provider(
+        cls,
+        provider: BaseProvider,
+        *,
+        api_key: str,
+        model: str,
+        provider_name: str = "unknown",
+        observer: PipelineObserver,
+        output_writer: OutputWriter,
+        config: ChunkPlannerConfig | None = None,
+        retry_policy: RetryPolicy | None = None,
+        guard_config: GuardConfig | None = None,
+        pairing_policy: PairingPolicy | None = None,
+        format_adapter: FormatAdapter | None = None,
+        system_prompt: str | None = None,
+        output_schema: dict[str, Any] | None = None,
+    ) -> CorrectionPipeline:
+        """Build a pipeline around a raw LLM ``BaseProvider`` (§5.1).
+
+        Composition-boundary convenience: wraps the provider + credentials
+        + prompt contract into an ``LLMEditProducer`` so callers migrating
+        from the legacy ``run(api_key=…, model=…, provider_name=…)`` keep a
+        one-call setup. The import is function-local — this is one of the
+        two pinned lazy composition defaults the import-contract test
+        allows in core (the other is the ALTO format adapter).
+        """
+        from corrigenda.producers.llm_edit import LLMEditProducer
+
+        producer = LLMEditProducer(
+            provider,
+            api_key,
+            model,
+            system_prompt=system_prompt,
+            output_schema=output_schema,
+        )
+        return cls(
+            producer=producer,
+            observer=observer,
+            output_writer=output_writer,
+            config=config,
+            retry_policy=retry_policy,
+            guard_config=guard_config,
+            pairing_policy=pairing_policy,
+            format_adapter=format_adapter,
+            provider_name=provider_name,
+            model=model,
+        )
 
     def config_fingerprint(self) -> str:
         """Stable 16-hex hash over the pipeline's §8.2 policies (§11).
@@ -531,15 +576,25 @@ class CorrectionPipeline:
         self,
         *,
         document_manifest: DocumentManifest,
-        api_key: str,
-        model: str,
-        provider_name: str,
         source_files: dict[str, Path],
         run_id: str | None = None,
         should_abort: Callable[[], bool] | None = None,
         apply: bool = True,
+        source_images: dict[str, ImageRef] | None = None,
     ) -> CorrectionResult:
         """Run the full pipeline. Mutates `document_manifest.pages` in place.
+
+        §5.1 resorption — there is no ``api_key``/``model``/``provider_name``
+        here anymore: credentials and the vendor call live inside the
+        injected :class:`EditProducer` (see :meth:`for_provider`), and the
+        provenance labels are constructor state.
+
+        ``source_images`` (§5.1) — optional mapping of *source name* (the
+        same keys as ``source_files``) to an opaque :data:`ImageRef`. The
+        library forwards each page's ref verbatim into the producer payload
+        when the producer asks (``wants_image``) and NEVER opens it (I4).
+        A ``wants_image`` producer run without a complete mapping raises
+        :class:`ValidationError` before any work starts.
 
         ``run_id`` is an optional identifier embedded in the emitted
         :class:`CorrectionReport` (which is also what ``trace.json``
@@ -569,6 +624,24 @@ class CorrectionPipeline:
         self._usage = Usage()
         # §4 — accumulate the normalized EditScript ops the run applies.
         self._edit_ops = []
+
+        # §5.1 — a vision producer without its images is a start-up error,
+        # never a silent image-less call.
+        require_source_images(
+            self.producer, list(source_files.keys()), source_images
+        )
+        # §4.1 — per-page vision envelope lookups, resolved once. Pure
+        # copying: the ImageRef stays an opaque string end to end.
+        images = source_images or {}
+        self._image_ref_by_page_id = {
+            page.page_id: images[page.source_file]
+            for page in document_manifest.pages
+            if page.source_file in images
+        }
+        self._page_dims = {
+            page.page_id: (page.page_width, page.page_height)
+            for page in document_manifest.pages
+        }
 
         total_hyphen_pairs = sum(
             sum(
@@ -634,9 +707,6 @@ class CorrectionPipeline:
             page_chunks, page_reconciled = await self._process_page(
                 page=page,
                 document_id=document_manifest.document_id,
-                api_key=api_key,
-                model=model,
-                provider_name=provider_name,
                 traces=traces,
                 cross_page_partners=cross_page if cross_page else None,
                 should_abort=should_abort,
@@ -647,10 +717,7 @@ class CorrectionPipeline:
         self._write_outputs(
             document_manifest=document_manifest,
             source_files=source_files,
-            provider_name=provider_name,
-            model=model,
             traces=traces,
-            run_id=run_id,
             apply=apply,
         )
 
@@ -683,13 +750,11 @@ class CorrectionPipeline:
         self,
         *,
         document_manifest: DocumentManifest,
-        api_key: str,
-        model: str,
-        provider_name: str,
         source_files: dict[str, Path],
         run_id: str | None = None,
         should_abort: Callable[[], bool] | None = None,
         apply: bool = True,
+        source_images: dict[str, ImageRef] | None = None,
     ) -> CorrectionResult:
         """Synchronous façade over :meth:`run` (§8.1).
 
@@ -702,13 +767,11 @@ class CorrectionPipeline:
         return asyncio.run(
             self.run(
                 document_manifest=document_manifest,
-                api_key=api_key,
-                model=model,
-                provider_name=provider_name,
                 source_files=source_files,
                 run_id=run_id,
                 should_abort=should_abort,
                 apply=apply,
+                source_images=source_images,
             )
         )
 
@@ -721,9 +784,6 @@ class CorrectionPipeline:
         *,
         page: PageManifest,
         document_id: str,
-        api_key: str,
-        model: str,
-        provider_name: str,
         traces: dict[str, LineTrace],
         cross_page_partners: dict[tuple[str, str], LineManifest] | None,
         should_abort: Callable[[], bool] | None = None,
@@ -775,9 +835,6 @@ class CorrectionPipeline:
                     chunk=chunk,
                     page=page,
                     line_by_id=line_by_id,
-                    api_key=api_key,
-                    model=model,
-                    provider_name=provider_name,
                     traces=traces,
                     cross_page_partners=cross_page_partners,
                     should_abort=should_abort,
@@ -827,9 +884,6 @@ class CorrectionPipeline:
         chunk: ChunkRequest,
         page: PageManifest,
         line_by_id: dict[str, LineManifest],
-        api_key: str,
-        model: str,
-        provider_name: str,
         traces: dict[str, LineTrace] | None = None,
         cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
         budget: list[int] | None = None,
@@ -887,8 +941,6 @@ class CorrectionPipeline:
             chunk_lines=chunk_lines,
             hyphen_pairs=hyphen_pairs,
             all_lines_by_id=line_by_id,
-            api_key=api_key,
-            model=model,
             traces=traces,
             max_attempts=attempts_cap,
         )
@@ -958,9 +1010,6 @@ class CorrectionPipeline:
                     chunk=sub,
                     page=page,
                     line_by_id=line_by_id,
-                    api_key=api_key,
-                    model=model,
-                    provider_name=provider_name,
                     traces=traces,
                     cross_page_partners=cross_page_partners,
                     budget=budget,
@@ -996,20 +1045,12 @@ class CorrectionPipeline:
         producer for context but are owned by an adjacent chunk, so their
         output is discarded on this pass.
         """
-        # §4 — re-express the validated whole-line response as a
-        # ``replace_line`` EditScript and apply it. For a response that
-        # already passed validation this is byte-identical to the direct
-        # ``{line_id: corrected_text}`` map (proved in test_editing); the
-        # merge keeps the raw value for any op an unforeseen guard rejects,
-        # so behaviour never regresses. Accumulating the ops lets a dry run
-        # return the normalized EditScript.
-        raw_map: dict[str, str] = {o.line_id: o.corrected_text for o in response.lines}
-        script = replace_line_script(raw_map)
-        edit_result = apply_edit_script(
-            script, dict(raw_map), guard_config=self.guard_config
-        )
-        text_by_id: dict[str, str] = {**raw_map, **edit_result.text_by_id}
-        self._edit_ops.extend(script.ops)
+        # The validated response is already the applied EditScript's output
+        # (the producer's ops were normalised and applied in _attempt_chunk,
+        # which also accumulated them for CorrectionResult.edit_script).
+        text_by_id: dict[str, str] = {
+            o.line_id: o.corrected_text for o in response.lines
+        }
 
         target_ids = set(chunk.targets())
         target_lines = [lm for lm in chunk_lines if lm.line_id in target_ids]
@@ -1096,12 +1137,10 @@ class CorrectionPipeline:
         chunk_lines: list[LineManifest],
         hyphen_pairs: dict[str, str],
         all_lines_by_id: dict[str, LineManifest],
-        api_key: str,
-        model: str,
         traces: dict[str, LineTrace] | None,
         max_attempts: int,
     ) -> tuple[LLMResponse | None, int, bool, str, Usage | None]:
-        """Call the LLM provider with retries; return the outcome.
+        """Call the edit producer with retries; return the outcome.
 
         Returns ``(response, attempts_used, can_downgrade, last_msg, usage)``:
           - ``response`` — the validated :class:`LLMResponse`, or ``None``
@@ -1147,7 +1186,13 @@ class CorrectionPipeline:
             else:
                 temperature = self.retry_policy.temperature_for(attempt)
 
-            enriched = enrich_chunk_lines(chunk_lines, all_lines_by_id)
+            # §4.1 — vision envelope, copied only when the producer asks.
+            enriched = enrich_chunk_lines(
+                chunk_lines,
+                all_lines_by_id,
+                include_geometry=getattr(self.producer, "wants_geometry", False),
+                page_dims=self._page_dims,
+            )
 
             enriched_by_id = {e.line_id: e for e in enriched}
             for lm in chunk_lines:
@@ -1161,19 +1206,25 @@ class CorrectionPipeline:
                 page_id=chunk.page_id,
                 block_id=chunk.block_id,
                 lines=enriched,
+                image_ref=(
+                    self._image_ref_by_page_id.get(chunk.page_id)
+                    if getattr(self.producer, "wants_image", False)
+                    else None
+                ),
             )
-            user_dict = payload.model_dump(exclude_none=True)
 
             try:
-                system_prompt, json_schema = self._llm_contract()
-                raw, usage = await self.provider.complete_structured(
-                    api_key=api_key,
-                    model=model,
-                    system_prompt=system_prompt,
-                    user_payload=user_dict,
-                    json_schema=json_schema,
-                    temperature=temperature,
+                # §5.1 — the pipeline drives the temperature ramp: it hands
+                # the producer a policy whose FIRST temperature is this
+                # attempt's, so the ramp (and the hyphen 0.0 pin) is decided
+                # here regardless of the producer implementation.
+                per_attempt_policy = self.retry_policy.model_copy(
+                    update={"temperatures": (temperature,)}
                 )
+                script, usage = await self.producer.produce(
+                    payload, policy=per_attempt_policy
+                )
+                raw = self._script_to_raw(script, chunk_lines)
                 if usage is not None:
                     self._usage = self._usage + usage
                     chunk_usage = chunk_usage + usage
@@ -1213,10 +1264,22 @@ class CorrectionPipeline:
                     # an adjacent chunk).
                     target_line_ids=chunk.target_line_ids,
                 )
+                # §4 — the successful attempt's producer ops, restricted to
+                # the chunk's TARGET lines (context ops belong to an adjacent
+                # chunk), feed CorrectionResult.edit_script.
+                target_ids = set(chunk.targets())
+                self._edit_ops.extend(
+                    op for op in script.ops if op.line_id in target_ids
+                )
                 return response, attempts_used, False, "", chunk_usage
 
             except Exception as exc:
-                msg = sanitize_error(str(exc), api_key)
+                # §5.1 — the pipeline no longer holds credentials; the
+                # pattern-based redaction still masks secret-shaped
+                # substrings a producer may leak into the message, and the
+                # consumer layer (which DOES hold the key) sanitises again
+                # on its own error paths.
+                msg = sanitize_error(str(exc))
                 last_msg = msg
                 decision = _classify_retry(
                     exc=exc,
@@ -1250,6 +1313,49 @@ class CorrectionPipeline:
 
         # max_attempts <= 0 (no budget left): nothing attempted.
         return None, attempts_used, False, last_msg, None
+
+    def _script_to_raw(
+        self, script: EditScript, chunk_lines: list[LineManifest]
+    ) -> dict[str, Any]:
+        """Normalise a producer's EditScript into the validator's raw shape.
+
+        - ``replace_line`` ops pass through as-is (duplicates and empty
+          texts included — the validator's structural checks must see them
+          exactly as the historical raw response did).
+        - ``replace_span`` ops are normalised and applied against the
+          chunk's canonical text via :func:`apply_edit_script` (E1–E5); a
+          rejected op leaves its line uncovered.
+        - When the producer declares ``requires_full_coverage = False``
+          (deterministic producers: no op == no edit), uncovered lines are
+          filled with their canonical text so the validator's 1:1 check
+          passes. An LLM producer keeps full-coverage semantics: a dropped
+          target line stays missing → ValidationError → retry.
+        """
+        canonical = {lm.line_id: lm.ocr_text for lm in chunk_lines}
+        entries: list[dict[str, str]] = []
+
+        span_ops = [op for op in script.ops if isinstance(op, ReplaceSpan)]
+        for op in script.ops:
+            if isinstance(op, ReplaceLine):
+                entries.append({"line_id": op.line_id, "corrected_text": op.text})
+        if span_ops:
+            span_result = apply_edit_script(
+                EditScript(ops=list(span_ops)),
+                canonical,
+                chunk_line_ids=set(canonical),
+                guard_config=self.guard_config,
+                line_by_id={lm.line_id: lm for lm in chunk_lines},
+            )
+            for lid, txt in span_result.text_by_id.items():
+                entries.append({"line_id": lid, "corrected_text": txt})
+
+        if not getattr(self.producer, "requires_full_coverage", True):
+            covered = {e["line_id"] for e in entries}
+            for lid, txt in canonical.items():
+                if lid not in covered:
+                    entries.append({"line_id": lid, "corrected_text": txt})
+
+        return {"lines": entries}
 
     # ------------------------------------------------------------------
     # Chunk helpers extracted from _run_chunk (audit A3)
@@ -1443,10 +1549,7 @@ class CorrectionPipeline:
         *,
         document_manifest: DocumentManifest,
         source_files: dict[str, Path],
-        provider_name: str,
-        model: str,
         traces: dict[str, LineTrace],
-        run_id: str,
         apply: bool = True,
     ) -> None:
         """Rewrite corrected ALTO files, update traces, and (when ``apply``)
@@ -1473,8 +1576,10 @@ class CorrectionPipeline:
             xml_bytes, metrics, rewriter_paths = adapter.rewrite_file(
                 xml_path,
                 pages_for_file,
-                provider_name,
-                model,
+                # §11 provenance labels — constructor state since the §5.1
+                # resorption (run() no longer carries provider/model).
+                self.provider_name,
+                self.model,
                 lib_version=_lib_version,
                 config_fingerprint=config_fingerprint,
             )

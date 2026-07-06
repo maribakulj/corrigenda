@@ -49,8 +49,10 @@ class _Null:
 
 
 def _pipeline() -> CorrectionPipeline:
-    return CorrectionPipeline(
-        provider=_IdentityProvider(), observer=_Null(), output_writer=_Null()
+    return CorrectionPipeline.for_provider(
+        _IdentityProvider(),
+        api_key="k",
+        model="m", observer=_Null(), output_writer=_Null()
     )
 
 
@@ -63,9 +65,6 @@ def test_run_sync_runs_from_sync_context():
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
     result = _pipeline().run_sync(
         document_manifest=doc,
-        api_key="k",
-        model="m",
-        provider_name="mock",
         source_files={},
     )
     assert result.total_chunks >= 1
@@ -78,9 +77,6 @@ async def test_run_sync_refuses_running_loop():
     with pytest.raises(RuntimeError):
         _pipeline().run_sync(
             document_manifest=doc,
-            api_key="k",
-            model="m",
-            provider_name="mock",
             source_files={},
         )
 
@@ -124,11 +120,15 @@ def test_config_fingerprint_reproducible_from_public_api():
 def test_config_fingerprint_covers_pairing_policy():
     """Two pipelines differing ONLY by PairingPolicy must fingerprint
     differently — §8.2 lists all four policies in the configuration."""
-    a = CorrectionPipeline(
-        provider=_IdentityProvider(), observer=_Null(), output_writer=_Null()
+    a = CorrectionPipeline.for_provider(
+        _IdentityProvider(),
+        api_key="k",
+        model="m", observer=_Null(), output_writer=_Null()
     )
-    b = CorrectionPipeline(
-        provider=_IdentityProvider(),
+    b = CorrectionPipeline.for_provider(
+        _IdentityProvider(),
+        api_key="k",
+        model="m",
         observer=_Null(),
         output_writer=_Null(),
         pairing_policy=PairingPolicy(same_block_only=True),

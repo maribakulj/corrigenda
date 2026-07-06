@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass, field
 
 from corrigenda.core.editing import EditScript, RangeAnchor, ReplaceSpan
-from corrigenda.core.schemas import Usage
+from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
 
 
 @dataclass(frozen=True)
@@ -73,12 +73,15 @@ class RulesProducer:
     """Deterministic ``EditProducer`` (§5.3).
 
     ``wants_geometry``/``wants_image`` are ``False`` — a text-only producer.
-    ``build_edit_script`` is the pure, synchronous core; ``produce`` adapts
-    it to the async EditProducer contract shape (§5.1), returning
-    ``Usage=None`` (no tokens spent)."""
+    ``build_edit_script`` is the pure, synchronous core; ``produce`` is the
+    §5.1 contract entry point (``Usage`` is always ``None`` — no tokens
+    spent). ``requires_full_coverage`` is ``False``: a line without a
+    matching rule is simply left unedited, never an error."""
 
     wants_geometry: bool = False
     wants_image: bool = False
+    #: No op for a line == no edit (identity), NOT a degraded response.
+    requires_full_coverage: bool = False
 
     def __init__(
         self,
@@ -144,15 +147,16 @@ class RulesProducer:
                 )
         return EditScript(ops=ops)  # type: ignore[arg-type]
 
-    # -- EditProducer async shape (§5.1) --------------------------------
+    # -- EditProducer contract (§5.1) ------------------------------------
 
     async def produce(
-        self,
-        canonical_by_id: dict[str, str],
-        target_ids: set[str] | None = None,
+        self, payload: LLMUserPayload, *, policy: RetryPolicy
     ) -> tuple[EditScript, Usage | None]:
-        """EditProducer-shaped entry point: no tokens, so ``Usage`` is None."""
-        return self.build_edit_script(canonical_by_id, target_ids), None
+        """§5.1 entry point — deterministic, so ``policy`` is unused and
+        ``Usage`` is ``None`` (no tokens spent). Rules run over every line
+        in the payload; the pipeline discards ops for context lines (F8)."""
+        canonical = {ln.line_id: ln.ocr_text for ln in payload.lines}
+        return self.build_edit_script(canonical), None
 
 
 __all__ = [

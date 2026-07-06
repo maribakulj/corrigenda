@@ -224,11 +224,13 @@ def test_correction_pipeline_construction_does_not_touch_infrastructure():
         def write_trace(self, *, traces_payload):
             pass
 
-    pipeline = CorrectionPipeline(
-        provider=_NoopProvider(),
+    pipeline = CorrectionPipeline.for_provider(
+        _NoopProvider(),
+        api_key="k",
+        model="m",
         observer=_NoopObserver(),
         output_writer=_NoopWriter(),
     )
-    assert pipeline.provider is not None
+    assert pipeline.producer is not None
     assert pipeline.observer is not None
     assert pipeline.output_writer is not None

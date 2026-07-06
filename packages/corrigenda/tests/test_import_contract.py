@@ -4,10 +4,12 @@ Rules enforced:
   1. ``corrigenda.core`` (and ``errors``) never import lxml, formats or
      producers — statically NOR at import time (subprocess-verified: no
      ``lxml`` in ``sys.modules`` after importing every core module).
-  2. Exactly TWO pinned exceptions, both composition-boundary defaults in
-     ``core/pipeline.py``, both function-local:
+  2. Exactly TWO pinned exceptions, both composition-boundary conveniences
+     in ``core/pipeline.py``, both function-local:
      ``_default_format_adapter`` (lazy ALTO adapter) and
-     ``_default_llm_contract`` (lazy prompt/schema from producers.llm).
+     ``for_provider`` (lazy ``LLMEditProducer`` wrap — the §5.1
+     resorption moved the prompt/schema seam into the producer, so the
+     old ``_default_llm_contract`` exception is gone).
   3. ``formats`` never imports producers; ``producers`` never imports
      formats or lxml.
 """
@@ -66,9 +68,7 @@ def test_core_has_no_forbidden_imports_except_pinned_lazy_default():
             if n.startswith(("corrigenda.formats", "corrigenda.producers"))
         )
     )
-    assert lazy_funcs == ["_default_format_adapter", "_default_llm_contract"], (
-        lazy_funcs
-    )
+    assert lazy_funcs == ["_default_format_adapter", "for_provider"], lazy_funcs
 
 
 def test_importing_core_never_loads_lxml():

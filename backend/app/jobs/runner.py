@@ -231,8 +231,15 @@ class JobRunner:
         # Fan events out to the job store (for SSE clients) and to the
         # standard logger (for operators). ADR-006: corrigenda never
         # logs by itself — adapters here own the routing.
-        pipeline = CorrectionPipeline(
-            provider=provider,
+        #
+        # §5.1 resorption — credentials go into the producer (via the
+        # for_provider convenience), never into run(): the pipeline surface
+        # carries no api_key anywhere.
+        pipeline = CorrectionPipeline.for_provider(
+            provider,
+            api_key=api_key,
+            model=model,
+            provider_name=provider_name,
             observer=CompositeObserver(
                 [JobStoreObserver(self.job_store, job_id), LoggingObserver()]
             ),
@@ -242,9 +249,6 @@ class JobRunner:
         # server-side `job_id` so trace.json correlates with the API.
         result = await pipeline.run(
             document_manifest=document_manifest,
-            api_key=api_key,
-            model=model,
-            provider_name=provider_name,
             source_files=source_files,
             run_id=job_id,
         )

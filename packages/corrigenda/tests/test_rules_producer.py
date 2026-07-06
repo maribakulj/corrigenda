@@ -101,9 +101,26 @@ def test_target_ids_restrict_emission():
     assert {op.line_id for op in script.ops} == {"a"}
 
 
-def test_produce_async_shape_returns_no_usage():
+def test_produce_contract_shape_returns_no_usage():
+    """§5.1 — produce(payload, *, policy) over an LLMUserPayload."""
+    from corrigenda.core.schemas import (
+        ChunkGranularity,
+        LLMLineInput,
+        LLMUserPayload,
+        RetryPolicy,
+    )
+
     prod = RulesProducer(default_french_ocr_rules())
-    script, usage = asyncio.run(prod.produce({"l1": "ſi"}))
+    assert prod.requires_full_coverage is False  # no op == no edit
+    payload = LLMUserPayload(
+        granularity=ChunkGranularity.LINE,
+        document_id="d",
+        page_id="p",
+        lines=[LLMLineInput(line_id="l1", ocr_text="ſi")],
+    )
+    script, usage = asyncio.run(
+        prod.produce(payload, policy=RetryPolicy.default())
+    )
     assert usage is None
     assert script.ops[0].text == "s"
 

@@ -57,14 +57,13 @@ def test_usage_add_and_total():
 async def test_pipeline_aggregates_usage_into_result():
     provider = _UsageProvider()
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    pipeline = CorrectionPipeline(
-        provider=provider, observer=_Null(), output_writer=_Null()
+    pipeline = CorrectionPipeline.for_provider(
+        provider,
+        api_key="k",
+        model="m", observer=_Null(), output_writer=_Null()
     )
     result = await pipeline.run(
         document_manifest=doc,
-        api_key="k",
-        model="m",
-        provider_name="mock",
         source_files={},
     )
     assert provider.calls >= 1
@@ -105,14 +104,13 @@ async def test_chunk_completed_reports_chunk_total_across_retries():
     provider = _FailOnceProvider()
     capture = _Capture()
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    pipeline = CorrectionPipeline(
-        provider=provider, observer=capture, output_writer=_Null()
+    pipeline = CorrectionPipeline.for_provider(
+        provider,
+        api_key="k",
+        model="m", observer=capture, output_writer=_Null()
     )
     result = await pipeline.run(
         document_manifest=doc,
-        api_key="k",
-        model="m",
-        provider_name="mock",
         source_files={},
     )
     assert capture.chunk_completed
@@ -132,14 +130,13 @@ async def test_usage_is_zero_when_provider_reports_none():
             return out, None
 
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    pipeline = CorrectionPipeline(
-        provider=_NoUsage(), observer=_Null(), output_writer=_Null()
+    pipeline = CorrectionPipeline.for_provider(
+        _NoUsage(),
+        api_key="k",
+        model="m", observer=_Null(), output_writer=_Null()
     )
     result = await pipeline.run(
         document_manifest=doc,
-        api_key="k",
-        model="m",
-        provider_name="mock",
         source_files={},
     )
     assert result.usage.total_tokens == 0

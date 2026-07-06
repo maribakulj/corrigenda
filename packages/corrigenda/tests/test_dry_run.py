@@ -46,14 +46,13 @@ class _Null:
 
 async def _run(writer: _RecordingWriter, *, apply: bool):
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    pipeline = CorrectionPipeline(
-        provider=_IdentityProvider(), observer=_Null(), output_writer=writer
+    pipeline = CorrectionPipeline.for_provider(
+        _IdentityProvider(),
+        api_key="k",
+        model="m", observer=_Null(), output_writer=writer
     )
     return await pipeline.run(
         document_manifest=doc,
-        api_key="k",
-        model="m",
-        provider_name="mock",
         source_files={_SAMPLE.name: _SAMPLE},
         apply=apply,
     )

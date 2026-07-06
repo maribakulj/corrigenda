@@ -88,16 +88,15 @@ class _NullWriter:
 
 async def _run(provider: _CountingProvider, observer: _RecordingObserver):
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    pipeline = CorrectionPipeline(
-        provider=provider,
+    pipeline = CorrectionPipeline.for_provider(
+        provider,
+        api_key="k",
+        model="m",
         observer=observer,
         output_writer=_NullWriter(),
     )
     return await pipeline.run(
         document_manifest=doc,
-        api_key="k",
-        model="m",
-        provider_name="mock",
         source_files={_SAMPLE.name: _SAMPLE},
     )
 
@@ -228,8 +227,10 @@ async def test_downgrade_replans_targets_only_never_context():
     cfg = ChunkPlannerConfig(
         max_lines_per_request=5, line_window_size=5, line_window_overlap=1
     )
-    pipeline = CorrectionPipeline(
-        provider=provider,
+    pipeline = CorrectionPipeline.for_provider(
+        provider,
+        api_key="k",
+        model="m",
         observer=obs,
         output_writer=_NullWriter2(),
         config=cfg,
@@ -237,9 +238,6 @@ async def test_downgrade_replans_targets_only_never_context():
     )
     result = await pipeline.run(
         document_manifest=doc,
-        api_key="k",
-        model="m",
-        provider_name="mock",
         source_files={},
     )
 
@@ -277,8 +275,10 @@ async def test_should_abort_fires_inside_descent():
     cfg = ChunkPlannerConfig(
         max_lines_per_request=5, line_window_size=5, line_window_overlap=1
     )
-    pipeline = CorrectionPipeline(
-        provider=provider,
+    pipeline = CorrectionPipeline.for_provider(
+        provider,
+        api_key="k",
+        model="m",
         observer=obs,
         output_writer=_NullWriter2(),
         config=cfg,
@@ -291,9 +291,6 @@ async def test_should_abort_fires_inside_descent():
     with pytest.raises(CorrectionAborted):
         await pipeline.run(
             document_manifest=doc,
-            api_key="k",
-            model="m",
-            provider_name="mock",
             source_files={},
             should_abort=abort_once_downgraded,
         )

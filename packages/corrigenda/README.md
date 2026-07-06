@@ -118,16 +118,20 @@ async def main():
     src = Path("page.xml")
     doc = build_document_manifest([(src, src.name)])
 
-    pipeline = CorrectionPipeline(
-        provider=IdentityProvider(),
+    # §5.1 — the pipeline is built around an EditProducer; credentials live
+    # inside the producer, never on run(). for_provider() wraps a raw LLM
+    # BaseProvider for you. (A deterministic RulesProducer, or any custom
+    # EditProducer, goes through CorrectionPipeline(producer=...) directly.)
+    pipeline = CorrectionPipeline.for_provider(
+        IdentityProvider(),
+        api_key="",
+        model="mock",
+        provider_name="local",
         observer=PrintObserver(),
         output_writer=FilesystemWriter(Path("./out")),
     )
     result = await pipeline.run(
         document_manifest=doc,
-        api_key="",
-        model="mock",
-        provider_name="local",
         source_files={src.name: src},
         run_id="local-run",  # optional — auto-generated when omitted
     )

@@ -155,17 +155,16 @@ async def test_window_run_finalizes_every_line_once():
     cfg = ChunkPlannerConfig(
         max_lines_per_request=5, line_window_size=5, line_window_overlap=1
     )
-    pipeline = CorrectionPipeline(
-        provider=_IdentityProvider(),
+    pipeline = CorrectionPipeline.for_provider(
+        _IdentityProvider(),
+        api_key="k",
+        model="m",
         observer=_Null(),
         output_writer=_Null(),
         config=cfg,
     )
     await pipeline.run(
         document_manifest=doc,
-        api_key="k",
-        model="m",
-        provider_name="mock",
         source_files={},  # skip XML rewrite; inspect manifests directly
     )
     for lm in doc.pages[0].lines:

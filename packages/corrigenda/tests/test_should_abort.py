@@ -59,16 +59,15 @@ class _NullObserver:
 
 async def _run(writer: _RecordingWriter, should_abort):
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    pipeline = CorrectionPipeline(
-        provider=_EchoProvider(),
+    pipeline = CorrectionPipeline.for_provider(
+        _EchoProvider(),
+        api_key="k",
+        model="m",
         observer=_NullObserver(),
         output_writer=writer,
     )
     return await pipeline.run(
         document_manifest=doc,
-        api_key="k",
-        model="m",
-        provider_name="mock",
         source_files={_SAMPLE.name: _SAMPLE},
         should_abort=should_abort,
     )

@@ -57,8 +57,8 @@ même release. Version de travail : `0.1.0a1` jusqu'au tag final `1.0.0`.
   `formats/alto/_ns` et est réexporté par `formats/page/_ns` (réutilisation
   d'une primitive de sécurité ; nettoyage possible = module `formats/_xml`
   partagé, non bloquant).
-- [~] **P4 — Protocole d'édition** (spec §4/§5) : **substance additive
-  livrée**, deux ruptures outward-facing différées.
+- [x] **P4 — Protocole d'édition** (spec §4/§5) : **complet** — substance
+  additive + les deux ruptures (option A validée par le mainteneur).
   - [x] `core/editing.py` : ReplaceLine/ReplaceSpan, MatchAnchor→RangeAnchor,
     E1–E6 (E4/E5 sur replace_span uniquement ⇒ E4 neutre sur replace_line) ;
     ré-expression replace_line **PROUVÉE par les goldens** (sample/X0000002).
@@ -75,12 +75,23 @@ même release. Version de travail : `0.1.0a1` jusqu'au tag final `1.0.0`.
     `apply_edit_script` (byte-parité via golden gate) ; **dry-run renvoie
     l'EditScript normalisé** (`CorrectionResult.edit_script`) ; doc protocole
     (`docs/edit-protocol.md`) + surface publique (`corrigenda.__init__`).
-  - [ ] **DIFFÉRÉ (rupture outward-facing)** : résorption du legacy
-    `run(api_key/model/provider_name)` en `EditProducer` injecté ; unification
-    `JobTrace→CorrectionReport` (rupture `trace.json`, backend + frontend
-    ajustés). Gardé hors de cette passe pour ne pas casser un contrat
-    outward-facing sans validation ; l'outil AskUserQuestion étant indisponible,
-    défaut sûr retenu. À traiter avec P5 (ou sur décision explicite).
+  - [x] **Rupture 1 — unification `JobTrace→CorrectionReport`** (§9) :
+    `JobTrace` supprimé ; `trace.json` ET l'endpoint `/trace` portent le
+    `CorrectionReport` versionné verbatim (`run_id` == job_id) ;
+    `JobManifest.report` côté backend ; type `TraceData` frontend aligné
+    (tsc propre).
+  - [x] **Rupture 2 — résorption §5.1** : `CorrectionPipeline(producer=
+    EditProducer)` ; `run()`/`run_sync()` sans api_key/model/provider_name
+    (credentials dans le producteur, labels de provenance au constructeur) ;
+    `run(source_images=…)` opaque vérifié au démarrage ;
+    `CorrectionPipeline.for_provider(...)` = migration en un appel pour le
+    cas LLM (2ᵉ exception lazy pinnée du contrat d'imports, remplace
+    `_default_llm_contract`) ; la rampe de température reste pilotée par le
+    pipeline (policy mono-température par tentative) ⇒ classification retry,
+    températures et octets inchangés (goldens verts) ;
+    `requires_full_coverage=False` pour les producteurs déterministes
+    (pas d'op == pas d'édition) ; test seam : RulesProducer pilote le
+    pipeline entier sans credentials, enveloppe vision jusqu'au producteur.
 - [ ] **P5 — Hygiène & publication 1.0.0** : docs (mkdocs, quickstart,
   protocole, formats, provenance, politique versionnage/dépréciation),
   exemples exécutables, test-snapshot de l'API publique, CHANGELOG daté

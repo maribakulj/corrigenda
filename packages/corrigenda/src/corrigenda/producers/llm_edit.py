@@ -1,15 +1,22 @@
 """Adapt a text ``BaseProvider`` (LLM) to the ``EditProducer`` contract.
 
-From v2.0 the LLM is *an implementation* of the edit protocol (§5.1/§5.2),
-not the protocol itself. This adapter binds a provider with its credentials
-and system prompt / output schema, and turns the historical
+Since the §5.1 resorption the LLM is *an implementation* of the edit
+protocol, not the protocol itself: the pipeline only ever talks to an
+``EditProducer``, and this adapter is what turns a provider + credentials
++ prompt/schema into one. It converts the historical
 ``{lines:[{line_id, corrected_text}]}`` structured response into a
 ``replace_line`` :class:`EditScript` — byte-equivalent to the direct path
-(proved in ``test_editing``), plus the token ``Usage`` (F14).
+(proved in ``test_editing``) — plus the token ``Usage`` (F14).
 
 Structural validation and the guard matrix (E6) stay downstream in the
 pipeline; this adapter only shapes the provider call into the protocol.
-It is a **text** producer: ``wants_geometry`` / ``wants_image`` are False.
+Malformed response entries (non-dict, missing ``line_id``, non-string
+text) yield no op — the pipeline's validator then reports the line as
+missing and the retry machinery takes over, exactly as it did on the raw
+dict. It is a **text** producer: ``wants_geometry`` / ``wants_image`` are
+``False``; ``requires_full_coverage`` is ``True`` because an LLM asked to
+correct N target lines must return all N — a dropped line is a degraded
+response, not a "no edit".
 """
 
 from __future__ import annotations
@@ -19,13 +26,22 @@ from typing import Any
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.protocols import BaseProvider
 from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
+from corrigenda.producers.llm import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 
 
 class LLMEditProducer:
-    """Wrap a :class:`BaseProvider` as an :class:`EditProducer`."""
+    """Wrap a :class:`BaseProvider` as an :class:`EditProducer`.
+
+    ``system_prompt`` / ``output_schema`` default to the canonical LLM
+    contract (:mod:`corrigenda.producers.llm`); inject to experiment.
+    """
 
     wants_geometry: bool = False
     wants_image: bool = False
+    #: An LLM must cover every line it was asked to correct (a missing
+    #: target line means a degraded response → validator error → retry).
+    #: Deterministic producers set this False: no op simply means no edit.
+    requires_full_coverage: bool = True
 
     def __init__(
         self,
@@ -33,14 +49,16 @@ class LLMEditProducer:
         api_key: str,
         model: str,
         *,
-        system_prompt: str,
-        output_schema: dict[str, Any],
+        system_prompt: str | None = None,
+        output_schema: dict[str, Any] | None = None,
     ) -> None:
         self._provider = provider
         self._api_key = api_key
         self._model = model
-        self._system_prompt = system_prompt
-        self._output_schema = output_schema
+        self._system_prompt = SYSTEM_PROMPT if system_prompt is None else system_prompt
+        self._output_schema = (
+            OUTPUT_JSON_SCHEMA if output_schema is None else output_schema
+        )
 
     async def produce(
         self, payload: LLMUserPayload, *, policy: RetryPolicy
@@ -49,8 +67,12 @@ class LLMEditProducer:
             api_key=self._api_key,
             model=self._model,
             system_prompt=self._system_prompt,
-            user_payload=payload.model_dump(),
+            # exclude_none matches the historical direct-call payload byte
+            # for byte (None hyphen/vision fields never reached providers).
+            user_payload=payload.model_dump(exclude_none=True),
             json_schema=self._output_schema,
+            # The pipeline drives the retry ramp: it hands us a policy whose
+            # first temperature IS this attempt's temperature.
             temperature=policy.temperature_for(1),
         )
         ops: list[ReplaceLine] = []

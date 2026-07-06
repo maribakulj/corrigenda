@@ -105,15 +105,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compiler only on request — the library opens no pixel (**I4**, enforced
   by an AST contract test). `require_source_images` raises `ValidationError`
   for a `wants_image` producer run without images.
-- Pipeline: the validated LLM response is now expressed as a `replace_line`
-  `EditScript` and applied through `apply_edit_script` (byte-parity via the
-  golden gate); `CorrectionResult.edit_script` surfaces the normalized
-  script, and a dry run (`apply=False`) returns it as the deliverable.
-- **Deferred (not in this pass):** resorbing the legacy
-  `run(api_key/model/provider_name)` into an injected `EditProducer`, and
-  unifying `JobTrace` → `CorrectionReport` (a breaking `trace.json` change
-  touching the backend/frontend). Kept out to avoid an outward-facing
-  rupture; the additive protocol above is complete and byte-safe.
+- Pipeline: producers return `EditScript`s that are normalised and applied
+  through `apply_edit_script` (byte-parity via the golden gate);
+  `CorrectionResult.edit_script` surfaces the normalized script, and a dry
+  run (`apply=False`) returns it as the deliverable.
+- **BREAKING — §5.1 resorption.** `CorrectionPipeline` is constructed
+  around an `EditProducer`; `run()`/`run_sync()` no longer take
+  `api_key`/`model`/`provider_name` (credentials live inside the producer;
+  the provenance labels are constructor state). `run(source_images=…)`
+  forwards opaque image refs, checked at start-up for `wants_image`
+  producers. `CorrectionPipeline.for_provider(provider, api_key=…,
+  model=…, provider_name=…)` is the one-call migration for the LLM case.
+  The pipeline still drives the retry ramp (it hands each attempt a policy
+  whose first temperature is that attempt's — hyphen 0.0 pin included), so
+  retry classification, temperatures and output bytes are unchanged. A
+  producer may declare `requires_full_coverage = False` (rules engine: no
+  op == no edit); LLM producers keep strict 1:1 coverage → retry. The
+  prompt/schema seam moved into `LLMEditProducer`; the import-contract's
+  pinned core exceptions are now `_default_format_adapter` + `for_provider`.
+- **BREAKING — JobTrace → CorrectionReport unification (§9).** `JobTrace`
+  is deleted; `trace.json` and the backend's `/trace` endpoint carry the
+  versioned `CorrectionReport` verbatim (`report_version`, `run_id` ==
+  job id, `total_lines`, `lines`). Backend `JobManifest` gains `report`;
+  the frontend `TraceData` type mirrors the report.
 
 ### PAGE XML support (SPECS_LIB_V2 §6.2 / §6.3, P1–P7)
 
