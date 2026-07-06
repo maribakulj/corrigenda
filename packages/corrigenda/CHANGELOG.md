@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### v1.0 normative corrections (SPECS_LIB_V2 §7) — in progress
+Nothing yet.
+
+## [1.0.0] — 2026-07-06
+
+First public release. Everything below shipped together as **the** 1.0 of
+`corrigenda` — nothing was ever published under an earlier name or number,
+so there is no deprecation layer anywhere: final import paths and final
+schemas from day one. The public surface is pinned by an executable
+snapshot test (`tests/test_public_api_snapshot.py`) and governed by strict
+SemVer from here on (see `docs/versioning.md`).
+
+Highlights: ALTO **and PAGE XML** backends producing one common
+`DocumentManifest`; the §4 span edit protocol (`EditScript`,
+`ReplaceLine`/`ReplaceSpan`, `MatchAnchor`→`RangeAnchor`); producers as
+first-class citizens (`EditProducer`, deterministic `RulesProducer`, LLM
+adapter, vision envelope with zero pixel I/O); the versioned
+`CorrectionReport` as the single trace artefact; four frozen, fingerprinted
+policies; byte-parity golden gates over a real BnF/Transkribus corpus.
+
+### v1.0 normative corrections (SPECS_LIB_V2 §7)
 
 - **F3** — the parser tolerates comments / processing-instructions among a
   `TextLine`'s children (they carry a callable `tag`); a trailing comment
@@ -272,7 +291,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `Programming Language :: Python :: 3.13` classifier
   (`requires-python = ">=3.11"` already permitted 3.13). (roadmap L5 / P3)
 
-## [0.1.0a1] — 2026-05-25
+## [0.1.0a1] — 2026-05-25 (internal milestone — never published)
+
+The extraction milestone under the working name `alto-core`. Kept for the
+historical record; **this version never reached any index**, and every
+item below is folded into 1.0.0 above.
 
 Initial alpha release.
 

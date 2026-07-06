@@ -627,9 +627,7 @@ class CorrectionPipeline:
 
         # §5.1 — a vision producer without its images is a start-up error,
         # never a silent image-less call.
-        require_source_images(
-            self.producer, list(source_files.keys()), source_images
-        )
+        require_source_images(self.producer, list(source_files.keys()), source_images)
         # §4.1 — per-page vision envelope lookups, resolved once. Pure
         # copying: the ImageRef stays an opaque string end to end.
         images = source_images or {}

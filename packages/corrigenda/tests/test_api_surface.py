@@ -52,7 +52,9 @@ def _pipeline() -> CorrectionPipeline:
     return CorrectionPipeline.for_provider(
         _IdentityProvider(),
         api_key="k",
-        model="m", observer=_Null(), output_writer=_Null()
+        model="m",
+        observer=_Null(),
+        output_writer=_Null(),
     )
 
 
@@ -123,7 +125,9 @@ def test_config_fingerprint_covers_pairing_policy():
     a = CorrectionPipeline.for_provider(
         _IdentityProvider(),
         api_key="k",
-        model="m", observer=_Null(), output_writer=_Null()
+        model="m",
+        observer=_Null(),
+        output_writer=_Null(),
     )
     b = CorrectionPipeline.for_provider(
         _IdentityProvider(),

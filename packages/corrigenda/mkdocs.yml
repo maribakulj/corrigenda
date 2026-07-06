@@ -1,0 +1,15 @@
+# Minimal mkdocs site for corrigenda (P5).
+# Build locally:  pip install mkdocs && mkdocs serve -f packages/corrigenda/mkdocs.yml
+# Publishing the site (GitHub Pages / RTD) is a maintainer action; the
+# markdown sources under docs/ are fully readable on GitHub without it.
+site_name: corrigenda
+site_description: Structure-safe post-OCR correction of heritage transcriptions (ALTO, PAGE)
+repo_url: https://github.com/maribakulj/alto-llm-corrector
+docs_dir: docs
+theme:
+  name: readthedocs
+nav:
+  - Quickstart: quickstart.md
+  - Edit protocol: edit-protocol.md
+  - Formats (ALTO & PAGE): formats.md
+  - Versioning & deprecation: versioning.md

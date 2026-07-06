@@ -1,14 +1,22 @@
 # corrigenda
 
-Pure ALTO XML correction pipeline — the algorithmic core of
+Structure-safe post-OCR correction of heritage transcriptions — **ALTO**
+and **PAGE XML** — by LLM, rules engine, or any custom `EditProducer`.
+The algorithmic core of
 [alto-llm-corrector](https://github.com/maribakulj/alto-llm-corrector),
-extracted so it can be consumed without pulling in the FastAPI server,
-the filesystem job store, or the bundled LLM providers.
+consumable without the FastAPI server, the job store, or the bundled LLM
+providers. *Corrigenda*: the printed errata leaf bound into books —
+literally what this library produces.
 
 ## Status
 
-**0.1.0a1 — alpha.** The package is shipped as part of the
-alto-llm-corrector monorepo. The API may still shift before 1.0.
+**1.0.0 — stable.** The public surface is pinned by an executable
+snapshot test and governed by strict SemVer; see
+[docs/versioning.md](docs/versioning.md). Docs:
+[quickstart](docs/quickstart.md) ·
+[edit protocol](docs/edit-protocol.md) ·
+[formats](docs/formats.md) — and a runnable, test-guarded
+[examples/quickstart.py](examples/quickstart.py).
 
 ## What's in the box
 

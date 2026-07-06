@@ -19,7 +19,7 @@ non-overlapping and passes the editing module's E2 check untouched.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from corrigenda.core.editing import EditScript, RangeAnchor, ReplaceSpan
 from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
@@ -102,8 +102,12 @@ class RulesProducer:
                 start, end = m.start(), m.end()
                 if start == end:
                     continue  # never emit a zero-width edit
-                replacement = m.expand(rule.replacement) if rule.regex else rule.replacement
-                if rule.lexicon_guarded and not self._word_ok(text, start, end, replacement):
+                replacement = (
+                    m.expand(rule.replacement) if rule.regex else rule.replacement
+                )
+                if rule.lexicon_guarded and not self._word_ok(
+                    text, start, end, replacement
+                ):
                     continue
                 if text[start:end] == replacement:
                     continue  # no-op substitution

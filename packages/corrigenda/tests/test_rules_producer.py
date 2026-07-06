@@ -118,9 +118,7 @@ def test_produce_contract_shape_returns_no_usage():
         page_id="p",
         lines=[LLMLineInput(line_id="l1", ocr_text="ſi")],
     )
-    script, usage = asyncio.run(
-        prod.produce(payload, policy=RetryPolicy.default())
-    )
+    script, usage = asyncio.run(prod.produce(payload, policy=RetryPolicy.default()))
     assert usage is None
     assert script.ops[0].text == "s"
 
@@ -131,7 +129,11 @@ def test_produce_contract_shape_returns_no_usage():
 
 
 def test_rules_pass_over_descartes_page_applies_cleanly():
-    xml = _EXAMPLES / "page" / "Descartes1637_Discours_btv1b86069594_corrected_0014_page_raw.xml"
+    xml = (
+        _EXAMPLES
+        / "page"
+        / "Descartes1637_Discours_btv1b86069594_corrected_0014_page_raw.xml"
+    )
     from corrigenda.formats.page.parser import build_document_manifest as page_doc
 
     doc = page_doc([(xml, xml.name)])

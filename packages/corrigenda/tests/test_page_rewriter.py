@@ -85,7 +85,7 @@ def test_fast_path_updates_words_line_drops_conf_and_alternatives(tmp_path: Path
     assert metrics.conf_dropped >= 1
     text = xml.decode("utf-8")
     assert "ALT READING" not in text
-    assert 'conf=' not in text  # every stale conf gone
+    assert "conf=" not in text  # every stale conf gone
     # P3 — Unicode AND PlainText updated on the canonical line TextEquiv.
     assert text.count("hello world") >= 1
     assert "<PlainText>hello world</PlainText>" in text
@@ -174,7 +174,12 @@ def test_provenance_metadata_item_on_2019(tmp_path: Path):
     doc = build_document_manifest([(p, p.name)])
     doc.pages[0].lines[0].corrected_text = "hello world"
     xml, _m, _paths = rewrite_page_file(
-        p, doc.pages, "openai", "gpt", lib_version="0.1.0a1", config_fingerprint="deadbeef"
+        p,
+        doc.pages,
+        "openai",
+        "gpt",
+        lib_version="0.1.0a1",
+        config_fingerprint="deadbeef",
     )
     text = xml.decode("utf-8")
     assert "MetadataItem" in text

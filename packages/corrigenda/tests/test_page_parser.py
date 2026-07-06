@@ -17,13 +17,18 @@ from corrigenda.formats.page._ns import (
     polygon_to_bbox,
     supports_metadata_item,
 )
-from corrigenda.formats.page._text import canonical_line_text
 from corrigenda.formats.page.parser import build_document_manifest, parse_page_file
 
 _EXAMPLES = Path(__file__).parent.parent.parent.parent / "examples" / "page"
-_LAFAYETTE_CORR = _EXAMPLES / "LaFayette1678_Cleves_btv1b8610820b_corrected_0011_page_corrected.xml"
-_LAFAYETTE_ALTO = _EXAMPLES / "LaFayette1678_Cleves_btv1b8610820b_corrected_0011_alto4.xml"
-_DESCARTES_RAW = _EXAMPLES / "Descartes1637_Discours_btv1b86069594_corrected_0014_page_raw.xml"
+_LAFAYETTE_CORR = (
+    _EXAMPLES / "LaFayette1678_Cleves_btv1b8610820b_corrected_0011_page_corrected.xml"
+)
+_LAFAYETTE_ALTO = (
+    _EXAMPLES / "LaFayette1678_Cleves_btv1b8610820b_corrected_0011_alto4.xml"
+)
+_DESCARTES_RAW = (
+    _EXAMPLES / "Descartes1637_Discours_btv1b86069594_corrected_0014_page_raw.xml"
+)
 _NEWSEYE = _EXAMPLES / "newseye-fr" / "0250199004.xml"
 
 
@@ -110,9 +115,7 @@ def test_newseye_columnar_press_parses():
     assert doc.total_lines > 500
     assert doc.total_blocks > 100  # many columnar regions
     # Every line got a bbox from its polygon.
-    assert all(
-        lm.coords.polygon for p in doc.pages for lm in p.lines if lm.ocr_text
-    )
+    assert all(lm.coords.polygon for p in doc.pages for lm in p.lines if lm.ocr_text)
 
 
 # ---------------------------------------------------------------------------

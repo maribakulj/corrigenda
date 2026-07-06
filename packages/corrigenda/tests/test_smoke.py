@@ -16,7 +16,10 @@ def test_top_level_import():
     import corrigenda
 
     assert isinstance(corrigenda.__version__, str)
-    assert corrigenda.__version__.startswith("0.")
+    # X.Y.Z semver shape — the exact value is the release's business, but a
+    # malformed version string breaks packaging (hatchling reads this).
+    parts = corrigenda.__version__.split(".")
+    assert len(parts) >= 3 and parts[0].isdigit(), corrigenda.__version__
 
 
 def test_subpackages_importable():

@@ -101,7 +101,7 @@ if TYPE_CHECKING:  # typed view of the lazy symbols below
         default_french_ocr_rules as default_french_ocr_rules,
     )
 
-__version__ = "0.1.0a1"
+__version__ = "1.0.0"
 
 #: Lazily resolved top-level names -> their home module (PEP 562). These
 #: pull in lxml (formats) or producer surfaces, so they materialise only

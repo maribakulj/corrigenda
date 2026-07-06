@@ -1,20 +1,31 @@
-# PROGRESS_V1 — corrigenda v1.0
+# PROGRESS_V1 — corrigenda 1.0.0
 
-État de la livraison v1.0 de `packages/corrigenda/` selon `SPECS_LIB_V2.md`.
-Point de reprise pour toute session fraîche.
+État de la livraison de `packages/corrigenda/` selon `SPECS_LIB_V2.md`.
+Point de reprise pour toute session fraîche. Le détail des phases P0–P5
+vit dans `PLAN_V2.md` (toutes cochées).
 
-## Statut : v1.0 COMPLÈTE (F1–F14 + surface §8/§9/§11) + rounds correctifs post-audit
+## Statut : 1.0.0 PRÊTE À PUBLIER (P0–P5 complètes)
 
-Vérification finale (voir « Preuves » plus bas) :
-- **lib** : 298 tests, couverture ~86 % (gate 85 %), `mypy --strict` 0 erreur, ruff clean
-- **backend** : 265 tests, couverture ~84 % (gate 80 %), mypy clean, ruff clean
-- **frontend** : `tsc --noEmit` clean, vitest 12/12, eslint clean, prettier clean
-- **sécurité** : bandit clean, `pip-audit --strict` 0 vulnérabilité
-- **byte-parity DoD** : démontrée vs le commit baseline `8c4789c` (voir ci-dessous)
+Périmètre livré : F1–F14 + surface §8/§9/§11 (ex-v1.0), **PAGE XML**
+(§6.2 P1–P7 + parité §6.3), **protocole d'édition** (§4/§5 complet, y
+compris les deux ruptures approuvées : unification
+JobTrace→CorrectionReport et résorption §5.1 du run() legacy en
+`EditProducer`), docs + snapshot d'API + exemple exécutable, version
+**1.0.0** avec CHANGELOG daté 2026-07-06.
 
-Version : reste `0.1.0a1`, tout sous `[Unreleased]`. Le bump 1.0.0, le nom
-PyPI (`corrigenda` ? §14) et la publication sont des décisions produit
-réservées à l'utilisateur. Packaging prêt (py.typed dans le wheel), NON publié.
+Vérification finale (2026-07-06) :
+- **lib** : 389 tests verts, `mypy --strict` 0 erreur (31 fichiers),
+  contrats exécutables verts (imports §3, sécurité XML, I4 zéro lib
+  image, snapshot d'API publique, quickstart exécuté en subprocess)
+- **backend** : 265 tests verts ; **frontend** : `tsc --noEmit` clean
+- **byte-parity DoD** : goldens sha256 INTACTS depuis la baseline
+  `8c4789c` à travers P3+P4+P5 (rewrite sans arguments de provenance ⇒
+  hashes indépendants de la version)
+- **wheel** : `python -m build` OK, smoke-install en venv isolé OK
+  (54 symboles publics, `import corrigenda` sans lxml), version 1.0.0
+
+Publication : NON effectuée (action mainteneur — tag + workflow, voir
+« Restes manuels »).
 
 ## Byte-parity (DoD §13) — démonstration formelle
 
@@ -55,10 +66,10 @@ indépendants de la version — rewrite sans arguments de provenance).
   (`f7f6904`) a été partiellement mangé par des backticks interprétés par
   le shell. Contenu réel documenté ici et dans le CHANGELOG ; l'historique
   poussé n'a pas été réécrit.
-- **JobTrace vs CorrectionReport** : deux artefacts quasi identiques
-  (trace.json persistée vs rapport public §9). Unification différée à la
-  v2.0 (changer le schéma de trace.json casserait les consommateurs
-  backend) — candidate à une dépréciation documentée.
+- ~~**JobTrace vs CorrectionReport**~~ : **RÉSOLU en P4** (option A
+  validée par le mainteneur) — `JobTrace` supprimé, `trace.json` et
+  l'endpoint `/trace` portent le `CorrectionReport` versionné verbatim,
+  backend + frontend ajustés.
 
 ## Ce qui est livré (résumé par tranche)
 
@@ -114,8 +125,16 @@ comme trace d'époque.
 - Sur PyPI : le nom `corrigenda` était libre au 5 juillet 2026 (vérifié) —
   le réserver vite via une première publication TestPyPI→PyPI.
 
-## Reste (produit, à décider par l'utilisateur)
+## Reste (actions mainteneur, hors conteneur)
 
-- Ratifier les 3 décisions ci-dessus (surtout STYLE §6.1).
-- Bump `1.0.0` + entrée CHANGELOG datée, publication PyPI sous `corrigenda`.
+- **Ratifier les 3 décisions** ci-dessus (surtout STYLE §6.1).
+- **Publier 1.0.0** (le bump + CHANGELOG daté + build vérifié sont faits) :
+  1. `git tag corrigenda-v1.0.0` sur le commit de release, `git push origin corrigenda-v1.0.0` ;
+  2. GitHub UI → Actions → « Publish corrigenda » → `testpypi`, vérifier, puis `pypi`
+     (Trusted Publishing OIDC — configurer d'abord le *pending publisher*
+     sur PyPI/TestPyPI : projet `corrigenda`, repo, workflow
+     `publish-corrigenda.yml`, environnements `testpypi`/`pypi`) ;
+- Renommer le dépôt GitHub → `corrigenda`, mettre à jour `[project.urls]`
+  et le slug HF Spaces (redirections GitHub automatiques).
+- Optionnel : publier le site mkdocs (`packages/corrigenda/mkdocs.yml`).
 - Optionnel : consommer `target_count` côté frontend (progression exacte).

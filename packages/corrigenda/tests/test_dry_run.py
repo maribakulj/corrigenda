@@ -49,7 +49,9 @@ async def _run(writer: _RecordingWriter, *, apply: bool):
     pipeline = CorrectionPipeline.for_provider(
         _IdentityProvider(),
         api_key="k",
-        model="m", observer=_Null(), output_writer=writer
+        model="m",
+        observer=_Null(),
+        output_writer=writer,
     )
     return await pipeline.run(
         document_manifest=doc,

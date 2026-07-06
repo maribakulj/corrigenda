@@ -198,9 +198,7 @@ def _e5_hyphen_ok(role: HyphenRole, result_text: str) -> bool:
 def _apply_spans(canonical: str, ranges: list[tuple[RangeAnchor, str]]) -> str:
     """Apply non-overlapping (range, replacement) pairs right-to-left."""
     text = canonical
-    for anchor, replacement in sorted(
-        ranges, key=lambda rt: rt[0].start, reverse=True
-    ):
+    for anchor, replacement in sorted(ranges, key=lambda rt: rt[0].start, reverse=True):
         text = text[: anchor.start] + replacement + text[anchor.end :]
     return text
 
@@ -258,9 +256,7 @@ def _apply_line_ops(
         span_len = rng.end - rng.start
         if len(sp.text) > guard.edit_span_max_growth_ratio * max(1, span_len):
             rejected.append(
-                EditRejection(
-                    line_id=line_id, op="replace_span", reason=R_DRIFT_RATIO
-                )
+                EditRejection(line_id=line_id, op="replace_span", reason=R_DRIFT_RATIO)
             )
             continue
         normalized.append((rng, sp.text, sp))

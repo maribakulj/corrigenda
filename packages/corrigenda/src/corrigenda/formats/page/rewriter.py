@@ -223,7 +223,7 @@ def _preserve_hyphen(source_text: str, corrected: str) -> str:
     if src_h is None:
         return corrected
     stripped = corrected.rstrip()
-    trailing_ws = corrected[len(stripped):]
+    trailing_ws = corrected[len(stripped) :]
     for ch in HYPHEN_CHARS:
         if stripped.endswith(ch):
             if ch != src_h:
@@ -322,8 +322,12 @@ def rewrite_page_file(
         lm = line_by_id[line_id]
 
         source_text = canonical_line_text(tl, ns)
-        raw_corrected = lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
-        corrected = _preserve_hyphen(source_text, nfc(raw_corrected)).replace("\r", "").strip()
+        raw_corrected = (
+            lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
+        )
+        corrected = (
+            _preserve_hyphen(source_text, nfc(raw_corrected)).replace("\r", "").strip()
+        )
 
         # P2 diagnostic — line text vs word concat disagreement (line wins).
         word_els = _direct(tl, "Word", ns)

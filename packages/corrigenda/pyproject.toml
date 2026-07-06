@@ -3,7 +3,7 @@ name = "corrigenda"
 # Single source of truth for the version: src/corrigenda/__init__.py
 # `__version__`. Bump it there + add a CHANGELOG.md entry to release.
 dynamic = ["version"]
-description = "Pure ALTO XML correction pipeline core — parser, rewriter, hyphenation reconciler, chunk planner."
+description = "Structure-safe post-OCR correction of heritage transcriptions (ALTO, PAGE XML) — parsers, rewriters, hyphenation reconciler, span edit protocol."
 readme = "README.md"
 # License declared via classifier only — both `license = "Apache-2.0"`
 # (PEP 639 string) and `license = {file = "..."}` (dict form) produce
@@ -15,9 +15,9 @@ requires-python = ">=3.11"
 authors = [
     { name = "alto-llm-corrector contributors" },
 ]
-keywords = ["alto", "ocr", "xml", "llm", "digital-heritage"]
+keywords = ["alto", "page-xml", "ocr", "xml", "llm", "digital-heritage", "transkribus", "escriptorium"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

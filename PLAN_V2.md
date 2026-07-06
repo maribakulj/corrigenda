@@ -92,10 +92,19 @@ même release. Version de travail : `0.1.0a1` jusqu'au tag final `1.0.0`.
     `requires_full_coverage=False` pour les producteurs déterministes
     (pas d'op == pas d'édition) ; test seam : RulesProducer pilote le
     pipeline entier sans credentials, enveloppe vision jusqu'au producteur.
-- [ ] **P5 — Hygiène & publication 1.0.0** : docs (mkdocs, quickstart,
-  protocole, formats, provenance, politique versionnage/dépréciation),
-  exemples exécutables, test-snapshot de l'API publique, CHANGELOG daté
-  1.0.0, publication TestPyPI→PyPI `corrigenda`, SemVer strict ensuite.
+- [x] **P5 — Hygiène & release 1.0.0** : docs (`docs/quickstart.md`,
+  `docs/formats.md` — ALTO+PAGE+provenance, `docs/versioning.md` —
+  SemVer strict + dépréciation + politique `report_version`,
+  `docs/edit-protocol.md` déjà en P4 ; `mkdocs.yml` minimal) ; exemple
+  exécutable `examples/quickstart.py` (2 producteurs, offline, gardé par
+  un test subprocess) ; **test-snapshot de l'API publique** (54 symboles
+  gelés + signatures run/run_sync/for_provider + clés JSON du
+  CorrectionReport) ; version **1.0.0** (classifier Production/Stable,
+  description ALTO+PAGE), CHANGELOG daté 2026-07-06 (0.1.0a1 marquée
+  « internal, never published ») ; build + smoke-install wheel vérifiés.
+  **La publication elle-même** (tag `corrigenda-v1.0.0` + workflow
+  TestPyPI→PyPI en Trusted Publishing) est une action mainteneur — check-
+  list dans PROGRESS_V1.md.
 
 ## Hors 1.0 (gated par la spec, ne pas commencer)
 Mode span LLM opt-in (banc CER/coût requis), GuardConfig.vision() calibré,

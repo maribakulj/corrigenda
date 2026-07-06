@@ -134,7 +134,11 @@ def test_e1_unknown_or_out_of_chunk_line_rejected():
 def test_replace_span_single_range():
     res = apply_edit_script(
         EditScript(
-            ops=[ReplaceSpan(line_id="l1", anchor=RangeAnchor(start=0, end=4), text="Hello")]
+            ops=[
+                ReplaceSpan(
+                    line_id="l1", anchor=RangeAnchor(start=0, end=4), text="Hello"
+                )
+            ]
         ),
         {"l1": "helo world"},
     )
@@ -181,18 +185,28 @@ def test_e2_overlap_rejected():
 def test_e4_span_growth_ratio_rejected():
     res = apply_edit_script(
         EditScript(
-            ops=[ReplaceSpan(line_id="l1", anchor=RangeAnchor(start=0, end=1), text="X" * 100)]
+            ops=[
+                ReplaceSpan(
+                    line_id="l1", anchor=RangeAnchor(start=0, end=1), text="X" * 100
+                )
+            ]
         ),
         {"l1": "abc"},
         guard_config=GuardConfig(edit_span_max_growth_ratio=4.0),
     )
-    assert res.text_by_id == {} and any(r.reason == "e4_span_growth" for r in res.rejected)
+    assert res.text_by_id == {} and any(
+        r.reason == "e4_span_growth" for r in res.rejected
+    )
 
 
 def test_e4_line_budget_rejected():
     res = apply_edit_script(
         EditScript(
-            ops=[ReplaceSpan(line_id="l1", anchor=RangeAnchor(start=0, end=3), text="abcdefghij")]
+            ops=[
+                ReplaceSpan(
+                    line_id="l1", anchor=RangeAnchor(start=0, end=3), text="abcdefghij"
+                )
+            ]
         ),
         {"l1": "abcxxxxxxx"},
         guard_config=GuardConfig(edit_line_max_changed_chars=3),
@@ -215,7 +229,9 @@ def test_e5_hyphen_forward_line_must_keep_trailing_hyphen():
 def test_e5_hyphen_ok_when_hyphen_kept():
     res = apply_edit_script(
         EditScript(
-            ops=[ReplaceSpan(line_id="l1", anchor=RangeAnchor(start=0, end=2), text="Wo")]
+            ops=[
+                ReplaceSpan(line_id="l1", anchor=RangeAnchor(start=0, end=2), text="Wo")
+            ]
         ),
         {"l1": "word-"},
         line_by_id={"l1": _line("l1", HyphenRole.PART1)},
@@ -254,7 +270,9 @@ def test_replace_line_reexpression_is_byte_identical(filename: str):
 
     # Protocol path — re-express as replace_line, apply, compare.
     result = apply_edit_script(replace_line_script(direct), {k: k for k in direct})
-    assert result.text_by_id == direct, "replace_line re-expression changed the text map"
+    assert result.text_by_id == direct, (
+        "replace_line re-expression changed the text map"
+    )
 
     # And the rewritten bytes are identical whichever map feeds the rewriter.
     def _bytes(text_map: dict[str, str]) -> str:

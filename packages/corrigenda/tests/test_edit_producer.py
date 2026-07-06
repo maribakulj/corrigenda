@@ -109,15 +109,11 @@ def test_vision_producer_without_images_raises():
 
 def test_vision_producer_missing_entry_raises():
     with pytest.raises(ValidationError):
-        require_source_images(
-            _VisionProducer(), ["a.xml", "b.xml"], {"a.xml": "img-a"}
-        )
+        require_source_images(_VisionProducer(), ["a.xml", "b.xml"], {"a.xml": "img-a"})
 
 
 def test_vision_producer_with_all_images_ok():
-    require_source_images(
-        _VisionProducer(), ["a.xml"], {"a.xml": "img-a"}
-    )  # no raise
+    require_source_images(_VisionProducer(), ["a.xml"], {"a.xml": "img-a"})  # no raise
 
 
 # ---------------------------------------------------------------------------
