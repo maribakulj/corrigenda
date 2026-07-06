@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from corrigenda.core._norm import ncfold
+from corrigenda.core.pairing import HYPHEN_CHARS
 from corrigenda.core.guards import (
     part1_text_migrated as _part1_text_migrated,
     part2_boundary_word_diverged as _part2_boundary_word_diverged,
@@ -177,7 +178,11 @@ def reconcile_hyphen_pair(
         return _fallback
 
     # --- PART1 must still end with a trailing hyphen ---
-    if not corrected_part1.rstrip().endswith("-"):
+    # Accept the full heuristic repertoire (- U+00AC U+2E17 U+00AD), not just
+    # hyphen-minus: a PAGE PART1 line legitimately ends in ``¬``/``⸗`` and a
+    # correction that keeps such a hyphen must not be rejected out of hand.
+    # ``-`` remains in the set, so ALTO behaviour is unchanged.
+    if not corrected_part1.rstrip().endswith(HYPHEN_CHARS):
         return _fallback
 
     # --- Empty corrected text on either side ---
