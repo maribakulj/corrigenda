@@ -11,6 +11,11 @@ from corrigenda.formats.alto._ns import (
     make_safe_parser,
 )
 from corrigenda.formats.alto._text import reconstruct_textline
+from corrigenda.core.pairing import (
+    disambiguate_page_ids as _disambiguate_page_ids,
+    link_cross_page_hyphens as _link_cross_page_hyphens,
+    link_hyphen_pairs as _link_hyphen_pairs,
+)
 from corrigenda.core.schemas import (
     DEFAULT_PAIRING_POLICY,
     BlockManifest,
@@ -35,91 +40,6 @@ def _build_ocr_text(textline: etree._Element, ns: str) -> str:
 # ---------------------------------------------------------------------------
 # Hyphenation detection (mutates lines in-place)
 # ---------------------------------------------------------------------------
-
-
-def _link_hyphen_pairs(
-    lines: list[LineManifest],
-    pairing_policy: PairingPolicy = DEFAULT_PAIRING_POLICY,
-) -> None:
-    """
-    Second pass: link PART1/BOTH lines to their forward partners.
-
-    A line with role PART1 or BOTH has a forward PART1 relationship.
-    The next line is linked as PART2/BOTH (backward side).
-
-    For PART1:  pair_line_id = forward partner, subs_content = pair subs
-    For BOTH:   forward_pair_id = forward partner, forward_subs_content = pair subs
-                (backward fields were already set by a previous iteration)
-
-    ``pairing_policy`` (F7) gates each candidate: when it rejects a pair
-    (e.g. the candidate sits too far below, or in an unrelated block), the
-    link is skipped and the PART1 line is left unpaired for the downstream
-    guards to handle. The default policy accepts every next line — the
-    historical purely-sequential behaviour.
-    """
-    for i, line in enumerate(lines):
-        # Skip lines that don't have a forward (PART1) role
-        if line.hyphen_role not in (HyphenRole.PART1, HyphenRole.BOTH):
-            continue
-        if i + 1 >= len(lines):
-            continue
-
-        candidate = lines[i + 1]
-
-        # Accept PART2, BOTH, or NONE as forward partner
-        if candidate.hyphen_role not in (
-            HyphenRole.PART2,
-            HyphenRole.BOTH,
-            HyphenRole.NONE,
-        ):
-            continue
-
-        # F7 — injectable pairing seam. Default policy always accepts.
-        if not pairing_policy.can_pair(line, candidate):
-            continue
-
-        # Mark NONE candidate as PART2
-        if candidate.hyphen_role == HyphenRole.NONE:
-            if line.hyphen_role == HyphenRole.BOTH:
-                candidate.hyphen_role = HyphenRole.PART2
-                candidate.hyphen_source_explicit = line.hyphen_forward_explicit
-            else:
-                candidate.hyphen_role = HyphenRole.PART2
-                candidate.hyphen_source_explicit = line.hyphen_source_explicit
-
-        # Determine subs_content and set links for this pair
-        if line.hyphen_role == HyphenRole.BOTH:
-            # Forward side of a BOTH line
-            subs = (
-                line.hyphen_forward_subs_content
-                or candidate.hyphen_subs_content
-                or None
-            )
-
-            # Set forward link on the BOTH line
-            line.hyphen_forward_pair_id = candidate.line_id
-            line.hyphen_forward_pair_page_id = candidate.page_id
-            if subs:
-                line.hyphen_forward_subs_content = subs
-
-            # Set backward link on the candidate
-            candidate.hyphen_pair_line_id = line.line_id
-            candidate.hyphen_pair_page_id = line.page_id
-            if subs:
-                candidate.hyphen_subs_content = subs
-        else:
-            # Regular PART1 line
-            subs = line.hyphen_subs_content or candidate.hyphen_subs_content
-
-            # Bidirectional link (page_id qualifies for cross-page disambiguation)
-            line.hyphen_pair_line_id = candidate.line_id
-            line.hyphen_pair_page_id = candidate.page_id
-            candidate.hyphen_pair_line_id = line.line_id
-            candidate.hyphen_pair_page_id = line.page_id
-
-            if subs:
-                line.hyphen_subs_content = subs
-                candidate.hyphen_subs_content = subs
 
 
 def _parse_textline_hyphen_info(
@@ -353,50 +273,6 @@ def parse_alto_file(
     return pages, root
 
 
-def _disambiguate_page_ids(
-    parsed: list[tuple[str, list[PageManifest]]],
-) -> None:
-    """Prefix colliding Page IDs with their source filename.
-
-    Multiple ALTO files commonly declare the same Page ID (``"Page1"``,
-    ``"P1"``…) — a per-scan workflow practically guarantees this.
-    Without disambiguation, the pipeline's cross-page hyphen partner
-    lookup picks the wrong page, intra-page hyphen pair_page_id refs
-    become ambiguous, and the trace/diff/layout endpoints emit duplicate
-    page_id values to the frontend.
-
-    This is called BEFORE cross-page hyphen linking so that the
-    qualified IDs flow into ``hyphen_pair_page_id`` naturally.
-    """
-    counts: dict[str, int] = {}
-    for _, pages in parsed:
-        for p in pages:
-            counts[p.page_id] = counts.get(p.page_id, 0) + 1
-
-    colliding = {pid for pid, n in counts.items() if n > 1}
-    if not colliding:
-        return
-
-    for source_name, pages in parsed:
-        for p in pages:
-            old_pid = p.page_id
-            if old_pid not in colliding:
-                continue
-            new_pid = f"{source_name}::{old_pid}"
-            p.page_id = new_pid
-            for b in p.blocks:
-                b.page_id = new_pid
-            for lm in p.lines:
-                lm.page_id = new_pid
-                # Intra-page hyphen partner refs were set to the old page_id
-                # by _link_hyphen_pairs during parse_alto_file. Rewrite them
-                # to the qualified id so downstream lookups stay consistent.
-                if lm.hyphen_pair_page_id == old_pid:
-                    lm.hyphen_pair_page_id = new_pid
-                if lm.hyphen_forward_pair_page_id == old_pid:
-                    lm.hyphen_forward_pair_page_id = new_pid
-
-
 def build_document_manifest(
     files: list[tuple[Path, str]],
     pairing_policy: PairingPolicy = DEFAULT_PAIRING_POLICY,
@@ -429,26 +305,10 @@ def build_document_manifest(
 
     all_pages: list[PageManifest] = [p for _, pages in parsed for p in pages]
 
-    # Cross-page hyphen linking: if the last line of page N is PART1
-    # (or BOTH) and was not already linked, try to pair it with the
-    # first line of page N+1.  _link_hyphen_pairs works on any list
-    # of consecutive lines, so we pass it a 2-element list.
-    for i in range(len(all_pages) - 1):
-        if not all_pages[i].lines or not all_pages[i + 1].lines:
-            continue
-        last_line = all_pages[i].lines[-1]
-        first_line = all_pages[i + 1].lines[0]
-        # Only attempt if the last line looks like a PART1/BOTH that
-        # was NOT linked during intra-page pass (pair_line_id is None).
-        needs_forward_link = (
-            last_line.hyphen_role == HyphenRole.PART1
-            and not last_line.hyphen_pair_line_id
-        ) or (
-            last_line.hyphen_role == HyphenRole.BOTH
-            and not last_line.hyphen_forward_pair_id
-        )
-        if needs_forward_link:
-            _link_hyphen_pairs([last_line, first_line], pairing_policy)
+    # Cross-page hyphen linking (shared core.pairing helper): a PART1/BOTH
+    # line at the bottom of page N that was NOT linked intra-page is paired
+    # with the first line of page N+1.
+    _link_cross_page_hyphens(all_pages, pairing_policy)
 
     total_blocks = sum(len(p.blocks) for p in all_pages)
     total_lines = sum(len(p.lines) for p in all_pages)

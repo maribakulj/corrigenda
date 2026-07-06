@@ -110,12 +110,24 @@ class PipelineEventType(str, Enum):
 
 
 class Coords(BaseModel):
-    """ALTO geometry box — pixels in the source image's coordinate system."""
+    """A line/block geometry box — pixels in the source image's coordinate system.
+
+    ALTO carries an axis-aligned bounding box natively (``HPOS``/``VPOS``/
+    ``WIDTH``/``HEIGHT``). PAGE XML instead encodes a **polygon**
+    (``Coords@points``); the parser stores that polygon verbatim in
+    ``polygon`` and derives the enclosing bbox (the four int fields) for the
+    planner, which only needs a box (P1). ``polygon`` is ``None`` for ALTO —
+    it has no polygon to preserve — and the rewriter never touches geometry
+    on the PAGE side, so the source polygon is a read-only provenance field.
+    """
 
     hpos: int
     vpos: int
     width: int
     height: int
+    #: PAGE ``Coords@points`` verbatim (e.g. ``"617,1046 3450,1046 …"``);
+    #: ``None`` for ALTO. Preserved for provenance/parity, never rewritten.
+    polygon: str | None = None
 
 
 # ---------------------------------------------------------------------------
