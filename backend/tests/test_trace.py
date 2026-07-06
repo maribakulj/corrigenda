@@ -14,8 +14,8 @@ from corrigenda.formats.alto.rewriter import extract_output_texts, rewrite_alto_
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.schemas import (
+    CorrectionReport,
     HyphenRole,
-    JobTrace,
     LineTrace,
     ModelInfo,
     Provider,
@@ -280,7 +280,8 @@ class TestTraceFallback:
 
 class TestTraceJsonFile:
     def test_trace_json_exists(self):
-        """trace.json is written to the output directory."""
+        """trace.json is written to the output directory and IS the §9
+        CorrectionReport (post-unification: no JobTrace shape)."""
         job_id, _ = _run_job_with_traces(
             {"sample.xml": SAMPLE_XML.read_bytes()},
         )
@@ -288,19 +289,21 @@ class TestTraceJsonFile:
         assert trace_path.exists()
 
         data = json.loads(trace_path.read_text())
-        assert data["job_id"] == job_id
+        assert data["report_version"] == "1.0"
+        assert data["run_id"] == job_id  # runner feeds run_id=job_id
         assert data["total_lines"] > 0
         assert len(data["lines"]) == data["total_lines"]
+        assert "job_id" not in data  # the old JobTrace key is gone
 
     def test_trace_json_roundtrip(self):
-        """trace.json can be parsed back into JobTrace."""
+        """trace.json can be parsed back into a CorrectionReport."""
         job_id, _ = _run_job_with_traces(
             {"sample.xml": SAMPLE_XML.read_bytes()},
         )
         trace_path = output_dir(job_id) / "trace.json"
-        jt = JobTrace.model_validate_json(trace_path.read_text())
-        assert jt.job_id == job_id
-        assert len(jt.lines) > 0
+        report = CorrectionReport.model_validate_json(trace_path.read_text())
+        assert report.run_id == job_id
+        assert len(report.lines) > 0
 
 
 # ===========================================================================

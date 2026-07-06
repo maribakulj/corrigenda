@@ -238,8 +238,12 @@ export interface LineTrace {
   fallback_reason: string | null
 }
 
+// The /trace endpoint now returns corrigenda's versioned CorrectionReport
+// (§9) verbatim — run_id equals the server job_id.
 export interface TraceData {
-  job_id: string
+  report_version: string
+  run_id: string
   total_lines: number
   lines: LineTrace[]
+  format_losses?: Record<string, number> | null
 }

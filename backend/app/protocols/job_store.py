@@ -43,6 +43,7 @@ class JobStore(Protocol):
         error: str | None = None,
         images: dict[str, str] | None = None,
         line_traces: dict[str, Any] | None = None,
+        report: Any | None = None,
     ) -> None: ...
 
     def emit(self, job_id: str, event: str, data: dict[str, Any]) -> None: ...

@@ -21,7 +21,12 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from corrigenda.core.schemas import DocumentManifest, LineTrace, PipelineEventType
+from corrigenda.core.schemas import (
+    CorrectionReport,
+    DocumentManifest,
+    LineTrace,
+    PipelineEventType,
+)
 
 from app.schemas import JobManifest, JobStatus, Provider, SSEEvent
 
@@ -99,6 +104,7 @@ class JobStore:
         error: str | None = None,
         images: dict[str, str] | None = None,
         line_traces: dict[str, LineTrace] | None = None,
+        report: CorrectionReport | None = None,
     ) -> None:
         """Update mutable fields on the job manifest. None means "do not touch".
 
@@ -133,6 +139,8 @@ class JobStore:
                 job.images = images
             if line_traces is not None:
                 job.line_traces = line_traces
+            if report is not None:
+                job.report = report
             # Track when a job reaches terminal state for eviction
             if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
                 self._completed_at.setdefault(job_id, time.monotonic())

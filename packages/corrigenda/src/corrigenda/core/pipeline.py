@@ -63,7 +63,6 @@ from corrigenda.core.schemas import (
     DocumentManifest,
     GuardConfig,
     HyphenRole,
-    JobTrace,
     LineManifest,
     LineStatus,
     LineTrace,
@@ -543,9 +542,10 @@ class CorrectionPipeline:
         """Run the full pipeline. Mutates `document_manifest.pages` in place.
 
         ``run_id`` is an optional identifier embedded in the emitted
-        JobTrace so consumers can correlate the trace.json with their
-        own job/request id. Generated as a uuid4 when omitted; it never
-        leaks back into the public events.
+        :class:`CorrectionReport` (which is also what ``trace.json``
+        contains) so consumers can correlate the persisted report with
+        their own job/request id. Generated as a uuid4 when omitted; it
+        never leaks back into the public events.
 
         ``should_abort`` (F10) is an optional cancellation probe. It is
         polled between pages and between chunks; when it returns ``True``
@@ -659,6 +659,13 @@ class CorrectionPipeline:
             total_lines=len(traces),
             lines=list(traces.values()),
         )
+
+        # §9 unification — trace.json IS the CorrectionReport. One artefact,
+        # one versioned schema; the parallel JobTrace shape is gone.
+        if apply:
+            self.output_writer.write_trace(
+                traces_payload=report.model_dump_json(indent=2),
+            )
 
         return CorrectionResult(
             total_chunks=total_chunks,
@@ -1511,15 +1518,8 @@ class CorrectionPipeline:
                     if t is not None:
                         t.output_alto_text = otxt
 
-        if apply:
-            job_trace = JobTrace(
-                job_id=run_id,
-                total_lines=len(traces),
-                lines=list(traces.values()),
-            )
-            self.output_writer.write_trace(
-                traces_payload=job_trace.model_dump_json(indent=2),
-            )
+        # Trace persistence moved to run(): trace.json IS the
+        # CorrectionReport — one §9 artefact, not a parallel JobTrace shape.
 
 
 # --- __all__ (Stage 3 audit remediation) ---

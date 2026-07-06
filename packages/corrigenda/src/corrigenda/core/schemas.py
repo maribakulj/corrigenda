@@ -601,14 +601,6 @@ class LineTrace(BaseModel):
     fallback_reason: str | None = None
 
 
-class JobTrace(BaseModel):
-    """Collection of line traces for a complete job."""
-
-    job_id: str
-    total_lines: int = 0
-    lines: list[LineTrace] = Field(default_factory=list)
-
-
 #: Bumped on any breaking change to the CorrectionReport JSON shape (§9).
 CORRECTION_REPORT_VERSION = "1.0"
 
@@ -673,6 +665,5 @@ __all__ = [
     "ModelInfo",
     "Usage",
     "LineTrace",
-    "JobTrace",
     "CorrectionReport",
 ]
