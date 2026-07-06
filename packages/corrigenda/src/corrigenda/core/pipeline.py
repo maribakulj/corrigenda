@@ -29,6 +29,12 @@ from dataclasses import dataclass
 from typing import Any
 from pathlib import Path
 
+from corrigenda.core.editing import (
+    EditOp,
+    EditScript,
+    apply_edit_script,
+    replace_line_script,
+)
 from corrigenda.core.hyphenation import (
     ReconcileMetrics,
     classify_reconcile_outcome,
@@ -416,6 +422,12 @@ class CorrectionResult:
     #: §9 — public, versioned correction report (same line traces, promoted
     #: to a documented artefact). Present on every run, including dry runs.
     report: CorrectionReport
+    #: §4 — the normalized EditScript the run applied, accumulated across
+    #: chunks. In v1 the LLM path emits ``replace_line`` ops (byte-identical
+    #: to the direct correction); a dry run (``apply=False``) returns it as
+    #: the whole deliverable, and a rules/​span producer would surface its
+    #: ``replace_span`` ops here too.
+    edit_script: EditScript
 
 
 class CorrectionPipeline:
@@ -465,6 +477,8 @@ class CorrectionPipeline:
         self._fallback_count = 0
         self._reconcile_metrics = ReconcileMetrics()
         self._usage = Usage()
+        # §4 — EditScript ops accumulated during a run (reset in run()).
+        self._edit_ops: list[EditOp] = []
 
     def _llm_contract(self) -> tuple[str, dict[str, Any]]:
         prompt, schema = self._system_prompt, self._output_schema
@@ -553,6 +567,8 @@ class CorrectionPipeline:
         self._fallback_count = 0
         self._reconcile_metrics = ReconcileMetrics()
         self._usage = Usage()
+        # §4 — accumulate the normalized EditScript ops the run applies.
+        self._edit_ops = []
 
         total_hyphen_pairs = sum(
             sum(
@@ -653,6 +669,7 @@ class CorrectionPipeline:
             reconcile_metrics=self._reconcile_metrics,
             usage=self._usage,
             report=report,
+            edit_script=EditScript(ops=list(self._edit_ops)),
         )
 
     def run_sync(
@@ -972,9 +989,20 @@ class CorrectionPipeline:
         producer for context but are owned by an adjacent chunk, so their
         output is discarded on this pass.
         """
-        text_by_id: dict[str, str] = {
-            o.line_id: o.corrected_text for o in response.lines
-        }
+        # §4 — re-express the validated whole-line response as a
+        # ``replace_line`` EditScript and apply it. For a response that
+        # already passed validation this is byte-identical to the direct
+        # ``{line_id: corrected_text}`` map (proved in test_editing); the
+        # merge keeps the raw value for any op an unforeseen guard rejects,
+        # so behaviour never regresses. Accumulating the ops lets a dry run
+        # return the normalized EditScript.
+        raw_map: dict[str, str] = {o.line_id: o.corrected_text for o in response.lines}
+        script = replace_line_script(raw_map)
+        edit_result = apply_edit_script(
+            script, dict(raw_map), guard_config=self.guard_config
+        )
+        text_by_id: dict[str, str] = {**raw_map, **edit_result.text_by_id}
+        self._edit_ops.extend(script.ops)
 
         target_ids = set(chunk.targets())
         target_lines = [lm for lm in chunk_lines if lm.line_id in target_ids]

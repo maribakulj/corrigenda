@@ -19,12 +19,30 @@ producer-bound symbols are exposed LAZILY (PEP 562) so that importing
 
 from typing import TYPE_CHECKING, Any
 
+from corrigenda.core.editing import (
+    EditOp,
+    EditRejection,
+    EditResult,
+    EditScript,
+    MatchAnchor,
+    RangeAnchor,
+    ReplaceLine,
+    ReplaceSpan,
+    apply_edit_script,
+    normalize_anchor,
+)
 from corrigenda.core.pipeline import (
     CorrectionPipeline,
     CorrectionResult,
     sanitize_error,
 )
-from corrigenda.core.protocols import BaseProvider, OutputWriter, PipelineObserver
+from corrigenda.core.protocols import (
+    BaseProvider,
+    EditProducer,
+    OutputWriter,
+    PipelineObserver,
+    require_source_images,
+)
 from corrigenda.core.schemas import (
     BlockManifest,
     ChunkGranularity,
@@ -62,10 +80,26 @@ if TYPE_CHECKING:  # typed view of the lazy symbols below
     from corrigenda.formats.alto.rewriter import (
         rewrite_alto_file as rewrite_alto_file,
     )
+    from corrigenda.formats.alto.adapter import (
+        AltoFormatAdapter as AltoFormatAdapter,
+    )
+    from corrigenda.formats.page.adapter import (
+        PageFormatAdapter as PageFormatAdapter,
+    )
+    from corrigenda.formats.page.parser import parse_page_file as parse_page_file
+    from corrigenda.formats.page.rewriter import (
+        rewrite_page_file as rewrite_page_file,
+    )
     from corrigenda.producers.llm import (
         OUTPUT_JSON_SCHEMA as OUTPUT_JSON_SCHEMA,
     )
     from corrigenda.producers.llm import SYSTEM_PROMPT as SYSTEM_PROMPT
+    from corrigenda.producers.llm_edit import LLMEditProducer as LLMEditProducer
+    from corrigenda.producers.rules import RulesProducer as RulesProducer
+    from corrigenda.producers.rules import SubstitutionRule as SubstitutionRule
+    from corrigenda.producers.rules import (
+        default_french_ocr_rules as default_french_ocr_rules,
+    )
 
 __version__ = "0.1.0a1"
 
@@ -77,8 +111,16 @@ _LAZY: dict[str, str] = {
     "parse_alto_file": "corrigenda.formats.alto.parser",
     "extract_output_texts": "corrigenda.formats.alto.rewriter",
     "rewrite_alto_file": "corrigenda.formats.alto.rewriter",
+    "AltoFormatAdapter": "corrigenda.formats.alto.adapter",
+    "PageFormatAdapter": "corrigenda.formats.page.adapter",
+    "parse_page_file": "corrigenda.formats.page.parser",
+    "rewrite_page_file": "corrigenda.formats.page.rewriter",
     "OUTPUT_JSON_SCHEMA": "corrigenda.producers.llm",
     "SYSTEM_PROMPT": "corrigenda.producers.llm",
+    "LLMEditProducer": "corrigenda.producers.llm_edit",
+    "RulesProducer": "corrigenda.producers.rules",
+    "SubstitutionRule": "corrigenda.producers.rules",
+    "default_french_ocr_rules": "corrigenda.producers.rules",
 }
 
 
@@ -101,9 +143,31 @@ __all__ = [
     "parse_alto_file",
     "extract_output_texts",
     "rewrite_alto_file",
+    "parse_page_file",
+    "rewrite_page_file",
+    "AltoFormatAdapter",
+    "PageFormatAdapter",
     # Pipeline
     "CorrectionPipeline",
     "CorrectionResult",
+    # Edit protocol (§4) — pure core
+    "EditScript",
+    "EditOp",
+    "ReplaceLine",
+    "ReplaceSpan",
+    "MatchAnchor",
+    "RangeAnchor",
+    "EditResult",
+    "EditRejection",
+    "apply_edit_script",
+    "normalize_anchor",
+    # Producers (§5)
+    "EditProducer",
+    "require_source_images",
+    "RulesProducer",
+    "SubstitutionRule",
+    "default_french_ocr_rules",
+    "LLMEditProducer",
     # Errors (§8.4)
     "CorrectionError",
     "ParseError",

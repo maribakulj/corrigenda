@@ -57,17 +57,30 @@ même release. Version de travail : `0.1.0a1` jusqu'au tag final `1.0.0`.
   `formats/alto/_ns` et est réexporté par `formats/page/_ns` (réutilisation
   d'une primitive de sécurité ; nettoyage possible = module `formats/_xml`
   partagé, non bloquant).
-- [ ] **P4 — Protocole d'édition** (spec §4/§5) : core/editing.py
-  (ReplaceLine/ReplaceSpan, MatchAnchor→RangeAnchor, E1–E6 ; E4 neutre sur
-  replace_line) ; ré-expression replace_line PROUVÉE par les goldens ;
-  contrat `EditProducer` (wants_*, produce→(EditScript, Usage|None)) ;
-  adaptateur BaseProvider→EditProducer et résorption du legacy
-  run(api_key/model/provider_name) ; `run(source_images=…)` opaque +
-  ValidationError si wants_image sans image ; test-contrat I4 (zéro
-  PIL/encodage image dans core+formats) ; producteur règles
-  (ReplaceSpan+RangeAnchor, zéro dépendance, testé à l'octet) ;
-  unification JobTrace→CorrectionReport (rupture trace.json, backend
-  ajusté) ; dry-run renvoie l'EditScript normalisé ; doc protocole.
+- [~] **P4 — Protocole d'édition** (spec §4/§5) : **substance additive
+  livrée**, deux ruptures outward-facing différées.
+  - [x] `core/editing.py` : ReplaceLine/ReplaceSpan, MatchAnchor→RangeAnchor,
+    E1–E6 (E4/E5 sur replace_span uniquement ⇒ E4 neutre sur replace_line) ;
+    ré-expression replace_line **PROUVÉE par les goldens** (sample/X0000002).
+  - [x] contrat `EditProducer` (wants_geometry/wants_image,
+    produce→(EditScript, Usage|None)) ; adaptateur `LLMEditProducer`
+    (BaseProvider→replace_line) ; enveloppe vision (`LineGeometry` + `ImageRef`
+    opaque, recopiés par le compilateur à la demande) ; `require_source_images`
+    (ValidationError si wants_image sans image) ; **test-contrat I4** (zéro
+    lib image sous corrigenda, AST).
+  - [x] producteur règles `RulesProducer` (§5.3) : ReplaceSpan+RangeAnchor,
+    garde lexique optionnelle, zéro dépendance, **byte-reproductible** ;
+    `default_french_ocr_rules()` (ſ→s, ligatures).
+  - [x] pipeline : réponse LLM ré-exprimée en EditScript replace_line +
+    `apply_edit_script` (byte-parité via golden gate) ; **dry-run renvoie
+    l'EditScript normalisé** (`CorrectionResult.edit_script`) ; doc protocole
+    (`docs/edit-protocol.md`) + surface publique (`corrigenda.__init__`).
+  - [ ] **DIFFÉRÉ (rupture outward-facing)** : résorption du legacy
+    `run(api_key/model/provider_name)` en `EditProducer` injecté ; unification
+    `JobTrace→CorrectionReport` (rupture `trace.json`, backend + frontend
+    ajustés). Gardé hors de cette passe pour ne pas casser un contrat
+    outward-facing sans validation ; l'outil AskUserQuestion étant indisponible,
+    défaut sûr retenu. À traiter avec P5 (ou sur décision explicite).
 - [ ] **P5 — Hygiène & publication 1.0.0** : docs (mkdocs, quickstart,
   protocole, formats, provenance, politique versionnage/dépréciation),
   exemples exécutables, test-snapshot de l'API publique, CHANGELOG daté

@@ -84,6 +84,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `packages/corrigenda/tests`; the package gates its own coverage (~86%, gate
   85%) and its CI job runs pytest with `--cov=corrigenda`.
 
+### Span edit protocol (SPECS_LIB_V2 §4 / §5)
+
+- `corrigenda.core.editing` — `EditScript` of `ReplaceLine` / `ReplaceSpan`
+  ops (no structural op ⇒ invariant I2 by type). `RangeAnchor` (offsets)
+  and `MatchAnchor` (exact substring) normalise to a single `RangeAnchor`
+  against the canonical text; unfound / out-of-range / ambiguous anchors
+  reject the op (I2 fallback). `apply_edit_script` enforces E1–E5 (E6 stays
+  the downstream three-stage matrix). **E4/E5 gate `replace_span` only** —
+  `replace_line` keeps E1/E3/conflict, so re-expressing today's whole-line
+  response is byte-identical (proved on sample.xml / X0000002.xml).
+- `corrigenda.producers.rules` — deterministic `RulesProducer` (§5.3):
+  literal/regex substitutions with an optional lexicon guard, emitting
+  `replace_span` + exact `RangeAnchor`. Zero deps, byte-reproducible; the
+  first real span emitter and a free pre-LLM pass. `default_french_ocr_
+  rules()` ships ſ→s and ﬁ/ﬂ ligatures.
+- `EditProducer` contract (§5.1) with `wants_geometry` / `wants_image`;
+  `LLMEditProducer` adapts a `BaseProvider` (emits `replace_line` + Usage).
+  Vision envelope (§4.1): `LineGeometry` + opaque `ImageRef` copied by the
+  compiler only on request — the library opens no pixel (**I4**, enforced
+  by an AST contract test). `require_source_images` raises `ValidationError`
+  for a `wants_image` producer run without images.
+- Pipeline: the validated LLM response is now expressed as a `replace_line`
+  `EditScript` and applied through `apply_edit_script` (byte-parity via the
+  golden gate); `CorrectionResult.edit_script` surfaces the normalized
+  script, and a dry run (`apply=False`) returns it as the deliverable.
+- **Deferred (not in this pass):** resorbing the legacy
+  `run(api_key/model/provider_name)` into an injected `EditProducer`, and
+  unifying `JobTrace` → `CorrectionReport` (a breaking `trace.json` change
+  touching the backend/frontend). Kept out to avoid an outward-facing
+  rupture; the additive protocol above is complete and byte-safe.
+
 ### PAGE XML support (SPECS_LIB_V2 §6.2 / §6.3, P1–P7)
 
 - New `formats/page/` backend (parser, rewriter, adapter) producing the

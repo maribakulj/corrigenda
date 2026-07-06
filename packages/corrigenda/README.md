@@ -14,6 +14,17 @@ alto-llm-corrector monorepo. The API may still shift before 1.0.
 
 - `corrigenda.formats.alto` — ALTO XML parsing and rewriting (v2/v3/v4),
   with the Hyphenation Reconciler.
+- `corrigenda.formats.page` — PAGE XML (PRImA/Transkribus/eScriptorium):
+  polygon geometry preserved verbatim (bbox derived for the planner),
+  canonical text via `TextEquiv @index` with a `Word`-concat fallback,
+  heuristic hyphenation (`- ¬ ⸗ U+00AD`), and a rewriter that never
+  touches geometry. Both formats produce the **same `DocumentManifest`**.
+- `corrigenda.core.editing` + `corrigenda.producers` — the **span edit
+  protocol**: `EditScript` / `ReplaceLine` / `ReplaceSpan` with
+  `RangeAnchor` and `MatchAnchor`, a deterministic `RulesProducer`, the
+  `EditProducer` contract and a vision envelope (the library forwards an
+  opaque image reference and touches no pixel). See
+  [`docs/edit-protocol.md`](docs/edit-protocol.md).
 - `corrigenda.core` — chunk planning, LLM-response validation,
   per-line acceptance policy, and the pure `CorrectionPipeline` that
   ties them together (`run()` async, `run_sync()` façade).

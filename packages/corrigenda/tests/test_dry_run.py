@@ -91,3 +91,22 @@ async def test_report_version_is_stable():
     # round-trips through JSON with a stable schema
     dumped = result.report.model_dump_json()
     assert '"report_version":"1.0"' in dumped.replace(" ", "")
+
+
+@pytest.mark.asyncio
+async def test_dry_run_returns_normalized_edit_script():
+    """§4 — a dry run returns the normalized EditScript it would apply.
+    With the identity provider every op is a replace_line whose text equals
+    the line's OCR text, one op per corrected line."""
+    from corrigenda.core.editing import EditScript, ReplaceLine
+
+    writer = _RecordingWriter()
+    result = await _run(writer, apply=False)
+    script = result.edit_script
+    assert isinstance(script, EditScript)
+    assert script.ops, "dry run must surface the EditScript"
+    assert all(isinstance(op, ReplaceLine) for op in script.ops)
+    # One op per line trace; the op text matches the projected line text.
+    by_line = {op.line_id: op.text for op in script.ops}
+    for tr in result.report.lines:
+        assert by_line.get(tr.line_id) == tr.source_ocr_text
