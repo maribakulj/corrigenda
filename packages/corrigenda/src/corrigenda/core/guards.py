@@ -45,12 +45,21 @@ creating a circular import — not worth the cost.
 
 When tuning thresholds, look at all three stages: tightening one stage
 without adjusting the others can leak migrations through the gap.
+
+Stage-C helpers (``check_line``, ``check_adjacent_duplicates``) were
+merged into this module by the §3 reorganisation: the three stages now
+live in ONE file, matching the spec tree (core/guards.py) and making
+the tune-them-together doctrine physically obvious. Stage A's raise
+site stays in core/validator.py (HyphenIntegrityError's home).
 """
 
 from __future__ import annotations
 
-from corrigenda.alto._norm import ncfold
-from corrigenda.schemas import DEFAULT_GUARD_CONFIG, GuardConfig
+from dataclasses import dataclass
+from difflib import SequenceMatcher
+
+from corrigenda.core._norm import ncfold
+from corrigenda.core.schemas import DEFAULT_GUARD_CONFIG, GuardConfig
 
 
 def part1_text_migrated(
@@ -163,3 +172,181 @@ def part2_boundary_word_diverged(
         return False
 
     return True
+
+
+# Thresholds live on ``GuardConfig`` (F13). The stage-C guards below read
+# them from the passed ``config`` (defaulting to ``DEFAULT_GUARD_CONFIG``,
+# whose values reproduce the historical constants byte-for-byte). See the
+# migration-guard matrix in ``migration_guards.py`` — the three stages
+# tune together.
+
+
+# ---------------------------------------------------------------------------
+# Result type
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AcceptanceResult:
+    """Result of the acceptance check for a single line."""
+
+    accepted: bool
+    text: str  # retained text (correction or OCR fallback)
+    reason: str | None = None  # None when accepted; short tag when rejected
+
+
+# ---------------------------------------------------------------------------
+# Similarity helper
+# ---------------------------------------------------------------------------
+
+
+def _similarity(a: str, b: str) -> float:
+    """Return SequenceMatcher ratio between two strings (0.0–1.0)."""
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def check_line(
+    source_ocr: str,
+    corrected: str,
+    prev_ocr: str | None = None,
+    next_ocr: str | None = None,
+    *,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
+) -> AcceptanceResult:
+    """Decide whether *corrected* is safe to accept for *source_ocr*.
+
+    Parameters
+    ----------
+    source_ocr : str
+        Original OCR text for this line.
+    corrected : str
+        LLM-proposed correction.
+    prev_ocr : str | None
+        OCR text of the previous line (if available).
+    next_ocr : str | None
+        OCR text of the next line (if available).
+
+    Returns
+    -------
+    AcceptanceResult
+        .accepted = True and .text = corrected  when safe;
+        .accepted = False and .text = source_ocr when rejected.
+    """
+    # Identity: no change, always accept
+    if corrected == source_ocr:
+        return AcceptanceResult(accepted=True, text=corrected)
+
+    # --- Guard 1: source similarity ---
+    sim_source = _similarity(source_ocr, corrected)
+    if sim_source < config.min_source_similarity:
+        return AcceptanceResult(
+            accepted=False,
+            text=source_ocr,
+            reason="too_different_from_source",
+        )
+
+    # --- Guard 2: neighbour proximity ---
+    if prev_ocr is not None:
+        sim_prev = _similarity(prev_ocr, corrected)
+        if sim_prev > sim_source + config.neighbour_margin:
+            return AcceptanceResult(
+                accepted=False,
+                text=source_ocr,
+                reason="closer_to_previous_line",
+            )
+
+    if next_ocr is not None:
+        sim_next = _similarity(next_ocr, corrected)
+        if sim_next > sim_source + config.neighbour_margin:
+            return AcceptanceResult(
+                accepted=False,
+                text=source_ocr,
+                reason="closer_to_next_line",
+            )
+
+    # --- Guard 3: absorption of adjacent line ---
+    # Detects when the correction is source + neighbour concatenated.
+    src_len = max(len(source_ocr), 1)
+
+    if next_ocr and len(corrected) > src_len * config.absorption_length_ratio:
+        concat_fwd = source_ocr + " " + next_ocr
+        if _similarity(corrected, concat_fwd) > config.absorption_concat_similarity:
+            return AcceptanceResult(
+                accepted=False,
+                text=source_ocr,
+                reason="absorbs_next_line",
+            )
+
+    if prev_ocr and len(corrected) > src_len * config.absorption_length_ratio:
+        concat_bwd = prev_ocr + " " + source_ocr
+        if _similarity(corrected, concat_bwd) > config.absorption_concat_similarity:
+            return AcceptanceResult(
+                accepted=False,
+                text=source_ocr,
+                reason="absorbs_previous_line",
+            )
+
+    return AcceptanceResult(accepted=True, text=corrected)
+
+
+def check_adjacent_duplicates(
+    lines: list[tuple[str, str, str]],
+    *,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
+) -> dict[str, str]:
+    """Detect adjacent duplicate corrections.
+
+    Parameters
+    ----------
+    lines : list of (line_id, source_ocr, corrected_text)
+        Ordered list of lines in the chunk, already individually accepted.
+
+    Returns
+    -------
+    dict mapping line_id → fallback_reason for lines that should revert.
+    Both lines of a duplicate pair are reverted.
+    """
+    revert: dict[str, str] = {}
+    for i in range(len(lines) - 1):
+        id_a, src_a, cor_a = lines[i]
+        id_b, src_b, cor_b = lines[i + 1]
+
+        # Skip if either is already flagged
+        if id_a in revert or id_b in revert:
+            continue
+
+        # Corrections must be very similar
+        sim_corrected = _similarity(cor_a, cor_b)
+        if sim_corrected < config.duplicate_threshold:
+            continue
+
+        # Sources must be clearly different (otherwise the duplication is genuine)
+        sim_sources = _similarity(src_a, src_b)
+        if sim_sources >= config.duplicate_source_min_diff:
+            continue
+
+        # Flag both lines
+        revert[id_a] = "adjacent_duplicate_detected"
+        revert[id_b] = "adjacent_duplicate_detected"
+
+    return revert
+
+
+# --- __all__ ---
+__all__ = [
+    "AcceptanceResult",
+    "check_line",
+    "check_adjacent_duplicates",
+    "part1_text_migrated",
+    "part2_text_migrated",
+    "part2_boundary_word_diverged",
+]

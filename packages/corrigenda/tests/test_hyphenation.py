@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from corrigenda.alto.hyphenation import (
+from corrigenda.core.hyphenation import (
     enrich_chunk_lines,
     reconcile_hyphen_pair,
     should_stay_in_same_chunk,
 )
 
-from corrigenda.schemas import Coords, HyphenRole, LineManifest
+from corrigenda.core.schemas import Coords, HyphenRole, LineManifest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -905,7 +905,7 @@ def test_boundary_word_diverged_invariant_to_normalization_form():
     """Comparing OCR 'café' (NFC) to corrected 'café' (NFD) must NOT flag divergence."""
     # Private helper of the reconciler — pulled from corrigenda directly
     # since the backend re-export shim no longer surfaces privates.
-    from corrigenda.alto.hyphenation import _part2_boundary_word_diverged
+    from corrigenda.core.hyphenation import _part2_boundary_word_diverged
 
     nfc_text = "café au lait"
     nfd_text = unicodedata.normalize("NFD", "café") + " au lait"

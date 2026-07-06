@@ -34,7 +34,7 @@ class ParseError(CorrectionError, ValueError):
 class ValidationError(CorrectionError, ValueError):
     """A producer (LLM / rules / VLM) response failed validation.
 
-    Raised by :func:`corrigenda.pipeline.validator.validate_llm_response`
+    Raised by :func:`corrigenda.core.validator.validate_llm_response`
     for structural problems (missing/duplicate/unknown line ids, wrong
     count, empty or multi-line ``corrected_text``, …). Inherits
     ``ValueError`` so the retry classifier keeps routing it to the

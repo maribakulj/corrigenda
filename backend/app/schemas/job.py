@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from corrigenda.schemas import DocumentManifest, LineTrace
+from corrigenda.core.schemas import DocumentManifest, LineTrace
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -61,7 +61,7 @@ class JobManifest(BaseModel):
     images: dict[str, str] = Field(default_factory=dict)
     # Per-line text trace through every pipeline stage. Keyed by
     # f"{page_id}:{line_order_global}:{line_id}" (see _trace_key in
-    # corrigenda.pipeline.correction_pipeline).
+    # corrigenda.core.pipeline).
     line_traces: dict[str, LineTrace] = Field(default_factory=dict)
 
 

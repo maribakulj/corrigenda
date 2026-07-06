@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from corrigenda import CorrectionPipeline
-from corrigenda.alto.parser import build_document_manifest
+from corrigenda.formats.alto.parser import build_document_manifest
 
 _SAMPLE = Path(__file__).parent.parent.parent.parent / "examples" / "sample.xml"
 
@@ -30,7 +30,7 @@ _SAMPLE = Path(__file__).parent.parent.parent.parent / "examples" / "sample.xml"
 def _no_backoff_sleep(monkeypatch: pytest.MonkeyPatch):
     """Skip the real retry back-off sleeps so these tests stay fast."""
     monkeypatch.setattr(
-        "corrigenda.pipeline.correction_pipeline.asyncio.sleep",
+        "corrigenda.core.pipeline.asyncio.sleep",
         AsyncMock(return_value=None),
     )
 
@@ -138,7 +138,7 @@ async def test_persistent_failure_falls_back_after_downgrade():
 # F1 × F8 — the descent must re-plan TARGET lines only, never context lines
 # ---------------------------------------------------------------------------
 
-from corrigenda.schemas import (  # noqa: E402
+from corrigenda.core.schemas import (  # noqa: E402
     ChunkPlannerConfig,
     Coords,
     DocumentManifest,

@@ -1,6 +1,6 @@
 """Backend's schema surface.
 
-Domain models come from the pure ``corrigenda.schemas`` package. HTTP
+Domain models come from the pure ``corrigenda.core.schemas`` package. HTTP
 DTOs (request/response payloads, SSE events) live next door in
 :mod:`app.schemas.http` — they're server-layer concerns, not domain.
 
@@ -8,7 +8,7 @@ This module re-exports both groups so existing
 ``from app.schemas import X`` call sites keep working.
 """
 
-from corrigenda.schemas import (
+from corrigenda.core.schemas import (
     BlockManifest,
     ChunkGranularity,
     ChunkPlan,

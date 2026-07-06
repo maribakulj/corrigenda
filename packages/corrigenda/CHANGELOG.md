@@ -195,7 +195,7 @@ Initial alpha release.
 
 > **Import paths.** Each section below documents the path the listed
 > symbols live at. Most are sub-module imports, e.g.
-> `from corrigenda.alto.rewriter import RewriterMetrics`. The shorter
+> `from corrigenda.formats.alto.rewriter import RewriterMetrics`. The shorter
 > set of names re-exported at the package root —
 > `from corrigenda import CorrectionPipeline, BaseProvider, ...` — is
 > defined exclusively by `corrigenda.__all__`. Symbols listed below
@@ -204,22 +204,22 @@ Initial alpha release.
 > sub-module-only: they remain importable from their canonical path,
 > but `from corrigenda import RewriterMetrics` will raise `ImportError`.
 
-- `corrigenda.alto`: ALTO XML parsing and rewriting (v2/v3/v4), with
+- `corrigenda.formats.alto`: ALTO XML parsing and rewriting (v2/v3/v4), with
   the Hyphenation Reconciler.
   - `parse_alto_file`, `build_document_manifest` *(top-level)*
   - `rewrite_alto_file`, `extract_output_texts` *(top-level)*, `RewriterMetrics` *(sub-module only)*
   - `enrich_chunk_lines`, `reconcile_hyphen_pair`, `ReconcileMetrics`,
     `classify_reconcile_outcome`, `should_stay_in_same_chunk` *(all sub-module only)*
-- `corrigenda.pipeline`: chunk planning, LLM-response validation,
+- `corrigenda.core`: chunk planning, LLM-response validation,
   per-line acceptance policy, and `CorrectionPipeline`.
   - `CorrectionPipeline`, `CorrectionResult`, `sanitize_error` *(top-level)*
   - `plan_page`, `downgrade_granularity` *(sub-module only)*
   - `validate_llm_response` *(sub-module only)*
   - `check_line`, `check_adjacent_duplicates`, `AcceptanceResult` *(all sub-module only)*
-- `corrigenda.protocols`: ports consumers implement.
+- `corrigenda.core.protocols`: ports consumers implement.
   - `BaseProvider`, `PipelineObserver`, `OutputWriter` *(top-level)*
-  - `OUTPUT_JSON_SCHEMA`, `SYSTEM_PROMPT` *(top-level, on `corrigenda.protocols.provider`)*
-- `corrigenda.schemas`: domain Pydantic models (manifests, enums, LLM
+  - `OUTPUT_JSON_SCHEMA`, `SYSTEM_PROMPT` *(top-level, home: `corrigenda.producers.llm`)*
+- `corrigenda.core.schemas`: domain Pydantic models (manifests, enums, LLM
   payloads, traces, model info). Top-level re-exports cover the
   models consumers typically reach for — see `corrigenda.__all__`.
 

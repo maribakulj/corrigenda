@@ -1,6 +1,6 @@
 """Backend-side `PipelineObserver` implementations.
 
-ARCHITECTURE.md ADR-006 keeps `corrigenda.pipeline.correction_pipeline`
+ARCHITECTURE.md ADR-006 keeps `corrigenda.core.pipeline`
 free of `logging` — the pipeline emits structured events via
 :class:`PipelineObserver`, and host applications decide where they go.
 
@@ -21,7 +21,7 @@ from typing import Any
 
 from app.protocols import JobStore, PipelineObserver
 
-logger = logging.getLogger("corrigenda.pipeline")
+logger = logging.getLogger("corrigenda.core")
 
 # Event names the pipeline emits that warrant a non-debug log level.
 # Anything else is treated as informational (debug).

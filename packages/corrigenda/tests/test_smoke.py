@@ -20,27 +20,28 @@ def test_top_level_import():
 
 
 def test_subpackages_importable():
-    import corrigenda.alto.hyphenation
-    import corrigenda.alto.parser
-    import corrigenda.alto.rewriter
-    import corrigenda.pipeline.chunk_planner
-    import corrigenda.pipeline.correction_pipeline
-    import corrigenda.pipeline.line_acceptance
-    import corrigenda.pipeline.validator
-    import corrigenda.protocols
-    import corrigenda.protocols.provider
-    import corrigenda.schemas
+    import corrigenda.core.hyphenation
+    import corrigenda.formats.alto.parser
+    import corrigenda.formats.alto.rewriter
+    import corrigenda.core.planner
+    import corrigenda.core.pipeline
+    import corrigenda.core.guards
+    import corrigenda.core.validator
+    import corrigenda.core.protocols
+    import corrigenda.producers.llm
+    import corrigenda.core.schemas
 
     # Touch attributes that consumers will reach for, so a missing
     # rename in the extraction trips here rather than at first call.
-    assert corrigenda.pipeline.correction_pipeline.CorrectionPipeline
-    assert corrigenda.protocols.BaseProvider
-    assert corrigenda.protocols.PipelineObserver
-    assert corrigenda.protocols.OutputWriter
-    assert corrigenda.protocols.provider.OUTPUT_JSON_SCHEMA
-    assert corrigenda.protocols.provider.SYSTEM_PROMPT
-    assert corrigenda.schemas.LineManifest
-    assert corrigenda.schemas.DocumentManifest
+    assert corrigenda.core.pipeline.CorrectionPipeline
+    assert corrigenda.core.protocols.BaseProvider
+    assert corrigenda.core.protocols.PipelineObserver
+    assert corrigenda.core.protocols.OutputWriter
+    assert corrigenda.core.protocols.FormatAdapter
+    assert corrigenda.producers.llm.OUTPUT_JSON_SCHEMA
+    assert corrigenda.producers.llm.SYSTEM_PROMPT
+    assert corrigenda.core.schemas.LineManifest
+    assert corrigenda.core.schemas.DocumentManifest
 
 
 def test_top_level_public_api_is_importable():
@@ -132,7 +133,7 @@ def test_changelog_added_symbols_are_importable():
     ``### Added`` section must be importable from the documented path.
 
     The CHANGELOG groups symbols under sub-module headings like
-    ``corrigenda.alto`` / ``corrigenda.pipeline``; this test pins the
+    ``corrigenda.formats.alto`` / ``corrigenda.core``; this test pins the
     promise so a future rename or move breaks the test before it
     breaks a PyPI consumer. The map below is the canonical list — when
     you change the CHANGELOG, sync this map (one line per move).
@@ -148,14 +149,17 @@ def test_changelog_added_symbols_are_importable():
     # (module path, [symbols expected on that module]).
     # Source of truth: packages/corrigenda/CHANGELOG.md ### Added section.
     expected: list[tuple[str, list[str]]] = [
-        # corrigenda.alto
-        ("corrigenda.alto.parser", ["parse_alto_file", "build_document_manifest"]),
+        # corrigenda.formats.alto
         (
-            "corrigenda.alto.rewriter",
+            "corrigenda.formats.alto.parser",
+            ["parse_alto_file", "build_document_manifest"],
+        ),
+        (
+            "corrigenda.formats.alto.rewriter",
             ["rewrite_alto_file", "extract_output_texts", "RewriterMetrics"],
         ),
         (
-            "corrigenda.alto.hyphenation",
+            "corrigenda.core.hyphenation",
             [
                 "enrich_chunk_lines",
                 "reconcile_hyphen_pair",
@@ -164,20 +168,23 @@ def test_changelog_added_symbols_are_importable():
                 "should_stay_in_same_chunk",
             ],
         ),
-        # corrigenda.pipeline
+        # corrigenda.core
         (
-            "corrigenda.pipeline.correction_pipeline",
+            "corrigenda.core.pipeline",
             ["CorrectionPipeline", "CorrectionResult", "sanitize_error"],
         ),
-        ("corrigenda.pipeline.chunk_planner", ["plan_page", "downgrade_granularity"]),
-        ("corrigenda.pipeline.validator", ["validate_llm_response"]),
+        ("corrigenda.core.planner", ["plan_page", "downgrade_granularity"]),
+        ("corrigenda.core.validator", ["validate_llm_response"]),
         (
-            "corrigenda.pipeline.line_acceptance",
+            "corrigenda.core.guards",
             ["check_line", "check_adjacent_duplicates", "AcceptanceResult"],
         ),
-        # corrigenda.protocols
-        ("corrigenda.protocols", ["BaseProvider", "PipelineObserver", "OutputWriter"]),
-        ("corrigenda.protocols.provider", ["OUTPUT_JSON_SCHEMA", "SYSTEM_PROMPT"]),
+        # corrigenda.core.protocols
+        (
+            "corrigenda.core.protocols",
+            ["BaseProvider", "PipelineObserver", "OutputWriter"],
+        ),
+        ("corrigenda.producers.llm", ["OUTPUT_JSON_SCHEMA", "SYSTEM_PROMPT"]),
     ]
 
     missing: list[str] = []
@@ -197,7 +204,7 @@ def test_changelog_added_symbols_are_importable():
 def test_correction_pipeline_construction_does_not_touch_infrastructure():
     """A bare ``CorrectionPipeline`` should instantiate from mock ports —
     no filesystem, no HTTP, no global state."""
-    from corrigenda.pipeline.correction_pipeline import CorrectionPipeline
+    from corrigenda.core.pipeline import CorrectionPipeline
 
     class _NoopProvider:
         async def list_models(self, api_key):  # pragma: no cover

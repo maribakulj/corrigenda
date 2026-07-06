@@ -845,7 +845,7 @@ def test_wrap_if_transient_classifies_correctly(exc_factory, should_wrap, label)
     forgot to wrap 5xx would break exponential backoff on upstream
     blips. Either regression is caught here.
     """
-    from corrigenda.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import _wrap_if_transient
 
@@ -874,7 +874,7 @@ async def test_call_llm_wraps_5xx_as_provider_transient_error():
     short-circuit to fallback (skipping the exponential-backoff retry
     that 5xx is supposed to get).
     """
-    from corrigenda.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import call_llm
 
@@ -894,7 +894,7 @@ async def test_call_llm_passes_4xx_through_as_raw_http_status_error():
     first failure (the contract pinned by
     ``test_pipeline_classifies_client_http_4xx_as_non_retryable``).
     """
-    from corrigenda.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import call_llm
 
@@ -920,7 +920,7 @@ async def test_get_json_wraps_5xx_as_provider_transient_error():
     centralise the wrapping; this test pins that the helper now does
     it on behalf of all callers.
     """
-    from corrigenda.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import get_json
 
@@ -948,7 +948,7 @@ def test_wrap_preserves_status_code_on_http_errors(status):
     HTTPStatusError. Without this attribute an alerting rule like
     'page on 5xx, suppress on 429' would have to parse the exception
     message — fragile."""
-    from corrigenda.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import _wrap_if_transient
 
@@ -971,7 +971,7 @@ def test_wrap_leaves_status_code_none_on_transport_errors(exc_factory):
     attribute must be ``None`` so observers can distinguish 'connection
     refused' from 'server returned 503'. A bug that set status_code
     to e.g. 0 on transport errors would corrupt alerting rules."""
-    from corrigenda.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import _wrap_if_transient
 
@@ -988,7 +988,7 @@ async def test_call_llm_wrapped_5xx_exposes_status_code_and_original_via_cause()
     (chained by ``raise wrapped from exc``). The chain gives callers
     the response headers (e.g., Retry-After on 429) without exposing
     httpx in the protocol surface."""
-    from corrigenda.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import call_llm
 
@@ -1011,7 +1011,7 @@ def test_provider_transient_error_default_status_code_is_none():
     """Backward compatibility — existing call sites that build
     ``ProviderTransientError("msg")`` without a status_code still
     work; the attribute defaults to None."""
-    from corrigenda.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     err = ProviderTransientError("plain message")
     assert err.status_code is None

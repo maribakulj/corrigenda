@@ -15,7 +15,7 @@ These tests pin the corrected contract:
 
 from __future__ import annotations
 
-from corrigenda.alto.rewriter import _compute_geometry, _tokenize
+from corrigenda.formats.alto.rewriter import _compute_geometry, _tokenize
 
 
 def _widths(text: str, hpos: int, width: int) -> list[int]:

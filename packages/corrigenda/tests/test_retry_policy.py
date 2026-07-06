@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import pytest
 
-from corrigenda.pipeline.correction_pipeline import _classify_retry
-from corrigenda.protocols.provider import ProviderTransientError
-from corrigenda.schemas import DEFAULT_RETRY_POLICY, RetryPolicy
+from corrigenda.core.pipeline import _classify_retry
+from corrigenda.core.protocols import ProviderTransientError
+from corrigenda.core.schemas import DEFAULT_RETRY_POLICY, RetryPolicy
 
 
 def test_default_reproduces_historical_ramp():

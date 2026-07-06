@@ -14,8 +14,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from corrigenda.pipeline.line_acceptance import check_line
-from corrigenda.schemas import DEFAULT_GUARD_CONFIG, GuardConfig
+from corrigenda.core.guards import check_line
+from corrigenda.core.schemas import DEFAULT_GUARD_CONFIG, GuardConfig
 
 
 def test_guard_config_is_frozen():

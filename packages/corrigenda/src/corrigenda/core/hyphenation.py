@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from corrigenda.alto._norm import ncfold
-from corrigenda.pipeline.migration_guards import (
+from corrigenda.core._norm import ncfold
+from corrigenda.core.guards import (
     part1_text_migrated as _part1_text_migrated,
     part2_boundary_word_diverged as _part2_boundary_word_diverged,
     part2_text_migrated as _part2_text_migrated,
 )
-from corrigenda.schemas import (
+from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
     GuardConfig,
     HyphenRole,
@@ -118,7 +118,7 @@ def enrich_chunk_lines(
 
 # ---------------------------------------------------------------------------
 # Pair-coherence helpers — implementations live in
-# corrigenda.pipeline.migration_guards (see its docstring for the
+# corrigenda.core.guards (see its docstring for the
 # stage-A/B/C migration-guard matrix). They are imported above under
 # their underscore names so the call sites in reconcile_hyphen_pair
 # stay unchanged.

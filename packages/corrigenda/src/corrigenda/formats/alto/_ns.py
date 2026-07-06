@@ -86,5 +86,5 @@ def make_safe_parser() -> etree.XMLParser:
 # `make_safe_parser` stays reachable via the private module path; the
 # 7 backend shims that used to forward this module's symbols were
 # deleted in L8/L9 — the canonical import is now
-# ``from corrigenda.alto._ns import make_safe_parser``.
+# ``from corrigenda.formats.alto._ns import make_safe_parser``.
 __all__: list[str] = []

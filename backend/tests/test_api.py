@@ -448,7 +448,7 @@ def test_download_not_ready(client: TestClient):
 
 def test_download_single_xml(client: TestClient):
     """Complete a job synchronously then download the output XML."""
-    from corrigenda.alto.parser import build_document_manifest
+    from corrigenda.formats.alto.parser import build_document_manifest
 
     from app.jobs.runner import JobRunner
     from app.storage import init_job_dirs, output_dir, save_uploaded_files

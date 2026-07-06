@@ -17,7 +17,7 @@ import warnings
 from pathlib import Path
 
 from corrigenda import CorrectionPipeline, CorrectionResult, sanitize_error
-from corrigenda.schemas import PipelineEventType
+from corrigenda.core.schemas import PipelineEventType
 
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore, OutputWriter

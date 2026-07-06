@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from corrigenda.alto.parser import build_document_manifest
-from corrigenda.pipeline.validator import HyphenIntegrityError
+from corrigenda.core.validator import HyphenIntegrityError
+from corrigenda.formats.alto.parser import build_document_manifest
 
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore

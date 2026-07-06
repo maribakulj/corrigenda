@@ -5,9 +5,9 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-from corrigenda.alto.parser import build_document_manifest, parse_alto_file
+from corrigenda.formats.alto.parser import build_document_manifest, parse_alto_file
 
-from corrigenda.schemas import HyphenRole
+from corrigenda.core.schemas import HyphenRole
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -522,7 +522,7 @@ def test_detect_namespace_handles_missing_closing_brace():
     """A tag that starts with '{' but lacks '}' must not crash with ValueError."""
     # Private helper — pulled from corrigenda directly since the
     # backend re-export shim no longer surfaces privates.
-    from corrigenda.alto.parser import _detect_namespace
+    from corrigenda.formats.alto.parser import _detect_namespace
 
     class FakeElement:
         tag = "{noclosingbrace"
@@ -534,7 +534,7 @@ def test_detect_namespace_handles_missing_closing_brace():
 def test_detect_namespace_plain_tag():
     # Private helper — pulled from corrigenda directly since the
     # backend re-export shim no longer surfaces privates.
-    from corrigenda.alto.parser import _detect_namespace
+    from corrigenda.formats.alto.parser import _detect_namespace
 
     class FakeElement:
         tag = "alto"
@@ -545,7 +545,7 @@ def test_detect_namespace_plain_tag():
 def test_detect_namespace_normal_namespaced_tag():
     # Private helper — pulled from corrigenda directly since the
     # backend re-export shim no longer surfaces privates.
-    from corrigenda.alto.parser import _detect_namespace
+    from corrigenda.formats.alto.parser import _detect_namespace
 
     class FakeElement:
         tag = "{http://www.loc.gov/standards/alto/ns-v3#}alto"

@@ -7,10 +7,15 @@ from pathlib import Path
 
 from lxml import etree
 
-from corrigenda.alto._norm import clean_content, nfc
-from corrigenda.alto._ns import _detect_namespace, _int_attr, _tag, make_safe_parser
-from corrigenda.alto._text import reconstruct_textline
-from corrigenda.schemas import HyphenRole, LineManifest, PageManifest
+from corrigenda.core._norm import clean_content, nfc
+from corrigenda.formats.alto._ns import (
+    _detect_namespace,
+    _int_attr,
+    _tag,
+    make_safe_parser,
+)
+from corrigenda.formats.alto._text import reconstruct_textline
+from corrigenda.core.schemas import HyphenRole, LineManifest, PageManifest
 
 # ---------------------------------------------------------------------------
 # Metrics
@@ -598,7 +603,7 @@ def rewrite_alto_file(
     Returns (rewritten_xml_bytes, metrics, line_rewriter_paths).
     line_rewriter_paths maps line_id → "untouched"/"subs_only"/"fast_path"/"slow_path".
     """
-    # Hardened parser — see corrigenda.alto._ns.make_safe_parser docstring
+    # Hardened parser — see corrigenda.formats.alto._ns.make_safe_parser docstring
     # for the rationale. Using lxml's default here would expose every
     # rewrite to entity-amplification DoS via crafted ALTO uploads.
     tree = etree.parse(str(xml_path), make_safe_parser())
@@ -667,7 +672,7 @@ def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]
     seen here matches both the parser's ocr_text and the rewriter's
     UNTOUCHED-detection comparison.
     """
-    # Hardened parser — see corrigenda.alto._ns.make_safe_parser. The
+    # Hardened parser — see corrigenda.formats.alto._ns.make_safe_parser. The
     # bytes here are typically the OUTPUT of rewrite_alto_file but the
     # function is documented as accepting arbitrary ALTO bytes, so we
     # treat them as untrusted.

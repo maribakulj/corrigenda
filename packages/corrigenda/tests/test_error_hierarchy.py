@@ -8,7 +8,7 @@ from corrigenda import (
     ParseError,
     ValidationError,
 )
-from corrigenda.pipeline.validator import HyphenIntegrityError, validate_llm_response
+from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
 
 
 def test_all_errors_are_correction_errors():

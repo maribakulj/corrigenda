@@ -13,18 +13,21 @@ même release. Version de travail : `0.1.0a1` jusqu'au tag final `1.0.0`.
   triplets + NewsEye-FR presse en colonnes ; lacunes listées dans
   PROVENANCE.md). Restes mainteneur : renommer le dépôt GitHub, réserver
   le nom sur PyPI, ratifier les 3 décisions de PROGRESS_V1.md.
-- [ ] **P1 — Réorganisation §3** : arbre `core/` (schemas, guards,
+- [x] **P1 — Réorganisation §3** : arbre `core/` (schemas, guards,
   hyphenation, planner, validator, pipeline, protocols) / `formats/alto/`
   (parser, rewriter, _ns, _text — la *détection* de césure y reste) /
   `producers/` (llm.py : SYSTEM_PROMPT + OUTPUT_JSON_SCHEMA). `_norm` et
   `errors` purs côté core/racine. **Test-contrat d'imports** : `core`
   n'importe ni lxml ni formats/producers (import de `corrigenda.core.*`
-  ne charge pas lxml — vérifié par sous-processus) ; une seule exception
-  pinnée : le défaut ALTO lazy du pipeline (frontière de composition).
+  ne charge pas lxml — vérifié par sous-processus) ; DEUX exceptions
+  pinnées, function-local dans core/pipeline : défaut ALTO lazy et défaut
+  prompt/schéma lazy (frontière de composition ; prompt/schéma désormais
+  INJECTABLES sur le pipeline). Init racine lazy (PEP 562) pour les
+  symboles formats/producers.
   Pas d'alias (rien de publié) : lib tests + backend migrent aux chemins
   définitifs. DoD : goldens byte-parity INTACTS (pur déplacement), suites
   vertes, mypy strict, contrat d'imports vert.
-- [ ] **P2 — Couture de format** (fusionnée avec P1) : port `FormatAdapter`
+- [x] **P2 — Couture de format** (fusionnée avec P1) : port `FormatAdapter`
   (rewrite_file/extract_texts) dans core/protocols ; `AltoFormatAdapter`
   dans formats/alto ; le pipeline n'importe plus le rewriter ALTO.
 - [ ] **P3 — PAGE XML** (spec §6.2 P1–P7 + parité §6.3) : parser/rewriter

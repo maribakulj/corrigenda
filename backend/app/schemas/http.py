@@ -2,7 +2,7 @@
 
 These Pydantic models describe request/response payloads exchanged with
 the FastAPI server and the SSE stream. They are intentionally NOT in
-``corrigenda.schemas`` because the pure correction pipeline doesn't
+``corrigenda.core.schemas`` because the pure correction pipeline doesn't
 speak HTTP — only the server does. See ARCHITECTURE.md §3.2.
 
 When the eventual `alto-server` package is extracted (Phase 3), this
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from corrigenda.schemas import ModelInfo, PipelineEventType
+from corrigenda.core.schemas import ModelInfo, PipelineEventType
 from pydantic import BaseModel, Field
 
 from app.schemas.job import JobStatus, Provider

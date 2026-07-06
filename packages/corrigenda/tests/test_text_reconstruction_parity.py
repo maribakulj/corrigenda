@@ -2,7 +2,7 @@
 
 Both call sites reconstruct the logical text of a TextLine from its
 String/SP/HYP children. After the audit §6.2 fix they share the same
-helper (``corrigenda.alto._text.reconstruct_textline``); the parser
+helper (``corrigenda.formats.alto._text.reconstruct_textline``); the parser
 wraps it with ``.replace("\\r", "").strip()`` to get its "logical"
 form, the rewriter calls it raw for byte-faithful UNTOUCHED detection.
 
@@ -19,9 +19,9 @@ from __future__ import annotations
 import unicodedata
 from pathlib import Path
 
-from corrigenda.alto._ns import _detect_namespace
-from corrigenda.alto._text import reconstruct_textline
-from corrigenda.alto.parser import _build_ocr_text
+from corrigenda.formats.alto._ns import _detect_namespace
+from corrigenda.formats.alto._text import reconstruct_textline
+from corrigenda.formats.alto.parser import _build_ocr_text
 from lxml import etree
 
 _EXAMPLES = Path(__file__).parent.parent.parent.parent / "examples"

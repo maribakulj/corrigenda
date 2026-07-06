@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import pytest
-from corrigenda.pipeline.validator import validate_llm_response
+from corrigenda.core.validator import validate_llm_response
 
-from corrigenda.schemas import LLMResponse
+from corrigenda.core.schemas import LLMResponse
 
 # ---------------------------------------------------------------------------
 # test_valid_response

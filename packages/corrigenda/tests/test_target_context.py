@@ -9,8 +9,8 @@ target boundary.
 
 from __future__ import annotations
 
-from corrigenda.pipeline.chunk_planner import plan_page
-from corrigenda.schemas import (
+from corrigenda.core.planner import plan_page
+from corrigenda.core.schemas import (
     ChunkGranularity,
     ChunkPlannerConfig,
     Coords,
@@ -113,7 +113,7 @@ def test_hyphen_pair_stays_in_one_target_window():
 import pytest  # noqa: E402
 
 from corrigenda import CorrectionPipeline  # noqa: E402
-from corrigenda.schemas import DocumentManifest, LineStatus  # noqa: E402
+from corrigenda.core.schemas import DocumentManifest, LineStatus  # noqa: E402
 
 
 class _IdentityProvider:

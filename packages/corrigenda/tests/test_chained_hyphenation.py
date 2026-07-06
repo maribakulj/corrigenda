@@ -14,15 +14,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from corrigenda.alto._text import reconstruct_textline
-from corrigenda.alto.hyphenation import (
+from corrigenda.formats.alto._text import reconstruct_textline
+from corrigenda.core.hyphenation import (
     reconcile_hyphen_pair,
 )
-from corrigenda.alto.parser import parse_alto_file
-from corrigenda.alto.rewriter import rewrite_alto_file
+from corrigenda.formats.alto.parser import parse_alto_file
+from corrigenda.formats.alto.rewriter import rewrite_alto_file
 from lxml import etree
 
-from corrigenda.schemas import HyphenRole
+from corrigenda.core.schemas import HyphenRole
 
 NS = "http://www.loc.gov/standards/alto/ns-v3#"
 

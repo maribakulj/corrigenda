@@ -2,7 +2,7 @@
 
 Roadmap L10 Phase 1 (B1) — these tests pin the contract that EVERY
 lxml parser instantiation in corrigenda goes through the hardened
-``make_safe_parser()`` helper in ``corrigenda.alto._ns``.
+``make_safe_parser()`` helper in ``corrigenda.formats.alto._ns``.
 
 What the hardened parser actually buys us (and what it does NOT):
 
@@ -35,8 +35,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from corrigenda.alto.parser import parse_alto_file
-from corrigenda.alto.rewriter import extract_output_texts
+from corrigenda.formats.alto.parser import parse_alto_file
+from corrigenda.formats.alto.rewriter import extract_output_texts
 
 
 def _xxe_payload_text_node(secret_path: Path) -> bytes:
@@ -195,9 +195,11 @@ def test_no_alto_lxml_call_site_uses_default_parser():
     """
     import ast
 
-    src_root = Path(__file__).resolve().parents[1] / "src" / "corrigenda" / "alto"
+    # §10 — the safe-parser contract covers EVERY format backend, present
+    # and future (PAGE XML lands in the same tree).
+    src_root = Path(__file__).resolve().parents[1] / "src" / "corrigenda" / "formats"
     offenders: list[tuple[str, int, str]] = []
-    for py in src_root.glob("*.py"):
+    for py in src_root.rglob("*.py"):
         text = py.read_text(encoding="utf-8")
         tree = ast.parse(text, filename=str(py))
         for node in ast.walk(tree):
@@ -225,7 +227,7 @@ def test_make_safe_parser_returns_fresh_instance_per_call():
     (lxml parsers are not documented as thread-safe). A future "cache
     the parser" optimisation that breaks this would surface here.
     """
-    from corrigenda.alto._ns import make_safe_parser
+    from corrigenda.formats.alto._ns import make_safe_parser
 
     p1 = make_safe_parser()
     p2 = make_safe_parser()
@@ -245,7 +247,12 @@ def test_make_safe_parser_enables_all_four_safety_flags():
     import ast
 
     ns_path = (
-        Path(__file__).resolve().parents[1] / "src" / "corrigenda" / "alto" / "_ns.py"
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "corrigenda"
+        / "formats"
+        / "alto"
+        / "_ns.py"
     )
     tree = ast.parse(ns_path.read_text(encoding="utf-8"), filename=str(ns_path))
     flags: dict[str, ast.expr] = {}

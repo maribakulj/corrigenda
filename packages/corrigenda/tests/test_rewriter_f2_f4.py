@@ -14,9 +14,9 @@ from pathlib import Path
 
 from lxml import etree
 
-from corrigenda.alto._ns import _detect_namespace
-from corrigenda.alto.parser import build_document_manifest
-from corrigenda.alto.rewriter import rewrite_alto_file
+from corrigenda.formats.alto._ns import _detect_namespace
+from corrigenda.formats.alto.parser import build_document_manifest
+from corrigenda.formats.alto.rewriter import rewrite_alto_file
 
 _NS = "http://www.loc.gov/standards/alto/ns-v4#"
 

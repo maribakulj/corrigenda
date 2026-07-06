@@ -4,9 +4,14 @@ from pathlib import Path
 
 from lxml import etree
 
-from corrigenda.alto._ns import _detect_namespace, _int_attr, _tag, make_safe_parser
-from corrigenda.alto._text import reconstruct_textline
-from corrigenda.schemas import (
+from corrigenda.formats.alto._ns import (
+    _detect_namespace,
+    _int_attr,
+    _tag,
+    make_safe_parser,
+)
+from corrigenda.formats.alto._text import reconstruct_textline
+from corrigenda.core.schemas import (
     DEFAULT_PAIRING_POLICY,
     BlockManifest,
     Coords,
@@ -249,7 +254,7 @@ def parse_alto_file(
     default reproduces the historical purely-sequential pairing.
     """
     # Hardened parser shared with rewriter.py + extract_output_texts.
-    # See corrigenda.alto._ns.make_safe_parser docstring.
+    # See corrigenda.formats.alto._ns.make_safe_parser docstring.
     tree = etree.parse(str(xml_path), make_safe_parser())
     root = tree.getroot()
     ns = _detect_namespace(root)

@@ -27,9 +27,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from corrigenda.pipeline.correction_pipeline import _classify_retry, _RetryDecision
-from corrigenda.pipeline.validator import HyphenIntegrityError
-from corrigenda.protocols.provider import ProviderTransientError
+from corrigenda.core.pipeline import _classify_retry, _RetryDecision
+from corrigenda.core.validator import HyphenIntegrityError
+from corrigenda.core.protocols import ProviderTransientError
 
 
 # ---------------------------------------------------------------------------

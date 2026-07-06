@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from corrigenda.alto._norm import ncfold
+from corrigenda.core._norm import ncfold
 from corrigenda.errors import ValidationError
-from corrigenda.schemas import (
+from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
     GuardConfig,
     LLMLineOutput,

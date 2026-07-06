@@ -1,35 +1,31 @@
-"""corrigenda — pure ALTO XML correction pipeline.
+"""corrigenda — structure-safe post-OCR correction of heritage transcriptions.
 
-Sub-packages:
+Sub-packages (§3 tree):
 
-- :mod:`corrigenda.alto` — ALTO XML parsing/rewriting and the
-  Hyphenation Reconciler.
-- :mod:`corrigenda.pipeline` — chunk planning, validation, line
-  acceptance, and the orchestrating :class:`CorrectionPipeline`.
-- :mod:`corrigenda.schemas` — Pydantic models shared across the pipeline.
-- :mod:`corrigenda.protocols` — ports (:class:`BaseProvider`,
-  :class:`PipelineObserver`, :class:`OutputWriter`) consumers implement.
+- :mod:`corrigenda.core` — pure algorithms: schemas, guards, hyphenation
+  reconciliation, chunk planning, response validation, the orchestrating
+  :class:`CorrectionPipeline`, and every port (zero I/O, zero lxml —
+  enforced by the import-contract test).
+- :mod:`corrigenda.formats` — concrete transcription formats. Today
+  :mod:`corrigenda.formats.alto` (hardened parser + 4-path rewriter);
+  PAGE XML plugs in the same seam.
+- :mod:`corrigenda.producers` — edition-producer surfaces (the LLM
+  system prompt + JSON output schema today).
 
-Top-level re-exports give a single import surface for the symbols most
-consumers reach for. See the README for a minimal working example.
+Top-level re-exports give a single import surface. Format- and
+producer-bound symbols are exposed LAZILY (PEP 562) so that importing
+:mod:`corrigenda` from a core-only consumer never loads lxml.
 """
 
-from corrigenda.alto.parser import build_document_manifest, parse_alto_file
-from corrigenda.alto.rewriter import extract_output_texts, rewrite_alto_file
-from corrigenda.errors import (
-    CorrectionAborted,
-    CorrectionError,
-    ParseError,
-    ValidationError,
-)
-from corrigenda.pipeline.correction_pipeline import (
+from typing import TYPE_CHECKING, Any
+
+from corrigenda.core.pipeline import (
     CorrectionPipeline,
     CorrectionResult,
     sanitize_error,
 )
-from corrigenda.protocols import BaseProvider, OutputWriter, PipelineObserver
-from corrigenda.protocols.provider import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
-from corrigenda.schemas import (
+from corrigenda.core.protocols import BaseProvider, OutputWriter, PipelineObserver
+from corrigenda.core.schemas import (
     BlockManifest,
     ChunkGranularity,
     ChunkPlannerConfig,
@@ -48,11 +44,59 @@ from corrigenda.schemas import (
     RetryPolicy,
     Usage,
 )
+from corrigenda.errors import (
+    CorrectionAborted,
+    CorrectionError,
+    ParseError,
+    ValidationError,
+)
+
+if TYPE_CHECKING:  # typed view of the lazy symbols below
+    from corrigenda.formats.alto.parser import (
+        build_document_manifest as build_document_manifest,
+    )
+    from corrigenda.formats.alto.parser import parse_alto_file as parse_alto_file
+    from corrigenda.formats.alto.rewriter import (
+        extract_output_texts as extract_output_texts,
+    )
+    from corrigenda.formats.alto.rewriter import (
+        rewrite_alto_file as rewrite_alto_file,
+    )
+    from corrigenda.producers.llm import (
+        OUTPUT_JSON_SCHEMA as OUTPUT_JSON_SCHEMA,
+    )
+    from corrigenda.producers.llm import SYSTEM_PROMPT as SYSTEM_PROMPT
 
 __version__ = "0.1.0a1"
 
+#: Lazily resolved top-level names -> their home module (PEP 562). These
+#: pull in lxml (formats) or producer surfaces, so they materialise only
+#: on first attribute access — `import corrigenda` alone stays pure.
+_LAZY: dict[str, str] = {
+    "build_document_manifest": "corrigenda.formats.alto.parser",
+    "parse_alto_file": "corrigenda.formats.alto.parser",
+    "extract_output_texts": "corrigenda.formats.alto.rewriter",
+    "rewrite_alto_file": "corrigenda.formats.alto.rewriter",
+    "OUTPUT_JSON_SCHEMA": "corrigenda.producers.llm",
+    "SYSTEM_PROMPT": "corrigenda.producers.llm",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _LAZY.get(name)
+    if module_name is None:
+        raise AttributeError(f"module 'corrigenda' has no attribute {name!r}")
+    import importlib
+
+    return getattr(importlib.import_module(module_name), name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY))
+
+
 __all__ = [
-    # Parser / rewriter
+    # Parser / rewriter (lazy — formats)
     "build_document_manifest",
     "parse_alto_file",
     "extract_output_texts",
@@ -69,7 +113,7 @@ __all__ = [
     "BaseProvider",
     "OutputWriter",
     "PipelineObserver",
-    # LLM contract
+    # LLM contract (lazy — producers)
     "OUTPUT_JSON_SCHEMA",
     "SYSTEM_PROMPT",
     "sanitize_error",

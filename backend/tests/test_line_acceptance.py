@@ -6,11 +6,11 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from corrigenda.alto.parser import build_document_manifest, parse_alto_file
-from corrigenda.pipeline.line_acceptance import (
+from corrigenda.core.guards import (
     check_adjacent_duplicates,
     check_line,
 )
+from corrigenda.formats.alto.parser import build_document_manifest, parse_alto_file
 
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore

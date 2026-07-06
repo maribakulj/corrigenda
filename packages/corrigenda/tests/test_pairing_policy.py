@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from corrigenda.alto.parser import build_document_manifest, parse_alto_file
-from corrigenda.schemas import HyphenRole, PairingPolicy
+from corrigenda.formats.alto.parser import build_document_manifest, parse_alto_file
+from corrigenda.core.schemas import HyphenRole, PairingPolicy
 
 _EXAMPLES = Path(__file__).parent.parent.parent.parent / "examples"
 _SAMPLE = _EXAMPLES / "sample.xml"
@@ -64,7 +64,7 @@ def test_realistic_gap_policy_keeps_adjacent_pairs():
 def test_vertical_gap_skipped_across_pages():
     """VPOS restarts on every page, so max_vertical_gap must not be
     applied to a cross-page candidate (post-audit F7 fix)."""
-    from corrigenda.schemas import Coords, LineManifest
+    from corrigenda.core.schemas import Coords, LineManifest
 
     def _line(page: str, vpos: int) -> LineManifest:
         return LineManifest(

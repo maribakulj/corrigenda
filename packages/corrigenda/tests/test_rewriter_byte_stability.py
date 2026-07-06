@@ -19,9 +19,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from corrigenda.alto._ns import _detect_namespace
-from corrigenda.alto.parser import build_document_manifest
-from corrigenda.alto.rewriter import rewrite_alto_file
+from corrigenda.formats.alto._ns import _detect_namespace
+from corrigenda.formats.alto.parser import build_document_manifest
+from corrigenda.formats.alto.rewriter import rewrite_alto_file
 from lxml import etree
 
 _EXAMPLES = Path(__file__).parent.parent.parent.parent / "examples"

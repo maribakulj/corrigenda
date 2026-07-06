@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import uuid
 
-from corrigenda.alto.hyphenation import should_stay_in_same_chunk
-from corrigenda.schemas import (
+from corrigenda.core.hyphenation import should_stay_in_same_chunk
+from corrigenda.core.schemas import (
     ChunkGranularity,
     ChunkPlan,
     ChunkPlannerConfig,

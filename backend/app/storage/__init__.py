@@ -218,9 +218,9 @@ def link_alto_to_images(
         image_key: str | None = None
         try:
             # Single source of truth for the hardened parser: shared
-            # with corrigenda.alto.parser / rewriter — see
-            # corrigenda.alto._ns.make_safe_parser docstring.
-            from corrigenda.alto._ns import make_safe_parser
+            # with corrigenda.formats.alto.parser / rewriter — see
+            # corrigenda.formats.alto._ns.make_safe_parser docstring.
+            from corrigenda.formats.alto._ns import make_safe_parser
 
             tree = etree.parse(str(alto_path), make_safe_parser())
             for el in tree.findall(".//{*}fileName"):

@@ -29,8 +29,8 @@ from pathlib import Path
 
 import pytest
 
-from corrigenda.alto.parser import build_document_manifest
-from corrigenda.alto.rewriter import rewrite_alto_file
+from corrigenda.formats.alto.parser import build_document_manifest
+from corrigenda.formats.alto.rewriter import rewrite_alto_file
 
 _EXAMPLES = Path(__file__).parent.parent.parent.parent / "examples"
 
@@ -90,7 +90,7 @@ def test_corpus_output_bytes_are_pinned(filename: str, scenario: str) -> None:
 def test_identity_output_equals_source_reserialisation() -> None:
     """Identity corrections must not perturb a single TextLine: the output
     re-parses to the same per-line text as the source for every line."""
-    from corrigenda.alto.rewriter import extract_output_texts
+    from corrigenda.formats.alto.rewriter import extract_output_texts
 
     xml_path = _EXAMPLES / "X0000002.xml"
     doc = build_document_manifest([(xml_path, xml_path.name)])

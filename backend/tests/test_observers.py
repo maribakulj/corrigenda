@@ -102,28 +102,28 @@ def test_logging_observer_routes_warning_events_to_warning_level(caplog):
     a critical event out of `_WARNING_EVENTS` (silently dropping it to
     DEBUG) would not have failed any test.
 
-    The assertion is filtered to the `corrigenda.pipeline` logger and
+    The assertion is filtered to the `corrigenda.core` logger and
     keyed on event-type substrings rather than a strict count, so an
     unrelated module emitting its own WARNING during the test cannot
     flip the result. The contract we pin is: for each of these three
     event types, the OBSERVER produced at least one WARNING record on
-    the corrigenda.pipeline logger.
+    the corrigenda.core logger.
     """
     observer = LoggingObserver()
 
-    with caplog.at_level(logging.DEBUG, logger="corrigenda.pipeline"):
+    with caplog.at_level(logging.DEBUG, logger="corrigenda.core"):
         observer.on_event("warning", {"chunk_id": "c1", "message": "fallback"})
         observer.on_event("chunk_error", {"chunk_id": "c1", "exception_type": "OSError"})
         observer.on_event("hyphen_partner_missing", {"line_id": "L1", "direction": "backward"})
 
     warning_records = [
-        r for r in caplog.records if r.levelname == "WARNING" and r.name == "corrigenda.pipeline"
+        r for r in caplog.records if r.levelname == "WARNING" and r.name == "corrigenda.core"
     ]
     messages = " ".join(r.message for r in warning_records)
     for event_type in ("warning", "chunk_error", "hyphen_partner_missing"):
         assert event_type in messages, (
             f"event {event_type!r} did not produce a WARNING-level log "
-            f"record on corrigenda.pipeline; got messages: {messages!r}"
+            f"record on corrigenda.core; got messages: {messages!r}"
         )
 
 
@@ -136,7 +136,7 @@ def test_logging_observer_routes_lifecycle_events_to_debug_level(caplog):
     event type would have to read `_WARNING_EVENTS` to know the default;
     this test pins the contract.
 
-    The DEBUG-count check is filtered to the `corrigenda.pipeline`
+    The DEBUG-count check is filtered to the `corrigenda.core`
     logger and asserts presence-by-event-type rather than a strict
     count, so the test stays green if an unrelated logger emits a
     same-level record during the run.
@@ -151,7 +151,7 @@ def test_logging_observer_routes_lifecycle_events_to_debug_level(caplog):
         "page_completed",
         "retry",
     )
-    with caplog.at_level(logging.DEBUG, logger="corrigenda.pipeline"):
+    with caplog.at_level(logging.DEBUG, logger="corrigenda.core"):
         observer.on_event("page_started", {"page_id": "P1"})
         observer.on_event("chunk_planned", {"page_id": "P1", "chunk_count": 3})
         observer.on_event("chunk_started", {"chunk_id": "c1"})
@@ -162,19 +162,17 @@ def test_logging_observer_routes_lifecycle_events_to_debug_level(caplog):
     # The OBSERVER must not emit any WARNING on its own logger for
     # these events (other modules' WARNINGs are out of scope).
     warning_records = [
-        r for r in caplog.records if r.levelname == "WARNING" and r.name == "corrigenda.pipeline"
+        r for r in caplog.records if r.levelname == "WARNING" and r.name == "corrigenda.core"
     ]
     assert warning_records == [], (
-        f"lifecycle events leaked to WARNING on corrigenda.pipeline: "
+        f"lifecycle events leaked to WARNING on corrigenda.core: "
         f"{[(r.levelname, r.message) for r in warning_records]}"
     )
     debug_messages = " ".join(
-        r.message
-        for r in caplog.records
-        if r.levelname == "DEBUG" and r.name == "corrigenda.pipeline"
+        r.message for r in caplog.records if r.levelname == "DEBUG" and r.name == "corrigenda.core"
     )
     for event_type in lifecycle_events:
         assert event_type in debug_messages, (
             f"lifecycle event {event_type!r} did not produce a DEBUG-level "
-            f"log record on corrigenda.pipeline; got messages: {debug_messages!r}"
+            f"log record on corrigenda.core; got messages: {debug_messages!r}"
         )

@@ -3,7 +3,7 @@
 The pipeline takes a parsed :class:`DocumentManifest`, drives the chunk
 planner, calls the LLM provider, validates responses, reconciles hyphen
 pairs, and writes outputs via the injected :class:`OutputWriter`. It
-depends only on the three Protocols in :mod:`corrigenda.protocols` — no
+depends only on the three Protocols in :mod:`corrigenda.core.protocols` — no
 job store, no FastAPI, no filesystem path manipulation beyond reading
 source files.
 
@@ -26,27 +26,27 @@ import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 from pathlib import Path
 
-from corrigenda.alto.hyphenation import (
+from corrigenda.core.hyphenation import (
     ReconcileMetrics,
     classify_reconcile_outcome,
     enrich_chunk_lines,
     reconcile_hyphen_pair,
 )
-from corrigenda.alto.rewriter import extract_output_texts, rewrite_alto_file
 from corrigenda.errors import CorrectionAborted
-from corrigenda.pipeline.chunk_planner import downgrade_granularity, plan_page
-from corrigenda.pipeline.line_acceptance import check_adjacent_duplicates, check_line
-from corrigenda.pipeline.validator import HyphenIntegrityError, validate_llm_response
-from corrigenda.protocols import (
+from corrigenda.core.planner import downgrade_granularity, plan_page
+from corrigenda.core.guards import check_adjacent_duplicates, check_line
+from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
+from corrigenda.core.protocols import (
+    FormatAdapter,
     BaseProvider,
     OutputWriter,
     PipelineObserver,
     ProviderTransientError,
 )
-from corrigenda.protocols.provider import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
-from corrigenda.schemas import (
+from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
     DEFAULT_PAIRING_POLICY,
     DEFAULT_RETRY_POLICY,
@@ -103,6 +103,36 @@ _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         r"\1****",
     ),
 )
+
+
+def _default_format_adapter() -> FormatAdapter:
+    """Composition-boundary default: ALTO, resolved lazily (§3).
+
+    This function is the ONLY place ``core`` touches a concrete format,
+    and the import is function-local so importing any ``corrigenda.core``
+    module never loads lxml. The import-contract test pins both facts:
+    core modules carry no static formats/lxml import, and this exact
+    function is the single allowed lazy site. Inject ``format_adapter``
+    on the pipeline to use another format (e.g. PAGE XML).
+    """
+    from corrigenda.formats.alto.adapter import AltoFormatAdapter
+
+    return AltoFormatAdapter()
+
+
+def _default_llm_contract() -> tuple[str, dict[str, Any]]:
+    """Composition-boundary default for the LLM prompt contract (§3).
+
+    Prompts and output schemas are PRODUCER concerns; the v1 pipeline
+    still drives ``BaseProvider`` directly, so it resolves the default
+    contract lazily here (function-local import — core never imports
+    producers statically; pinned by the import-contract test). Inject
+    ``system_prompt`` / ``output_schema`` on the pipeline to override.
+    P4 (EditProducer) absorbs this into the producer itself.
+    """
+    from corrigenda.producers.llm import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
+
+    return SYSTEM_PROMPT, OUTPUT_JSON_SCHEMA
 
 
 def sanitize_error(msg: str, api_key: str | None = None) -> str:
@@ -405,6 +435,9 @@ class CorrectionPipeline:
         retry_policy: RetryPolicy | None = None,
         guard_config: GuardConfig | None = None,
         pairing_policy: PairingPolicy | None = None,
+        format_adapter: FormatAdapter | None = None,
+        system_prompt: str | None = None,
+        output_schema: dict[str, Any] | None = None,
     ) -> None:
         self.provider = provider
         self.observer = observer
@@ -421,11 +454,25 @@ class CorrectionPipeline:
         # the configuration fingerprint stamped into the corrected XML covers
         # every §8.2 policy. The pipeline itself never re-pairs lines.
         self.pairing_policy = pairing_policy or DEFAULT_PAIRING_POLICY
+        # §3 format seam — None resolves to the lazy ALTO default at
+        # write time (_default_format_adapter); inject for other formats.
+        self.format_adapter = format_adapter
+        # LLM contract — None resolves to producers.llm defaults lazily.
+        self._system_prompt = system_prompt
+        self._output_schema = output_schema
         # Counters reset on every call to run()
         self._retry_count = 0
         self._fallback_count = 0
         self._reconcile_metrics = ReconcileMetrics()
         self._usage = Usage()
+
+    def _llm_contract(self) -> tuple[str, dict[str, Any]]:
+        prompt, schema = self._system_prompt, self._output_schema
+        if prompt is None or schema is None:
+            d_prompt, d_schema = _default_llm_contract()
+            prompt = prompt if prompt is not None else d_prompt
+            schema = schema if schema is not None else d_schema
+        return prompt, schema
 
     def config_fingerprint(self) -> str:
         """Stable 16-hex hash over the pipeline's §8.2 policies (§11).
@@ -1083,12 +1130,13 @@ class CorrectionPipeline:
             user_dict = payload.model_dump(exclude_none=True)
 
             try:
+                system_prompt, json_schema = self._llm_contract()
                 raw, usage = await self.provider.complete_structured(
                     api_key=api_key,
                     model=model,
-                    system_prompt=SYSTEM_PROMPT,
+                    system_prompt=system_prompt,
                     user_payload=user_dict,
-                    json_schema=OUTPUT_JSON_SCHEMA,
+                    json_schema=json_schema,
                     temperature=temperature,
                 )
                 if usage is not None:
@@ -1378,6 +1426,7 @@ class CorrectionPipeline:
         from corrigenda import __version__ as _lib_version
 
         config_fingerprint = self.config_fingerprint()
+        adapter = self.format_adapter or _default_format_adapter()
 
         for source_name, xml_path in source_files.items():
             pages_for_file = [
@@ -1386,7 +1435,7 @@ class CorrectionPipeline:
             if not pages_for_file:
                 continue
 
-            xml_bytes, metrics, rewriter_paths = rewrite_alto_file(
+            xml_bytes, metrics, rewriter_paths = adapter.rewrite_file(
                 xml_path,
                 pages_for_file,
                 provider_name,
@@ -1426,7 +1475,7 @@ class CorrectionPipeline:
                         t.rewriter_path = rpath
 
             file_line_ids = {lm.line_id for p in pages_for_file for lm in p.lines}
-            output_texts = extract_output_texts(xml_bytes, file_line_ids)
+            output_texts = adapter.extract_texts(xml_bytes, file_line_ids)
             for lid, otxt in output_texts.items():
                 tkey = lid_to_tkey.get(lid)
                 if tkey:

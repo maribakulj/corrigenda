@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from lxml import etree
 
-from corrigenda.alto._norm import nfc
-from corrigenda.alto._ns import _tag
+from corrigenda.core._norm import nfc
+from corrigenda.formats.alto._ns import _tag
 
 
 def reconstruct_textline(textline: etree._Element, ns: str) -> str:

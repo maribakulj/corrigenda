@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from corrigenda import CorrectionAborted, CorrectionError, CorrectionPipeline
-from corrigenda.alto.parser import build_document_manifest
+from corrigenda.formats.alto.parser import build_document_manifest
 
 _SAMPLE = Path(__file__).parent.parent.parent.parent / "examples" / "sample.xml"
 

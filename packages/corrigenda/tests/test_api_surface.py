@@ -12,8 +12,8 @@ import pytest
 from pydantic import ValidationError as PydanticValidationError
 
 from corrigenda import CorrectionPipeline
-from corrigenda.alto.parser import build_document_manifest
-from corrigenda.schemas import (
+from corrigenda.formats.alto.parser import build_document_manifest
+from corrigenda.core.schemas import (
     ChunkPlannerConfig,
     GuardConfig,
     PairingPolicy,

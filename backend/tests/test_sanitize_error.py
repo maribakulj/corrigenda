@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from corrigenda.pipeline.correction_pipeline import sanitize_error as _sanitize_error
+from corrigenda.core.pipeline import sanitize_error as _sanitize_error
 
 # ---------------------------------------------------------------------------
 # Regex-based stripping

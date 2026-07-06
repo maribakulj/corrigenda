@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from corrigenda.alto.parser import parse_alto_file
+from corrigenda.formats.alto.parser import parse_alto_file
 
 # Private rewriter helpers — pulled from corrigenda directly since the
 # backend re-export shim no longer surfaces privates.
-from corrigenda.alto.rewriter import _compute_geometry, _tokenize, rewrite_alto_file
+from corrigenda.formats.alto.rewriter import (
+    _compute_geometry,
+    _tokenize,
+    rewrite_alto_file,
+)
 from lxml import etree
 
-from corrigenda.schemas import (
+from corrigenda.core.schemas import (
     BlockManifest,
     Coords,
     HyphenRole,

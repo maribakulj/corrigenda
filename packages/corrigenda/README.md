@@ -12,12 +12,12 @@ alto-llm-corrector monorepo. The API may still shift before 1.0.
 
 ## What's in the box
 
-- `corrigenda.alto` — ALTO XML parsing and rewriting (v2/v3/v4),
+- `corrigenda.formats.alto` — ALTO XML parsing and rewriting (v2/v3/v4),
   with the Hyphenation Reconciler.
-- `corrigenda.pipeline` — chunk planning, LLM-response validation,
+- `corrigenda.core` — chunk planning, LLM-response validation,
   per-line acceptance policy, and the pure `CorrectionPipeline` that
   ties them together (`run()` async, `run_sync()` façade).
-- `corrigenda.schemas` — Pydantic models for documents, pages, blocks and
+- `corrigenda.core.schemas` — Pydantic models for documents, pages, blocks and
   lines, plus the four **frozen, injectable policies**: `RetryPolicy`
   (attempt cap / temperature ramp / per-chunk budget — `.default()` is
   byte-compatible with the historical behaviour, `.deterministic()` pins
@@ -34,7 +34,7 @@ alto-llm-corrector monorepo. The API may still shift before 1.0.
   text, rewriter path, fallback reason). `run(apply=False)` executes the
   whole pipeline without persisting anything — the report is the
   deliverable (dry-run / preview / benchmarking).
-- `corrigenda.protocols` — ports (`BaseProvider`, `PipelineObserver`,
+- `corrigenda.core.protocols` — ports (`BaseProvider`, `PipelineObserver`,
   `OutputWriter`) that consumers implement to plug the core into their
   own infrastructure.
 - PEP 561 `py.typed` marker — the package type-checks under
@@ -77,7 +77,7 @@ class IdentityProvider:
         self, api_key, model, system_prompt, user_payload, json_schema, temperature=0.0,
     ):
         # F14 contract: return (parsed_json, usage). Usage is an
-        # corrigenda.schemas.Usage (tokens in/out) or None when the
+        # corrigenda.core.schemas.Usage (tokens in/out) or None when the
         # provider cannot report consumption.
         return {
             "lines": [

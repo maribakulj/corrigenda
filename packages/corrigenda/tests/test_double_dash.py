@@ -13,11 +13,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from corrigenda.alto.parser import parse_alto_file
-from corrigenda.alto.rewriter import rewrite_alto_file
+from corrigenda.formats.alto.parser import parse_alto_file
+from corrigenda.formats.alto.rewriter import rewrite_alto_file
 from lxml import etree
 
-from corrigenda.schemas import HyphenRole
+from corrigenda.core.schemas import HyphenRole
 
 NS = "http://www.loc.gov/standards/alto/ns-v3#"
 
