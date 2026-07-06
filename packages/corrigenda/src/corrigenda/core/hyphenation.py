@@ -13,6 +13,7 @@ from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
     GuardConfig,
     HyphenRole,
+    LineGeometry,
     LineManifest,
     LLMLineInput,
 )
@@ -41,6 +42,9 @@ class ReconcileMetrics:
 def enrich_chunk_lines(
     line_manifests: list[LineManifest],
     all_lines_by_id: dict[str, LineManifest],
+    *,
+    include_geometry: bool = False,
+    page_dims: dict[str, tuple[int, int]] | None = None,
 ) -> list[LLMLineInput]:
     """
     Build LLMLineInput list from a chunk's LineManifests.
@@ -48,8 +52,23 @@ def enrich_chunk_lines(
     For each line:
     - prev_text / next_text come from all_lines_by_id lookups.
     - Hyphenation fields are populated only when hyphen_role != NONE.
+
+    ``include_geometry`` (§4.1 vision envelope) — when ``True`` and
+    ``page_dims`` supplies ``page_id -> (width, height)``, each line's
+    :class:`~corrigenda.core.schemas.LineGeometry` (its coords + page
+    dimensions) is copied verbatim onto the input. Off by default so a
+    text producer's payload is unchanged (byte-stable). The library only
+    copies these fields; it never opens an image.
     """
     result: list[LLMLineInput] = []
+
+    def _geometry(lm: LineManifest) -> LineGeometry | None:
+        if not include_geometry or not page_dims:
+            return None
+        dims = page_dims.get(lm.page_id)
+        if dims is None:
+            return None
+        return LineGeometry(coords=lm.coords, page_width=dims[0], page_height=dims[1])
 
     for lm in line_manifests:
         prev_text: str | None = None
@@ -60,6 +79,8 @@ def enrich_chunk_lines(
         if lm.next_line_id and lm.next_line_id in all_lines_by_id:
             next_text = all_lines_by_id[lm.next_line_id].ocr_text
 
+        geometry = _geometry(lm)
+
         if lm.hyphen_role == HyphenRole.NONE:
             result.append(
                 LLMLineInput(
@@ -67,6 +88,7 @@ def enrich_chunk_lines(
                     prev_text=prev_text,
                     ocr_text=lm.ocr_text,
                     next_text=next_text,
+                    geometry=geometry,
                 )
             )
         elif lm.hyphen_role == HyphenRole.BOTH:
@@ -84,6 +106,7 @@ def enrich_chunk_lines(
                     hyphen_join_with_prev=True,
                     backward_join_candidate=lm.hyphen_subs_content or None,
                     forward_join_candidate=lm.hyphen_forward_subs_content or None,
+                    geometry=geometry,
                 )
             )
         elif lm.hyphen_role == HyphenRole.PART1:
@@ -97,6 +120,7 @@ def enrich_chunk_lines(
                     hyphen_candidate=True,
                     hyphen_join_with_next=True,
                     forward_join_candidate=lm.hyphen_subs_content or None,
+                    geometry=geometry,
                 )
             )
         else:
@@ -111,6 +135,7 @@ def enrich_chunk_lines(
                     hyphen_candidate=True,
                     hyphen_join_with_prev=True,
                     backward_join_candidate=lm.hyphen_subs_content or None,
+                    geometry=geometry,
                 )
             )
 

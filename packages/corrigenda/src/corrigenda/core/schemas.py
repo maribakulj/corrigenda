@@ -471,6 +471,25 @@ class ChunkPlan(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+#: Opaque page-image reference (§4.1/§5.1). The library forwards it
+#: verbatim from ``run(source_images=…)`` into the payload and NEVER opens
+#: it — resolving/cropping/encoding pixels is the vision producer's job
+#: (invariant I4). Kept a bare ``str`` (path, URL, handle) so the core
+#: carries no image machinery.
+ImageRef = str
+
+
+class LineGeometry(BaseModel):
+    """Physical anchor for a line, copied verbatim by the compiler for
+    vision producers (§4.1): the line ``coords`` (ALTO bbox or PAGE polygon)
+    plus the page dimensions, enough to compute a unit-free relative bbox.
+    The library only *copies* these fields; it touches no pixel."""
+
+    coords: Coords
+    page_width: int
+    page_height: int
+
+
 class LLMLineInput(BaseModel):
     """One line worth of context sent to the LLM (OCR text + neighbours + hyphen hints)."""
 
@@ -485,6 +504,9 @@ class LLMLineInput(BaseModel):
     hyphen_join_with_prev: bool | None = None
     backward_join_candidate: str | None = None
     forward_join_candidate: str | None = None
+    # Vision envelope (§4.1) — populated by the compiler only when the
+    # producer asks (``wants_geometry``); ignored by text producers.
+    geometry: LineGeometry | None = None
 
 
 class LLMUserPayload(BaseModel):
@@ -494,6 +516,9 @@ class LLMUserPayload(BaseModel):
     page_id: str
     block_id: str | None = None
     lines: list[LLMLineInput]
+    # Vision envelope (§4.1) — opaque page image reference, populated by the
+    # compiler only when the producer asks (``wants_image``); never opened.
+    image_ref: ImageRef | None = None
 
 
 class LLMLineOutput(BaseModel):
@@ -639,6 +664,8 @@ __all__ = [
     "RetryPolicy",
     "ChunkRequest",
     "ChunkPlan",
+    "ImageRef",
+    "LineGeometry",
     "LLMLineInput",
     "LLMUserPayload",
     "LLMLineOutput",

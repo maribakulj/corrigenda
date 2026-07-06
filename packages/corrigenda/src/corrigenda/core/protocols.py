@@ -14,7 +14,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from corrigenda.core.schemas import ModelInfo, PageManifest, Usage
+from corrigenda.core.editing import EditScript
+from corrigenda.core.schemas import (
+    ImageRef,
+    LLMUserPayload,
+    ModelInfo,
+    PageManifest,
+    RetryPolicy,
+    Usage,
+)
+from corrigenda.errors import ValidationError
 
 
 class ProviderTransientError(Exception):
@@ -73,6 +82,58 @@ class BaseProvider(Protocol):
         cannot report it.
         """
         ...
+
+
+@runtime_checkable
+class EditProducer(Protocol):
+    """Producer contract of the edit protocol (§5.1).
+
+    From v2.0 the LLM ``BaseProvider`` is *an implementation* of this
+    contract, not the contract itself; a deterministic rules engine (§5.3)
+    and a vision/VLM producer (§5.2 bis) are others. A producer returns an
+    :class:`~corrigenda.core.editing.EditScript` plus optional token
+    :class:`~corrigenda.core.schemas.Usage`.
+
+    ``wants_geometry`` / ``wants_image`` let the compiler include the
+    physical anchor envelope (line geometry, opaque page image reference)
+    ONLY for producers that consume it — a text producer keeps a lean
+    payload. A producer with ``wants_image=True`` run without a matching
+    ``source_images`` entry is a start-up error (:func:`require_source_images`),
+    never a silent image-less call.
+    """
+
+    wants_geometry: bool
+    wants_image: bool
+
+    async def produce(
+        self, payload: LLMUserPayload, *, policy: RetryPolicy
+    ) -> tuple[EditScript, Usage | None]: ...
+
+
+def require_source_images(
+    producer: EditProducer,
+    source_files: list[str],
+    source_images: dict[str, ImageRef] | None,
+) -> None:
+    """Raise :class:`ValidationError` if a vision producer has no images (§5.1).
+
+    A producer that does not want images is always fine. A vision producer
+    needs a ``source_images`` mapping covering every source file — otherwise
+    the run would issue an image-less VLM call, which the spec forbids.
+    """
+    if not getattr(producer, "wants_image", False):
+        return
+    if not source_images:
+        raise ValidationError(
+            "producer requires page images (wants_image=True) but run() "
+            "received no source_images mapping"
+        )
+    missing = [s for s in source_files if s not in source_images]
+    if missing:
+        raise ValidationError(
+            f"producer requires page images but source_images is missing "
+            f"entries for: {sorted(missing)}"
+        )
 
 
 @runtime_checkable
@@ -148,9 +209,11 @@ class FormatAdapter(Protocol):
 
 __all__ = [
     "BaseProvider",
+    "EditProducer",
     "FormatAdapter",
     "OutputWriter",
     "PipelineObserver",
     "ProviderTransientError",
     "RewriteMetrics",
+    "require_source_images",
 ]
