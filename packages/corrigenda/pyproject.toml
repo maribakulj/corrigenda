@@ -1,0 +1,103 @@
+[project]
+name = "corrigenda"
+# Single source of truth for the version: src/corrigenda/__init__.py
+# `__version__`. Bump it there + add a CHANGELOG.md entry to release.
+dynamic = ["version"]
+description = "Structure-safe post-OCR correction of heritage transcriptions (ALTO, PAGE XML) — parsers, rewriters, hyphenation reconciler, span edit protocol."
+readme = "README.md"
+# License declared via classifier only — both `license = "Apache-2.0"`
+# (PEP 639 string) and `license = {file = "..."}` (dict form) produce
+# Metadata 2.4 fields (`license-expression`, `license-file`) that
+# twine < 7 rejects. Once twine 7+ is widely deployed, switch back to
+# `license = "Apache-2.0"`. LICENSE file is still in the sdist via
+# the hatch.build.targets.sdist include below.
+requires-python = ">=3.11"
+authors = [
+    { name = "alto-llm-corrector contributors" },
+]
+keywords = ["alto", "page-xml", "ocr", "xml", "llm", "digital-heritage", "transkribus", "escriptorium"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing :: Markup :: XML",
+]
+dependencies = [
+    "pydantic>=2.0,<3.0",
+    "lxml>=6.1,<7.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/maribakulj/alto-llm-corrector"
+Issues = "https://github.com/maribakulj/alto-llm-corrector/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+# Read __version__ from the package — keeps pyproject.toml and the
+# importable `corrigenda.__version__` in lockstep.
+path = "src/corrigenda/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/corrigenda"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/corrigenda",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+]
+
+# ---------------------------------------------------------------------------
+# ruff — CI lints src/ only; this config keeps `ruff check tests/` and the
+# pre-commit hook (which covers packages/corrigenda/) clean too. The test
+# ignores mirror the backend's: compact test code uses `l` loop vars, keeps
+# locals for readability, and imports late in a few end-to-end cases.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["E402", "E741", "F841"]
+
+# ---------------------------------------------------------------------------
+# coverage — the package now carries the algorithm tests (F11) and gates its
+# own coverage (~85% DoD; currently ~91%). The `corrigenda-tests` CI job runs
+# pytest with --cov=corrigenda.
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["corrigenda"]
+branch = true
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+
+# ---------------------------------------------------------------------------
+# mypy — the package ships `py.typed` (PEP 561) and is checked in --strict
+# mode (F12 / §8.3). The `corrigenda-types` CI job runs
+# `mypy --strict src/corrigenda` with lxml-stubs installed.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/corrigenda"]
+
+[[tool.mypy.overrides]]
+# lxml ships partial stubs (lxml-stubs); a few dynamic corners remain
+# untyped. We install lxml-stubs in CI; this keeps the odd residual
+# module import from failing strict mode.
+module = ["lxml.*"]
+ignore_missing_imports = true

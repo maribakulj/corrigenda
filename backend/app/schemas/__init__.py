@@ -1,6 +1,6 @@
 """Backend's schema surface.
 
-Domain models come from the pure ``alto_core.schemas`` package. HTTP
+Domain models come from the pure ``corrigenda.core.schemas`` package. HTTP
 DTOs (request/response payloads, SSE events) live next door in
 :mod:`app.schemas.http` — they're server-layer concerns, not domain.
 
@@ -8,18 +8,16 @@ This module re-exports both groups so existing
 ``from app.schemas import X`` call sites keep working.
 """
 
-from alto_core.schemas import (
+from corrigenda.core.schemas import (
     BlockManifest,
     ChunkGranularity,
     ChunkPlan,
     ChunkPlannerConfig,
     ChunkRequest,
     Coords,
+    CorrectionReport,
     DocumentManifest,
     HyphenRole,
-    JobManifest,
-    JobStatus,
-    JobTrace,
     LineManifest,
     LineStatus,
     LineTrace,
@@ -30,7 +28,7 @@ from alto_core.schemas import (
     ModelInfo,
     PageManifest,
     PipelineEventType,
-    Provider,
+    Usage,
 )
 
 from app.schemas.http import (
@@ -41,14 +39,18 @@ from app.schemas.http import (
     SSEEvent,
 )
 
+# Server-side job enums + record — moved out of corrigenda by spec F12.
+from app.schemas.job import JobManifest, JobStatus, Provider
+
 __all__ = [
-    # Domain (alto-core)
+    # Domain (corrigenda)
     "BlockManifest",
     "ChunkGranularity",
     "ChunkPlan",
     "ChunkPlannerConfig",
     "ChunkRequest",
     "Coords",
+    "CorrectionReport",
     # HTTP DTOs (backend-local)
     "CreateJobResponse",
     "DocumentManifest",
@@ -56,7 +58,6 @@ __all__ = [
     "JobManifest",
     "JobStatus",
     "JobStatusResponse",
-    "JobTrace",
     "LLMLineInput",
     "LLMLineOutput",
     "LLMResponse",
@@ -71,4 +72,5 @@ __all__ = [
     "PipelineEventType",
     "Provider",
     "SSEEvent",
+    "Usage",
 ]

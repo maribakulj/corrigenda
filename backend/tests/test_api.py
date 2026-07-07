@@ -44,7 +44,7 @@ class MockProvider:
                     "corrected_text": line_in["ocr_text"],
                 }
             )
-        return {"lines": lines_out}
+        return {"lines": lines_out}, None
 
 
 class BadKeyProvider:
@@ -178,7 +178,7 @@ def test_list_models_response_does_not_echo_api_key_on_provider_error():
     This test injects a deliberately leaky provider whose exception
     message contains the api_key in multiple shapes (URL `?key=...`
     and `Bearer ...` header). The handler must sanitise via
-    `alto_core.sanitize_error` before echoing — the key must not
+    `corrigenda.sanitize_error` before echoing — the key must not
     appear anywhere in the response.
     """
     from app import providers as prov_module
@@ -203,7 +203,7 @@ def test_list_models_response_does_not_echo_api_key_on_provider_error():
         body_text = resp.text
         assert secret not in body_text, (
             f"api_key leaked in /api/providers/models response: {body_text!r}. "
-            f"Handler must call alto_core.sanitize_error(str(exc), api_key=body.api_key)."
+            f"Handler must call corrigenda.sanitize_error(str(exc), api_key=body.api_key)."
         )
         # The redacted prefix (first 4 chars + "****") IS expected to
         # appear, confirming sanitize_error actually ran rather than
@@ -448,7 +448,7 @@ def test_download_not_ready(client: TestClient):
 
 def test_download_single_xml(client: TestClient):
     """Complete a job synchronously then download the output XML."""
-    from alto_core.alto.parser import build_document_manifest
+    from corrigenda.formats.alto.parser import build_document_manifest
 
     from app.jobs.runner import JobRunner
     from app.storage import init_job_dirs, output_dir, save_uploaded_files

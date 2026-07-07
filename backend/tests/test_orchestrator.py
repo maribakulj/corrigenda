@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alto_core.alto.parser import build_document_manifest, parse_alto_file
-from alto_core.pipeline.validator import HyphenIntegrityError
+from corrigenda.core.validator import HyphenIntegrityError
+from corrigenda.formats.alto.parser import build_document_manifest, parse_alto_file
 from lxml import etree
 
 from app.jobs.runner import JobRunner
@@ -53,7 +53,7 @@ class MockProvider:
 
         if self._invalid_json_times > 0:
             self._invalid_json_times -= 1
-            return {"bad_key": []}  # missing "lines"
+            return {"bad_key": []}, None  # missing "lines"
 
         if self._fail_times > 0:
             self._fail_times -= 1
@@ -68,7 +68,7 @@ class MockProvider:
                     "corrected_text": line_in["ocr_text"],
                 }
             )
-        return {"lines": lines_out}
+        return {"lines": lines_out}, None
 
 
 # ---------------------------------------------------------------------------
@@ -248,10 +248,14 @@ async def test_retry_on_invalid_json(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_fallback_on_persistent_failure(tmp_path: Path):
-    """MockProvider fails 3 times → OCR source kept, job still completed."""
+    """Persistent provider failure → OCR source kept, job still completed.
+
+    F1 — a *transient* burst of failures now recovers by downgrading
+    granularity and retrying, so the provider must fail persistently
+    (beyond the per-chunk budget) to force the terminal OCR fallback.
+    """
     store, job_id = _make_store_and_job()
-    # Fail more than max_attempts for the first chunk; succeed for the rest
-    provider = MockProvider(fail_times=3)
+    provider = MockProvider(fail_times=99)
     await _run(job_id, provider, tmp_path, store)
 
     job = store.get_job(job_id)
@@ -303,7 +307,7 @@ async def test_cross_page_hyphen_reconciled_through_colliding_ids(tmp_path: Path
     and silently picked the local file (causing self-pairing or wrong
     pairing). With the qualified (page_id, line_id) lookup the right
     partner is resolved and the pair survives the pipeline."""
-    from alto_core.alto.parser import build_document_manifest
+    from corrigenda.formats.alto.parser import build_document_manifest
 
     body_a = """\
 <TextBlock ID="TB1" HPOS="0" VPOS="0" WIDTH="200" HEIGHT="60">
@@ -388,7 +392,7 @@ class _SlowProvider:
 
     async def complete_structured(self, **kwargs):
         await asyncio.sleep(5.0)  # any value > the test's patched timeout
-        return {"lines": []}
+        return {"lines": []}, None
 
 
 @pytest.mark.asyncio
@@ -433,7 +437,7 @@ async def test_run_job_general_exception_marks_failed(
 ):
     """A non-timeout exception escaping the pipeline must mark the job
     as FAILED with a sanitized error (no api_key leak)."""
-    from alto_core.pipeline.correction_pipeline import CorrectionPipeline
+    from corrigenda.core.pipeline import CorrectionPipeline
 
     store, job_id = _make_store_and_job()
 
@@ -540,7 +544,7 @@ class _AlwaysFailProvider:
 # The pipeline now routes on isinstance(exc, ProviderTransientError);
 # providers are responsible for wrapping their httpx errors before
 # re-raising. Tests raise the canonical type directly.
-from alto_core.protocols.provider import ProviderTransientError
+from corrigenda.core.protocols import ProviderTransientError
 
 
 class _OneHyphenViolationThenOK:
@@ -568,14 +572,14 @@ class _OneHyphenViolationThenOK:
             {"line_id": line_in["line_id"], "corrected_text": line_in["ocr_text"]}
             for line_in in kwargs["user_payload"].get("lines", [])
         ]
-        return {"lines": lines_out}
+        return {"lines": lines_out}, None
 
 
 async def _capture_sleeps(monkeypatch):
     """Replace ``asyncio.sleep`` with a recorder that returns instantly.
 
     Returns the list that will accumulate the durations the pipeline
-    requested. Safe because alto-core uses ``asyncio.sleep`` at exactly
+    requested. Safe because corrigenda uses ``asyncio.sleep`` at exactly
     one site (the retry backoff at correction_pipeline.py:585) and the
     backend has zero call sites in its runtime path.
     """
@@ -794,7 +798,7 @@ async def test_chunk_error_event_payload_shape(
     directly is the most targeted way to exercise the catch site at
     correction_pipeline.py:405-414.
     """
-    from alto_core.pipeline.correction_pipeline import CorrectionPipeline
+    from corrigenda.core.pipeline import CorrectionPipeline
 
     async def _explode(self, **kwargs):
         raise OSError("disk on fire")
@@ -839,7 +843,7 @@ async def test_hyphen_partner_missing_event_emitted_with_direction(
     `_resolve_partner` to return None to exercise the missing-partner
     code path without needing a contrived multi-file fixture.
     """
-    import alto_core.pipeline.correction_pipeline as cp
+    import corrigenda.core.pipeline as cp
 
     monkeypatch.setattr(cp, "_resolve_partner", lambda *args, **kwargs: None)
 
@@ -973,7 +977,7 @@ class _NeverReturnsProvider:
     async def complete_structured(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         # Sleep arbitrarily long; the test will cancel before this fires.
         await asyncio.sleep(60)
-        return {"lines": []}
+        return {"lines": []}, None
 
 
 @pytest.mark.asyncio
@@ -985,7 +989,7 @@ async def test_runner_marks_job_failed_on_cancellation(tmp_path: Path):
     capacity sweep + TTL eviction both keyed off `_completed_at` so
     the job leaked across redeploys.
     """
-    from alto_core.alto.parser import build_document_manifest
+    from corrigenda.formats.alto.parser import build_document_manifest
 
     from app.jobs.runner import JobRunner
     from app.schemas import JobStatus

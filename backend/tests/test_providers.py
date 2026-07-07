@@ -225,7 +225,7 @@ async def test_anthropic_complete_structured_uses_tools_api():
         instance.post = AsyncMock(side_effect=capture)
 
         provider = AnthropicProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="fake",
             model="claude-3-5-sonnet-20240620",
             system_prompt="SYS",
@@ -269,7 +269,7 @@ async def test_anthropic_complete_structured_skips_thinking_block():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="fake",
             model="claude-x",
             system_prompt="SYS",
@@ -295,7 +295,7 @@ async def test_anthropic_complete_structured_text_block_fallback():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="fake",
             model="claude-x",
             system_prompt="SYS",
@@ -350,7 +350,7 @@ async def test_openai_complete_structured_uses_json_schema_response_format():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = OpenAIProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="sk-fake",
             model="gpt-4o",
             system_prompt="SYS",
@@ -403,7 +403,7 @@ async def test_mistral_complete_structured_sends_json_schema():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = MistralProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="key-fake",
             model="mistral-large",
             system_prompt="SYS",
@@ -444,7 +444,7 @@ async def test_google_complete_structured_uses_response_schema():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = GoogleProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="AIza-fake",
             model="gemini-1.5-pro",
             system_prompt="SYS",
@@ -726,7 +726,7 @@ async def test_anthropic_fallback_parses_prose_prefixed_json():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="fake",
             model="claude-sonnet-4",
             system_prompt="SYS",
@@ -749,7 +749,7 @@ async def test_anthropic_fallback_parses_code_fenced_json():
         instance = MockClient.return_value.__aenter__.return_value
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
-        result = await provider.complete_structured(
+        result, _usage = await provider.complete_structured(
             api_key="fake",
             model="claude-sonnet-4",
             system_prompt="SYS",
@@ -845,7 +845,7 @@ def test_wrap_if_transient_classifies_correctly(exc_factory, should_wrap, label)
     forgot to wrap 5xx would break exponential backoff on upstream
     blips. Either regression is caught here.
     """
-    from alto_core.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import _wrap_if_transient
 
@@ -874,7 +874,7 @@ async def test_call_llm_wraps_5xx_as_provider_transient_error():
     short-circuit to fallback (skipping the exponential-backoff retry
     that 5xx is supposed to get).
     """
-    from alto_core.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import call_llm
 
@@ -894,7 +894,7 @@ async def test_call_llm_passes_4xx_through_as_raw_http_status_error():
     first failure (the contract pinned by
     ``test_pipeline_classifies_client_http_4xx_as_non_retryable``).
     """
-    from alto_core.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import call_llm
 
@@ -920,7 +920,7 @@ async def test_get_json_wraps_5xx_as_provider_transient_error():
     centralise the wrapping; this test pins that the helper now does
     it on behalf of all callers.
     """
-    from alto_core.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import get_json
 
@@ -948,7 +948,7 @@ def test_wrap_preserves_status_code_on_http_errors(status):
     HTTPStatusError. Without this attribute an alerting rule like
     'page on 5xx, suppress on 429' would have to parse the exception
     message — fragile."""
-    from alto_core.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import _wrap_if_transient
 
@@ -971,7 +971,7 @@ def test_wrap_leaves_status_code_none_on_transport_errors(exc_factory):
     attribute must be ``None`` so observers can distinguish 'connection
     refused' from 'server returned 503'. A bug that set status_code
     to e.g. 0 on transport errors would corrupt alerting rules."""
-    from alto_core.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import _wrap_if_transient
 
@@ -988,7 +988,7 @@ async def test_call_llm_wrapped_5xx_exposes_status_code_and_original_via_cause()
     (chained by ``raise wrapped from exc``). The chain gives callers
     the response headers (e.g., Retry-After on 429) without exposing
     httpx in the protocol surface."""
-    from alto_core.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     from app.providers.base import call_llm
 
@@ -1011,7 +1011,7 @@ def test_provider_transient_error_default_status_code_is_none():
     """Backward compatibility — existing call sites that build
     ``ProviderTransientError("msg")`` without a status_code still
     work; the attribute defaults to None."""
-    from alto_core.protocols.provider import ProviderTransientError
+    from corrigenda.core.protocols import ProviderTransientError
 
     err = ProviderTransientError("plain message")
     assert err.status_code is None

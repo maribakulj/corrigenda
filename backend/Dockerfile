@@ -1,14 +1,14 @@
 # Stand-alone backend image used by docker-compose.
 #
 # Build context: repository root (see docker-compose.yml). Two-step
-# Python install: alto-core editable from the sibling path, then the
-# backend's own requirements.txt (which no longer references alto-core
+# Python install: corrigenda editable from the sibling path, then the
+# backend's own requirements.txt (which no longer references corrigenda
 # — see Stage 6 of the audit remediation).
 FROM python:3.11-slim
 WORKDIR /app
 
-COPY packages/alto-core /app/packages/alto-core
-RUN pip install --no-cache-dir -e /app/packages/alto-core
+COPY packages/corrigenda /app/packages/corrigenda
+RUN pip install --no-cache-dir -e /app/packages/corrigenda
 
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt

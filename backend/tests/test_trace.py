@@ -8,14 +8,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alto_core.alto.parser import build_document_manifest, parse_alto_file
-from alto_core.alto.rewriter import extract_output_texts, rewrite_alto_file
+from corrigenda.formats.alto.parser import build_document_manifest, parse_alto_file
+from corrigenda.formats.alto.rewriter import extract_output_texts, rewrite_alto_file
 
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.schemas import (
+    CorrectionReport,
     HyphenRole,
-    JobTrace,
     LineTrace,
     ModelInfo,
     Provider,
@@ -58,7 +58,7 @@ class IdentityProvider:
                 {"line_id": l["line_id"], "corrected_text": l["ocr_text"]}
                 for l in user_payload.get("lines", [])
             ]
-        }
+        }, None
 
 
 class CorrectionProvider:
@@ -84,7 +84,7 @@ class CorrectionProvider:
             lid = l["line_id"]
             text = self._corrections.get(lid, l["ocr_text"])
             lines_out.append({"line_id": lid, "corrected_text": text})
-        return {"lines": lines_out}
+        return {"lines": lines_out}, None
 
 
 class DriftProvider:
@@ -110,7 +110,7 @@ class DriftProvider:
                 }
                 for l in user_payload.get("lines", [])
             ]
-        }
+        }, None
 
 
 # ---------------------------------------------------------------------------
@@ -254,10 +254,22 @@ class TestTraceFallback:
             )
             assert t.validation_status == "fallback"
             assert t.fallback_reason is not None
-            # Fallback can be drift_guard or all_attempts_exhausted
-            # depending on whether validator or drift guard catches it first
-            assert (
-                "drift_guard" in t.fallback_reason or "all_attempts_exhausted" in t.fallback_reason
+            # The drift can be caught by the chunk-level validator
+            # (all_attempts_exhausted after downgrade) or, for non-hyphen
+            # lines whose LLM call succeeds, by the per-line acceptance
+            # guard. F1 — granularity downgrade means a drifting non-hyphen
+            # line is now individually rejected by check_line (reason
+            # "too_different_from_source" / neighbour / absorption) instead
+            # of being collateral in a whole-chunk hyphen fallback.
+            accepted_reasons = (
+                "drift_guard",
+                "all_attempts_exhausted",
+                "too_different_from_source",
+                "closer_to_",
+                "absorbs_",
+            )
+            assert any(r in t.fallback_reason for r in accepted_reasons), (
+                f"{t.line_id}: unexpected fallback_reason {t.fallback_reason!r}"
             )
 
 
@@ -268,7 +280,8 @@ class TestTraceFallback:
 
 class TestTraceJsonFile:
     def test_trace_json_exists(self):
-        """trace.json is written to the output directory."""
+        """trace.json is written to the output directory and IS the §9
+        CorrectionReport (post-unification: no JobTrace shape)."""
         job_id, _ = _run_job_with_traces(
             {"sample.xml": SAMPLE_XML.read_bytes()},
         )
@@ -276,19 +289,21 @@ class TestTraceJsonFile:
         assert trace_path.exists()
 
         data = json.loads(trace_path.read_text())
-        assert data["job_id"] == job_id
+        assert data["report_version"] == "1.0"
+        assert data["run_id"] == job_id  # runner feeds run_id=job_id
         assert data["total_lines"] > 0
         assert len(data["lines"]) == data["total_lines"]
+        assert "job_id" not in data  # the old JobTrace key is gone
 
     def test_trace_json_roundtrip(self):
-        """trace.json can be parsed back into JobTrace."""
+        """trace.json can be parsed back into a CorrectionReport."""
         job_id, _ = _run_job_with_traces(
             {"sample.xml": SAMPLE_XML.read_bytes()},
         )
         trace_path = output_dir(job_id) / "trace.json"
-        jt = JobTrace.model_validate_json(trace_path.read_text())
-        assert jt.job_id == job_id
-        assert len(jt.lines) > 0
+        report = CorrectionReport.model_validate_json(trace_path.read_text())
+        assert report.run_id == job_id
+        assert len(report.lines) > 0
 
 
 # ===========================================================================

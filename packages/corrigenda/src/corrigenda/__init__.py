@@ -1,0 +1,204 @@
+"""corrigenda — structure-safe post-OCR correction of heritage transcriptions.
+
+Sub-packages (§3 tree):
+
+- :mod:`corrigenda.core` — pure algorithms: schemas, guards, hyphenation
+  reconciliation, chunk planning, response validation, the orchestrating
+  :class:`CorrectionPipeline`, and every port (zero I/O, zero lxml —
+  enforced by the import-contract test).
+- :mod:`corrigenda.formats` — concrete transcription formats. Today
+  :mod:`corrigenda.formats.alto` (hardened parser + 4-path rewriter);
+  PAGE XML plugs in the same seam.
+- :mod:`corrigenda.producers` — edition-producer surfaces (the LLM
+  system prompt + JSON output schema today).
+
+Top-level re-exports give a single import surface. Format- and
+producer-bound symbols are exposed LAZILY (PEP 562) so that importing
+:mod:`corrigenda` from a core-only consumer never loads lxml.
+"""
+
+from typing import TYPE_CHECKING, Any
+
+from corrigenda.core.editing import (
+    EditOp,
+    EditRejection,
+    EditResult,
+    EditScript,
+    MatchAnchor,
+    RangeAnchor,
+    ReplaceLine,
+    ReplaceSpan,
+    apply_edit_script,
+    normalize_anchor,
+)
+from corrigenda.core.pipeline import (
+    CorrectionPipeline,
+    CorrectionResult,
+    sanitize_error,
+)
+from corrigenda.core.protocols import (
+    BaseProvider,
+    EditProducer,
+    OutputWriter,
+    PipelineObserver,
+    require_source_images,
+)
+from corrigenda.core.schemas import (
+    BlockManifest,
+    ChunkGranularity,
+    ChunkPlannerConfig,
+    CorrectionReport,
+    DocumentManifest,
+    GuardConfig,
+    HyphenRole,
+    LineManifest,
+    LineStatus,
+    LineTrace,
+    LLMLineInput,
+    LLMLineOutput,
+    ModelInfo,
+    PageManifest,
+    PairingPolicy,
+    RetryPolicy,
+    Usage,
+)
+from corrigenda.errors import (
+    CorrectionAborted,
+    CorrectionError,
+    ParseError,
+    ValidationError,
+)
+
+if TYPE_CHECKING:  # typed view of the lazy symbols below
+    from corrigenda.formats.alto.parser import (
+        build_document_manifest as build_document_manifest,
+    )
+    from corrigenda.formats.alto.parser import parse_alto_file as parse_alto_file
+    from corrigenda.formats.alto.rewriter import (
+        extract_output_texts as extract_output_texts,
+    )
+    from corrigenda.formats.alto.rewriter import (
+        rewrite_alto_file as rewrite_alto_file,
+    )
+    from corrigenda.formats.alto.adapter import (
+        AltoFormatAdapter as AltoFormatAdapter,
+    )
+    from corrigenda.formats.page.adapter import (
+        PageFormatAdapter as PageFormatAdapter,
+    )
+    from corrigenda.formats.page.parser import parse_page_file as parse_page_file
+    from corrigenda.formats.page.rewriter import (
+        rewrite_page_file as rewrite_page_file,
+    )
+    from corrigenda.producers.llm import (
+        OUTPUT_JSON_SCHEMA as OUTPUT_JSON_SCHEMA,
+    )
+    from corrigenda.producers.llm import SYSTEM_PROMPT as SYSTEM_PROMPT
+    from corrigenda.producers.llm_edit import LLMEditProducer as LLMEditProducer
+    from corrigenda.producers.rules import RulesProducer as RulesProducer
+    from corrigenda.producers.rules import SubstitutionRule as SubstitutionRule
+    from corrigenda.producers.rules import (
+        default_french_ocr_rules as default_french_ocr_rules,
+    )
+
+__version__ = "1.0.0"
+
+#: Lazily resolved top-level names -> their home module (PEP 562). These
+#: pull in lxml (formats) or producer surfaces, so they materialise only
+#: on first attribute access — `import corrigenda` alone stays pure.
+_LAZY: dict[str, str] = {
+    "build_document_manifest": "corrigenda.formats.alto.parser",
+    "parse_alto_file": "corrigenda.formats.alto.parser",
+    "extract_output_texts": "corrigenda.formats.alto.rewriter",
+    "rewrite_alto_file": "corrigenda.formats.alto.rewriter",
+    "AltoFormatAdapter": "corrigenda.formats.alto.adapter",
+    "PageFormatAdapter": "corrigenda.formats.page.adapter",
+    "parse_page_file": "corrigenda.formats.page.parser",
+    "rewrite_page_file": "corrigenda.formats.page.rewriter",
+    "OUTPUT_JSON_SCHEMA": "corrigenda.producers.llm",
+    "SYSTEM_PROMPT": "corrigenda.producers.llm",
+    "LLMEditProducer": "corrigenda.producers.llm_edit",
+    "RulesProducer": "corrigenda.producers.rules",
+    "SubstitutionRule": "corrigenda.producers.rules",
+    "default_french_ocr_rules": "corrigenda.producers.rules",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _LAZY.get(name)
+    if module_name is None:
+        raise AttributeError(f"module 'corrigenda' has no attribute {name!r}")
+    import importlib
+
+    return getattr(importlib.import_module(module_name), name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY))
+
+
+__all__ = [
+    # Parser / rewriter (lazy — formats)
+    "build_document_manifest",
+    "parse_alto_file",
+    "extract_output_texts",
+    "rewrite_alto_file",
+    "parse_page_file",
+    "rewrite_page_file",
+    "AltoFormatAdapter",
+    "PageFormatAdapter",
+    # Pipeline
+    "CorrectionPipeline",
+    "CorrectionResult",
+    # Edit protocol (§4) — pure core
+    "EditScript",
+    "EditOp",
+    "ReplaceLine",
+    "ReplaceSpan",
+    "MatchAnchor",
+    "RangeAnchor",
+    "EditResult",
+    "EditRejection",
+    "apply_edit_script",
+    "normalize_anchor",
+    # Producers (§5)
+    "EditProducer",
+    "require_source_images",
+    "RulesProducer",
+    "SubstitutionRule",
+    "default_french_ocr_rules",
+    "LLMEditProducer",
+    # Errors (§8.4)
+    "CorrectionError",
+    "ParseError",
+    "ValidationError",
+    "CorrectionAborted",
+    # Ports
+    "BaseProvider",
+    "OutputWriter",
+    "PipelineObserver",
+    # LLM contract (lazy — producers)
+    "OUTPUT_JSON_SCHEMA",
+    "SYSTEM_PROMPT",
+    "sanitize_error",
+    # Schemas (domain only)
+    "BlockManifest",
+    "ChunkGranularity",
+    "ChunkPlannerConfig",
+    "CorrectionReport",
+    "DocumentManifest",
+    "GuardConfig",
+    "HyphenRole",
+    "LineManifest",
+    "LineStatus",
+    "LineTrace",
+    "LLMLineInput",
+    "LLMLineOutput",
+    "ModelInfo",
+    "PageManifest",
+    "PairingPolicy",
+    "RetryPolicy",
+    "Usage",
+    # Version
+    "__version__",
+]

@@ -1,7 +1,7 @@
 """HTTP helpers for the bundled provider implementations.
 
 The LLM contract — :class:`BaseProvider`, :data:`OUTPUT_JSON_SCHEMA`,
-:data:`SYSTEM_PROMPT` — was moved to :mod:`alto_core.protocols.provider`
+:data:`SYSTEM_PROMPT` — was moved to :mod:`corrigenda.core.protocols`
 and is re-exported here so existing imports from ``app.providers.base``
 keep working.
 
@@ -19,12 +19,15 @@ from typing import Any
 
 import httpx
 
-# Re-exports — public LLM contract lives in alto-core now.
-from alto_core.protocols.provider import (  # noqa: F401  re-exported
-    OUTPUT_JSON_SCHEMA,
-    SYSTEM_PROMPT,
+# Re-exports — public LLM contract lives in corrigenda now.
+from corrigenda.core.protocols import (  # noqa: F401  re-exported
     BaseProvider,
     ProviderTransientError,
+)
+from corrigenda.core.schemas import Usage
+from corrigenda.producers.llm import (  # noqa: F401  re-exported
+    OUTPUT_JSON_SCHEMA,
+    SYSTEM_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,6 +123,37 @@ async def call_llm(
         if wrapped is exc:
             raise
         raise wrapped from exc
+
+
+def extract_usage(data: dict[str, Any]) -> Usage | None:
+    """Best-effort token usage from a provider response (F14).
+
+    Handles the three shapes the bundled providers see:
+      - OpenAI / Mistral: ``usage.{prompt_tokens, completion_tokens}``
+      - Anthropic:        ``usage.{input_tokens, output_tokens}``
+      - Google Gemini:    ``usageMetadata.{promptTokenCount, candidatesTokenCount}``
+
+    Returns ``None`` when no usage block is present.
+    """
+    u = data.get("usage")
+    if isinstance(u, dict):
+        if "prompt_tokens" in u or "completion_tokens" in u:
+            return Usage(
+                input_tokens=int(u.get("prompt_tokens") or 0),
+                output_tokens=int(u.get("completion_tokens") or 0),
+            )
+        if "input_tokens" in u or "output_tokens" in u:
+            return Usage(
+                input_tokens=int(u.get("input_tokens") or 0),
+                output_tokens=int(u.get("output_tokens") or 0),
+            )
+    gm = data.get("usageMetadata")
+    if isinstance(gm, dict):
+        return Usage(
+            input_tokens=int(gm.get("promptTokenCount") or 0),
+            output_tokens=int(gm.get("candidatesTokenCount") or 0),
+        )
+    return None
 
 
 def extract_chat_text(data: dict[str, Any], provider_label: str) -> dict[str, Any]:

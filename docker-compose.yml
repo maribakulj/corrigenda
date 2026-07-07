@@ -2,7 +2,7 @@ services:
   backend:
     build:
       # Build context is the repo root so the Dockerfile can reach the
-      # sibling packages/alto-core directory.
+      # sibling packages/corrigenda directory.
       context: .
       dockerfile: backend/Dockerfile
     ports:

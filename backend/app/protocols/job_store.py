@@ -1,8 +1,8 @@
-"""JobStore Protocol — alto-server's concern, not alto-core's.
+"""JobStore Protocol — alto-server's concern, not corrigenda's.
 
 Defined in backend because it represents the persistence + SSE fan-out
 layer of the FastAPI server. ARCHITECTURE.md §8.4 keeps this Protocol
-out of alto-core to avoid coupling the pure pipeline to server-side
+out of corrigenda to avoid coupling the pure pipeline to server-side
 infrastructure. When the eventual `alto-server` package is extracted
 (Phase 3), this file moves there.
 
@@ -16,9 +16,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
 
-from alto_core.schemas import JobManifest, JobStatus, Provider
-
 from app.schemas.http import SSEEvent
+from app.schemas.job import JobManifest, JobStatus, Provider
 
 
 @runtime_checkable
@@ -44,6 +43,7 @@ class JobStore(Protocol):
         error: str | None = None,
         images: dict[str, str] | None = None,
         line_traces: dict[str, Any] | None = None,
+        report: Any | None = None,
     ) -> None: ...
 
     def emit(self, job_id: str, event: str, data: dict[str, Any]) -> None: ...

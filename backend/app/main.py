@@ -71,7 +71,7 @@ def _rate_limit_handler(_request: Request, exc: Exception) -> JSONResponse:
 
 def create_app() -> FastAPI:
     # Configure root logging first so every subsequent log line (FastAPI's
-    # startup, our endpoints, alto-core's emitted events via LoggingObserver)
+    # startup, our endpoints, corrigenda's emitted events via LoggingObserver)
     # goes through the JSON formatter. Idempotent — safe to call on every
     # create_app (tests instantiate the app many times).
     setup_json_logging()

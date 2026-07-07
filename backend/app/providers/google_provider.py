@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.providers.base import call_llm, get_json
-from app.schemas import ModelInfo
+from app.providers.base import call_llm, extract_usage, get_json
+from app.schemas import ModelInfo, Usage
 
 _BASE = "https://generativelanguage.googleapis.com"
 _EXCLUDE_KEYWORDS = ("embed", "aqa", "attribute")
@@ -65,7 +65,7 @@ class GoogleProvider:
         user_payload: dict[str, Any],
         json_schema: dict[str, Any],
         temperature: float = 0.0,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], Usage | None]:
         schema_body = json_schema.get("schema", json_schema)
 
         gen_config: dict[str, Any] = {
@@ -105,4 +105,4 @@ class GoogleProvider:
         text = parts[0].get("text")
         if not text:
             raise ValueError("Gemini response has empty text in parts[0]")
-        return json.loads(text)
+        return json.loads(text), extract_usage(data)

@@ -9,7 +9,7 @@ import zipfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from alto_core.alto.parser import build_document_manifest
+from corrigenda.formats.alto.parser import build_document_manifest
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from sse_starlette.sse import EventSourceResponse
@@ -312,15 +312,17 @@ async def download_job(
 
 @router.get("/{job_id}/trace")
 async def get_job_trace(job: JobManifest = Depends(get_completed_job)) -> dict:
-    """Return per-line text traces for a completed job."""
-    if not job.line_traces:
+    """Return the job's CorrectionReport (§9) — per-line text traces.
+
+    The response IS the versioned ``CorrectionReport`` JSON (the same
+    document persisted as ``trace.json``): ``report_version`` / ``run_id``
+    (== ``job_id``) / ``total_lines`` / ``lines``. The pre-unification
+    ``{job_id, total_lines, lines}`` JobTrace shape is gone.
+    """
+    if job.report is None or not job.report.lines:
         raise HTTPException(status_code=404, detail="No traces available for this job.")
 
-    return {
-        "job_id": job.job_id,
-        "total_lines": len(job.line_traces),
-        "lines": [t.model_dump(exclude_none=True) for t in job.line_traces.values()],
-    }
+    return job.report.model_dump(exclude_none=True)
 
 
 # ---------------------------------------------------------------------------

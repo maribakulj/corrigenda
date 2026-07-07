@@ -5,10 +5,10 @@ code. The publish pipeline lives in three places that must stay in
 sync:
 
     .github/workflows/ci.yml                  (version coherence gate)
-    .github/workflows/publish-alto-core.yml   (HEAD-tag + version check)
-    scripts/release-alto-core.sh              (local release rehearsal)
+    .github/workflows/publish-corrigenda.yml   (HEAD-tag + version check)
+    scripts/release-corrigenda.sh              (local release rehearsal)
 
-Each one extracts ``alto_core.__version__`` from ``__init__.py`` with
+Each one extracts ``corrigenda.__version__`` from ``__init__.py`` with
 the same regex. If the regex drifts in one file, the others silently
 fall behind — a class of bug that only surfaces at release time, when
 the cost of a fix is highest.
@@ -27,8 +27,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # add another consumer (eg. a new GitHub Action), append it here.
 _VERSION_REGEX_FILES: list[Path] = [
     _REPO_ROOT / ".github" / "workflows" / "ci.yml",
-    _REPO_ROOT / ".github" / "workflows" / "publish-alto-core.yml",
-    _REPO_ROOT / "scripts" / "release-alto-core.sh",
+    _REPO_ROOT / ".github" / "workflows" / "publish-corrigenda.yml",
+    _REPO_ROOT / "scripts" / "release-corrigenda.sh",
 ]
 
 

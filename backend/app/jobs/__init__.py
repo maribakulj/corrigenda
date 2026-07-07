@@ -2,7 +2,7 @@
 
 Mix of in-place backend code (``store``, ``runner``, ``observers``,
 ``task_registry``, ``orchestrator`` compat wrapper) and re-export
-shims onto alto-core (``chunk_planner``, ``validator``,
+shims onto corrigenda (``chunk_planner``, ``validator``,
 ``line_acceptance``, ``correction_pipeline``).
 
 Intentionally empty at the package level so the module attributes

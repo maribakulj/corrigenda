@@ -311,8 +311,9 @@ def test_jobmanifest_rejects_invalid_status_via_setattr():
     ValidationError immediately, surfacing the real bug at the
     offending callsite.
     """
-    from alto_core.schemas import JobManifest
     from pydantic import ValidationError
+
+    from app.schemas import JobManifest
 
     job = JobManifest(job_id="j1", provider=Provider.OPENAI, model="m")
     with pytest.raises(ValidationError):

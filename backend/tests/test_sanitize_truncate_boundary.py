@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alto_core import CorrectionPipeline
-from alto_core.alto.parser import build_document_manifest
+from corrigenda import CorrectionPipeline
+from corrigenda.formats.alto.parser import build_document_manifest
 
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
@@ -39,7 +39,7 @@ class _NullProvider:
         return [ModelInfo(id="mock", label="mock")]
 
     async def complete_structured(self, **kwargs: Any) -> dict[str, Any]:
-        return {"lines": []}
+        return {"lines": []}, None
 
 
 def _make_store_and_job() -> tuple[JobStore, str]:

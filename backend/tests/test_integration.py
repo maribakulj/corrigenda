@@ -11,7 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from alto_core.alto.parser import build_document_manifest, parse_alto_file
+from corrigenda.formats.alto.parser import build_document_manifest, parse_alto_file
 from fastapi.testclient import TestClient
 from lxml import etree
 
@@ -56,13 +56,13 @@ class MockProvider:
     ) -> dict[str, Any]:
         if self._bad > 0:
             self._bad -= 1
-            return {"bad_key": []}  # missing "lines" → validation error
+            return {"bad_key": []}, None  # missing "lines" → validation error
 
         lines_out = [
             {"line_id": line["line_id"], "corrected_text": line["ocr_text"]}
             for line in user_payload.get("lines", [])
         ]
-        return {"lines": lines_out}
+        return {"lines": lines_out}, None
 
 
 # ---------------------------------------------------------------------------
@@ -369,18 +369,19 @@ def test_download_multi_zip():
 
 def test_fallback_on_invalid_json():
     """
-    Provider returns invalid JSON for every attempt (3×) → orchestrator falls back
-    to OCR source text for that chunk. Job still completes successfully.
+    Provider returns invalid JSON persistently → orchestrator falls back
+    to OCR source text. Job still completes successfully.
     asyncio.sleep is mocked so the retry back-off doesn't slow the test.
-    """
-    # invalid_json_times must be >= max_attempts (3) to exhaust all retries
-    mock = MockProvider(invalid_json_times=3)
 
-    # Patch alto-core directly: the backend shim no longer re-exports
+    F1 — a transient burst of invalid JSON now recovers via granularity
+    downgrade, so the failure must persist past the per-chunk budget to
+    force the terminal fallback.
+    """
+    mock = MockProvider(invalid_json_times=99)
+
+    # Patch corrigenda directly: the backend shim no longer re-exports
     # the `asyncio` module attribute (Stage 3 audit remediation).
-    with patch(
-        "alto_core.pipeline.correction_pipeline.asyncio.sleep", new=AsyncMock(return_value=None)
-    ):
+    with patch("corrigenda.core.pipeline.asyncio.sleep", new=AsyncMock(return_value=None)):
         job_id, out_files, store = _run_job_directly(
             {SAMPLE_XML.name: SAMPLE_XML.read_bytes()},
             mock=mock,

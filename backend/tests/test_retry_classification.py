@@ -16,7 +16,7 @@ invariants that L4 doesn't cover:
      ``message`` field, not the fixed hyphen tag.
 
 These were the three holes I caught when writing my own retry tests on
-the pre-extraction codebase; they survived the alto-core extraction
+the pre-extraction codebase; they survived the corrigenda extraction
 because the classifier didn't change.
 """
 
@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alto_core.alto.parser import build_document_manifest
-from alto_core.pipeline.validator import HyphenIntegrityError
+from corrigenda.core.validator import HyphenIntegrityError
+from corrigenda.formats.alto.parser import build_document_manifest
 
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
@@ -74,7 +74,7 @@ class _ScriptedProvider:
                 {"line_id": line["line_id"], "corrected_text": line["ocr_text"]}
                 for line in user_payload.get("lines", [])
             ]
-        }
+        }, None
 
 
 @pytest.fixture
@@ -221,7 +221,10 @@ async def test_fallback_warning_message_carries_sanitised_truncated_error(
     ``hyphen_integrity_violation`` is RESERVED for the retry event's
     error tag — the warning never uses it."""
     err = ValueError("Persistent JSON error " + "X" * 500)
-    provider = _ScriptedProvider([err, err, err])
+    # F1 — a failed chunk downgrades and retries at finer granularity, so
+    # the failure must persist across the whole per-chunk budget (6) to
+    # reach the terminal OCR fallback that emits the warning.
+    provider = _ScriptedProvider([err] * 6)
     events, _store, _job_id = await _run_and_collect(tmp_path, provider)
 
     warnings = [e for e in events if e.event == "warning"]

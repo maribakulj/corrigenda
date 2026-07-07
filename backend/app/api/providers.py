@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from alto_core import sanitize_error
+from corrigenda import sanitize_error
 from fastapi import APIRouter, HTTPException, Request
 
 from app.api.rate_limit import limiter
