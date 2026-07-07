@@ -40,20 +40,33 @@ diff classifié par TextLine :
 Pérennisé par `tests/test_byte_parity_corpus.py` (hashes golden sha256,
 indépendants de la version — rewrite sans arguments de provenance).
 
-## Décisions prises à ratifier par l'utilisateur
+## Décisions ratifiées par le mainteneur (2026-07-07)
 
-1. **Liste blanche §6.1 étendue à `STYLE`** (slow path). La lettre de la
-   spec ne cite que `ID`+`STYLEREFS`, mais sa doctrine vise les données
-   *périmées* par le changement de texte — le stylage (bold/italics) ne
-   l'est pas, et le supprimer détruisait du formatage réel sur le corpus
-   (30+ String stylés dans X0000002). Revenir à la lettre = retirer
-   `"STYLE"` du tuple dans `rewriter._emit_string`.
-2. **F8 validateur** : implémenté à la lettre (comptage 1:1 sur les
-   cibles ; sortie contexte optionnelle, mais strictement vérifiée quand
-   présente). L'alternative « exiger toutes les lignes » a été abandonnée.
-3. **`CorrectionPipeline(pairing_policy=…)`** : paramètre AJOUTÉ, à des fins
-   de provenance uniquement (l'appariement se fait au parse) — pour que
-   `config_fingerprint()` couvre les quatre politiques §8.2.
+Les trois décisions ci-dessous ont été **ratifiées** après analyse sur
+corpus ; la spec (`SPECS_LIB_V2.md` §6.1, F2, F8, §8.2) a été mise à jour
+en conséquence.
+
+1. **Liste blanche §6.1 étendue à `STYLE`** (slow path) — RATIFIÉE. La
+   lettre initiale ne citait que `ID`+`STYLEREFS`, mais la doctrine F2
+   vise les données *périmées* par le changement de texte — le stylage
+   (bold/italics) ne l'est pas. Analyse chiffrée (run contrefactuel,
+   rewriter avec vs sans l'entrée, lignes stylées forcées en slow path) :
+   **45 des 47 `String` stylés de X0000002 détruits** sans l'entrée
+   (27 bold, 6 underline, 5 italics, 5 smallcaps, 4 composés), répartis
+   sur 25 lignes — presque toutes des manchettes de presse à l'OCR abîmé,
+   c.-à-d. précisément les lignes où le LLM change le nombre de mots.
+   `STYLE` est désormais normatif dans §6.1.
+2. **F8 validateur** — RATIFIÉE (option « cibles uniquement »). Comptage
+   1:1 sur les cibles ; sortie contexte optionnelle mais strictement
+   vérifiée quand présente, puis écartée. Invariant vérifié sur corpus
+   (page de 566 lignes, 52 fenêtres) : chaque ligne est cible dans
+   **exactement un** chunk. L'alternative « exiger toutes les lignes »
+   forçait des corrections jetées et des retries inutiles — abandonnée.
+3. **`CorrectionPipeline(pairing_policy=…)`** — RATIFIÉE. Paramètre de
+   provenance uniquement (l'appariement se fait au parse) pour que
+   `config_fingerprint()` couvre les quatre politiques §8.2. Contrat
+   appelant documenté dans la spec : passer la même `PairingPolicy` qu'au
+   parse, sinon l'empreinte estampillée ment.
 
 ## Signalé, volontairement NON corrigé (hors périmètre autorisé)
 
@@ -127,7 +140,8 @@ comme trace d'époque.
 
 ## Reste (actions mainteneur, hors conteneur)
 
-- **Ratifier les 3 décisions** ci-dessus (surtout STYLE §6.1).
+- ~~Ratifier les 3 décisions~~ — **fait le 2026-07-07** (voir section
+  « Décisions ratifiées » ; spec mise à jour).
 - **Publier 1.0.0** (le bump + CHANGELOG daté + build vérifié sont faits) :
   1. `git tag corrigenda-v1.0.0` sur le commit de release, `git push origin corrigenda-v1.0.0` ;
   2. GitHub UI → Actions → « Publish corrigenda » → `testpypi`, vérifier, puis `pypi`

@@ -347,9 +347,14 @@ L'existant est conservé (parser, rewriter 4 chemins, provenance
 `processingStep`) avec les corrections normatives du §7. Points fixés :
 
 - **Réutilisation d'attributs en slow path — liste blanche explicite** :
-  `ID` et `STYLEREFS` sont réutilisés positionnellement ; `HPOS`/`WIDTH`
-  recalculés ; `VPOS`/`HEIGHT` hérités de la ligne ; `WC`/`CC`/`SUBS_*`
-  **jamais recyclés** (F2).
+  `ID`, `STYLEREFS` et `STYLE` sont réutilisés positionnellement ;
+  `HPOS`/`WIDTH` recalculés ; `VPOS`/`HEIGHT` hérités de la ligne ;
+  `WC`/`CC`/`SUBS_*` **jamais recyclés** (F2). `STYLE` (stylage inline
+  bold/italics, jumeau par-valeur de `STYLEREFS`) est dans la liste par
+  la doctrine F2 elle-même : elle ne proscrit que les données *invalidées*
+  par le changement de texte, et le stylage ne l'est pas — le supprimer
+  détruisait 45/47 `String` stylés du corpus X0000002 (mesuré, manchettes
+  de presse en tête). *Ratifié le 2026-07-07.*
 - La géométrie mot post-correction est une **approximation documentée**
   (attribut d'en-tête ou commentaire XML optionnel signalant la passe de
   correction ; le `processingStep` porte déjà la provenance).
@@ -426,13 +431,13 @@ Chaque entrée : constat → règle normative. Toutes sont **v1.0** sauf mention
 | # | Constat (fichier:ligne au commit revu) | Règle normative |
 |---|---|---|
 | **F1** | `downgrade_granularity` (`chunk_planner.py:30`) jamais appelé ; à l'épuisement des retries, `_apply_chunk_fallback` (`correction_pipeline.py:651`) reverte **tout le chunk** à l'OCR — au grain PAGE, une ligne malformée coûte la page entière | À l'épuisement du budget d'un chunk de grain G, **re-planifier les lignes du chunk au grain inférieur** (PAGE→BLOCK→WINDOW→LINE) et retenter ; seules les lignes dont le chunk LINE échoue passent en repli OCR. Budget total borné par `RetryPolicy.per_chunk_budget` (défaut : 6 tentatives cumulées). Événement `chunk_downgraded` émis à chaque descente |
-| **F2** | Fast path (`rewriter.py:272`) et slow path (`rewriter.py:314`) conservent/recyclent `WC`/`CC` : confidences périmées, `CC` de longueur incohérente avec le nouveau `CONTENT` | Tout changement de `CONTENT` **supprime `WC` et `CC`** sur le `String` concerné. Le slow path ne recycle que `ID` et `STYLEREFS` (liste blanche §6.1) |
+| **F2** | Fast path (`rewriter.py:272`) et slow path (`rewriter.py:314`) conservent/recyclent `WC`/`CC` : confidences périmées, `CC` de longueur incohérente avec le nouveau `CONTENT` | Tout changement de `CONTENT` **supprime `WC` et `CC`** sur le `String` concerné. Le slow path ne recycle que `ID`, `STYLEREFS` et `STYLE` (liste blanche §6.1, ratifiée 2026-07-07) |
 | **F3** | `etree.QName(last_child.tag)` (`parser.py:143`) lève sur commentaire/PI en fin de `TextLine` → échec du fichier entier | Toute itération d'enfants ignore les nœuds dont `tag` n'est pas `str` (commentaires, PI). Test avec fixture contenant commentaires |
 | **F4** | Détection UNTOUCHED : `reconstruct_textline(el) == nfc(corrected)` (`rewriter.py:117`) non strippé vs `ocr_text` strippé (`parser.py:25`) → lignes jamais UNTOUCHED, réécritures et métriques faussées | Comparaison sur formes **strippées des deux côtés**. Test : ligne avec SP de queue non corrigée → chemin UNTOUCHED |
 | **F5** | `_int_attr` (`_ns.py:46`) lève sur coordonnées flottantes (`"123.0"`) | `int(float(raw))`, arrondi trunc, avec test. Une valeur non numérique lève toujours |
 | **F6** | `_compute_geometry` (`rewriter.py:67-82`) : `unit` calculé sur le compte plein mais espaces pondérés 0,6 → le dernier token absorbe tout le déficit | Le poids 0,6 des espaces entre dans `total_weight` ; la correction d'arrondi se répartit ; le dernier token n'absorbe que l'arrondi résiduel |
 | **F7** | Appariement de césure purement séquentiel (`parser.py:33`), aucun contrôle géométrique inter-blocs | Documenté comme hypothèse + **politique d'appariement** injectable (`PairingPolicy`, défaut = comportement actuel). Pas de géométrie par défaut : les gardes aval couvrent ; le seam permet de durcir sans fork |
-| **F8** | Chevauchement de fenêtres : ligne corrigée au chunk N (bord, contexte tronqué) **sautée** au chunk N+1 (contexte plein) — la moins bonne correction gagne ; même mécanique quand la réconciliation écrit un PART2 hors chunk | Les chunks distinguent **lignes cibles** et **lignes de contexte** : une ligne n'est cible que dans le chunk où son contexte est maximal ; les recouvrements deviennent contexte pur. Le validateur n'attend de sortie que pour les cibles (le comptage 1:1 porte sur les cibles) |
+| **F8** | Chevauchement de fenêtres : ligne corrigée au chunk N (bord, contexte tronqué) **sautée** au chunk N+1 (contexte plein) — la moins bonne correction gagne ; même mécanique quand la réconciliation écrit un PART2 hors chunk | Les chunks distinguent **lignes cibles** et **lignes de contexte** : une ligne n'est cible que dans le chunk où son contexte est maximal ; les recouvrements deviennent contexte pur. Le validateur n'attend de sortie que pour les cibles (le comptage 1:1 porte sur les cibles) ; la sortie d'une ligne de contexte est **optionnelle mais strictement vérifiée quand présente**, puis écartée (la ligne est cible d'un chunk adjacent — invariant : chaque ligne est cible dans exactement un chunk). Ratifié 2026-07-07 |
 | **F9** | Rampe de température 0.0→0.3→0.5 codée en dur (`correction_pipeline.py:725`) → non-déterminisme dès le premier retry | `RetryPolicy(max_attempts, temperatures, backoffs, per_chunk_budget)` injectable. `RetryPolicy.default()` = comportement actuel ; `RetryPolicy.deterministic()` = températures toutes à 0 (pour un usage reproductible) |
 | **F10** | Aucun point d'annulation : un run ne peut pas être interrompu proprement | `should_abort: Callable[[], bool]` optionnel sur `run()`, sondé entre chunks et entre pages → `CorrectionAborted` levée, sorties non écrites. Les appels provider en vol ne sont pas interrompus (coopératif, documenté) |
 | **F11** | Les tests de l'algorithme (`hyphenation`, `chunk_planner`, `validator`, `line_acceptance`, `rewriter`, `parser`) vivent dans `backend/tests/` — la lib ne porte pas sa propre preuve | Rapatriement dans `packages/<lib>/tests/` ; le backend ne garde que ses tests d'intégration/transport. CI de la lib indépendante (matrix 3.11–3.13) |
@@ -480,6 +485,14 @@ reconcile_hyphen_pair(...), check_line(...), plan_page(...)
 objets frozen Pydantic, tous avec un défaut reproduisant le comportement
 actuel. **Empreinte de configuration** (`policy_fingerprint()` : hash stable
 du dump JSON trié) exposée pour la provenance (§11).
+
+Note (ratifiée 2026-07-07) : `CorrectionPipeline(pairing_policy=…)` est un
+paramètre de **provenance uniquement** — l'appariement des paires de
+coupure se fait au parse, avant le pipeline, et le pipeline ne ré-apparie
+jamais. Il existe pour que `config_fingerprint()` couvre les quatre
+politiques ci-dessus. Contrat appelant : passer la **même** `PairingPolicy`
+qu'au parse ; le pipeline ne peut pas le vérifier, et une politique
+différente rendrait l'empreinte estampillée mensongère.
 
 ### 8.3 Typage & qualité
 

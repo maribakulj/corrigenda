@@ -419,13 +419,14 @@ def _emit_string(
     copied every original attribute except SUBS, carrying stale
     ``WC``/``CC`` onto the rebuilt String.
 
-    ``STYLE`` (inline bold/italics/…) is a deliberate post-audit EXTENSION
-    of the §6.1 whitelist, which names only ``ID`` and ``STYLEREFS``: the
-    F2 doctrine targets data INVALIDATED by the text change, and styling —
+    ``STYLE`` (inline bold/italics/…) is part of the §6.1 whitelist
+    (ratified 2026-07-07, initially a post-audit extension): the F2
+    doctrine targets data INVALIDATED by the text change, and styling —
     like ``STYLEREFS``, its reference-based twin — is not. Dropping it
-    destroyed real formatting on the non-regression corpus (30+ bold/
-    italics Strings in X0000002). Flagged in PROGRESS_V1 for spec
-    ratification.
+    destroyed real formatting on the non-regression corpus (45 of the 47
+    styled Strings in X0000002, mostly press headlines whose garbled OCR
+    makes a slow-path word-count change the LIKELY correction, not an
+    edge case).
     """
     s = etree.SubElement(el, _tag("String", ns))
     if str_n < len(orig_string_attribs):
