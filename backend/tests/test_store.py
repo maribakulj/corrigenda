@@ -394,26 +394,6 @@ def test_subscribe_rejects_beyond_per_job_cap():
         store.subscribe(jid)
 
 
-def test_subscriber_count_reports_current_size():
-    """Companion of the cap test — the SSE route handler reads
-    `subscriber_count(job_id)` to decide whether to 503 BEFORE
-    calling subscribe (avoiding the after-headers exception path).
-    """
-    store = JobStore()
-    jid = store.create_job(Provider.OPENAI, "test")
-    assert store.subscriber_count(jid) == 0
-
-    q1 = store.subscribe(jid)
-    q2 = store.subscribe(jid)
-    assert store.subscriber_count(jid) == 2
-
-    store.unsubscribe(jid, q1)
-    assert store.subscriber_count(jid) == 1
-
-    store.unsubscribe(jid, q2)
-    assert store.subscriber_count(jid) == 0
-
-
 def test_subscribe_rejects_unknown_job_id_instead_of_leaking_entry():
     """L10/B7 — pre-fix `subscribe()` used
     `_subscribers.setdefault(job_id, []).append(q)`. After

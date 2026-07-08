@@ -504,7 +504,7 @@ async def test_run_job_resolves_provider_from_registry_when_none(
 # ===========================================================================
 #
 # The pipeline classifies exceptions into 3 retry buckets with distinct
-# backoff strategies (correction_pipeline.py:551-595). Pre-L4, none of
+# backoff strategies (corrigenda.core.pipeline). Pre-L4, none of
 # the three branches was individually exercised — a refactor of the
 # classifier could silently break one strategy and tests stayed green.
 # These tests pin the contract per branch.
@@ -580,7 +580,7 @@ async def _capture_sleeps(monkeypatch):
 
     Returns the list that will accumulate the durations the pipeline
     requested. Safe because corrigenda uses ``asyncio.sleep`` at exactly
-    one site (the retry backoff at correction_pipeline.py:585) and the
+    one site (the retry backoff at corrigenda.core.pipeline) and the
     backend has zero call sites in its runtime path.
     """
     sleeps: list[float] = []
@@ -632,7 +632,7 @@ async def test_pipeline_classifies_hyphen_violation_with_zero_backoff(
     await _run(job_id, provider, tmp_path, store)
 
     # backoff=0 means `await asyncio.sleep(backoff)` is skipped entirely
-    # (correction_pipeline.py:584 `if backoff > 0`), so no entry lands
+    # (corrigenda.core.pipeline `if backoff > 0`), so no entry lands
     # in our recorder.
     assert sleeps == [], (
         f"first hyphen_violation retry should skip sleep (backoff=0), got {sleeps!r}"
@@ -675,7 +675,7 @@ async def test_pipeline_classifies_transient_http_with_exponential_backoff(
     provider = _AlwaysFailProvider(lambda: ProviderTransientError("upstream 503"))
     await _run(job_id, provider, tmp_path, store)
 
-    # 3 attempts → 2 retries → 2 backoffs. correction_pipeline.py:577-579
+    # 3 attempts → 2 retries → 2 backoffs. corrigenda.core.pipeline
     # sets backoff = attempt * 2 → [2, 4] across attempts [1, 2].
     # The pipeline may run multiple chunks; assert the backoff PATTERN
     # rather than the exact count.
@@ -707,7 +707,7 @@ async def test_pipeline_classifies_llm_output_error_with_linear_backoff(
 
     assert sleeps, "llm_output_error branch should have triggered at least one backoff"
     for i, s in enumerate(sleeps):
-        # correction_pipeline.py:580-582 → backoff = attempt
+        # corrigenda.core.pipeline → backoff = attempt
         # → 1 (attempt 1) or 2 (attempt 2).
         assert s in (1, 2), (
             f"llm_output_error backoff should be linear (1 or 2), got {s} at index {i}"
@@ -796,7 +796,7 @@ async def test_chunk_error_event_payload_shape(
     `_run_chunk`'s retry/fallback envelope (e.g. a bug in
     `_build_hyphen_pairs` before the try block). Patching `_run_chunk`
     directly is the most targeted way to exercise the catch site at
-    correction_pipeline.py:405-414.
+    corrigenda.core.pipeline.
     """
     from corrigenda.core.pipeline import CorrectionPipeline
 
@@ -823,7 +823,7 @@ async def test_chunk_error_event_payload_shape(
         assert "message" in ce.data
         assert "exception_type" in ce.data
         # Truncation contract: the message field is bounded
-        # (correction_pipeline.py:410 uses [:200]).
+        # (corrigenda.core.pipeline uses [:200]).
         assert len(ce.data["message"]) <= 200
         # Exception class name is propagated (allows operators to
         # alert on OSError vs ValueError without parsing message).
@@ -903,7 +903,7 @@ async def test_retry_event_payload_shape(
         assert r.data["attempt"] >= 1
         # `error` is either the literal "hyphen_integrity_violation"
         # sentinel or the original message truncated to 120 chars
-        # (correction_pipeline.py:579, 582).
+        # (corrigenda.core.pipeline).
         assert isinstance(r.data["error"], str)
         assert len(r.data["error"]) <= 120
 

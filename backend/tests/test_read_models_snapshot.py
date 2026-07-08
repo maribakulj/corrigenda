@@ -9,10 +9,10 @@ shape* on a small deterministic corpus (``examples/sample.xml``, 2 pages /
 hand-built ``JobManifest`` — no HTTP, no job store. After the Phase-5
 extraction, the pure functions must reproduce this shape byte-for-byte.
 
-Problem 9: the projections read ``job.document_manifest.pages`` only. This
-test builds the ``JobManifest`` with an EMPTY ``line_traces`` map and still
-gets full output — proof that ``line_traces`` is dead for these endpoints
-and safe to delete in Phase 2.
+Problem 9: the projections read ``job.document_manifest.pages`` only —
+never the per-line trace. The redundant ``line_traces`` field was deleted
+in Phase 2; this test asserts it is gone and that full /diff and /layout
+output is still produced without it.
 """
 
 from __future__ import annotations
@@ -33,8 +33,6 @@ pytestmark = pytest.mark.skipif(not SAMPLE.exists(), reason="sample.xml not foun
 
 def _job() -> JobManifest:
     doc = build_document_manifest([(SAMPLE, "sample.xml")])
-    # line_traces deliberately left empty (default) — Problem 9: the
-    # projections must not depend on it.
     return JobManifest(
         job_id="snap",
         provider=Provider.OPENAI,
@@ -67,7 +65,9 @@ _LAYOUT_LINE_KEYS = {
 
 def test_diff_projection_shape_is_pinned():
     job = _job()
-    assert job.line_traces == {}  # Problem 9 — no traces needed
+    # Problem 9 (Phase 2): the redundant ``line_traces`` field has been
+    # removed entirely; /diff and /layout project from document_manifest.
+    assert not hasattr(job, "line_traces")
 
     diff = asyncio.run(get_job_diff(job=job))
 

@@ -257,10 +257,10 @@ class JobRunner:
             job_id,
             retries=result.retry_count,
             fallbacks=result.fallback_count,
-            line_traces=result.traces,
             # §9 unification — the run's CorrectionReport is the job's trace
             # artefact (served by /trace, dumped as trace.json). run_id ==
             # job_id (fed above), so the report self-correlates with the API.
+            # It carries the per-line LineTrace list; no separate copy is kept.
             report=result.report,
         )
 
