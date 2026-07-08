@@ -55,6 +55,31 @@ def trailing_hyphen_char(text: str, hyphen_chars: tuple[str, ...]) -> str | None
     return None
 
 
+def forward_partner_id(lm: LineManifest) -> str | None:
+    """The line_id this line's word continues ONTO, if any.
+
+    A ``PART1`` line continues to its ``hyphen_pair_line_id``; a ``BOTH``
+    line (tail of one hyphenated word, head of the next) continues to its
+    ``hyphen_forward_pair_id``; ``PART2`` / ``NONE`` continue nowhere.
+
+    Single source of truth for "who is my forward hyphen partner?": the
+    LINE-chain planner, the cross-block union-find, and the same-chunk
+    predicate all resolve the forward link through here, so the
+    role→field mapping (which field holds the forward id per role) lives in
+    exactly one place instead of being re-encoded at each call site.
+
+    NB this is the strictly *forward* partner. The window-target assignment
+    keeps a chain atomic in either direction and uses its own broader
+    ``planner._hyphen_partner_id`` (backward-inclusive); the two notions are
+    deliberately distinct.
+    """
+    if lm.hyphen_role == HyphenRole.PART1:
+        return lm.hyphen_pair_line_id
+    if lm.hyphen_role == HyphenRole.BOTH:
+        return lm.hyphen_forward_pair_id
+    return None
+
+
 def link_hyphen_pairs(
     lines: list[LineManifest],
     pairing_policy: PairingPolicy = DEFAULT_PAIRING_POLICY,
@@ -213,6 +238,7 @@ def link_cross_page_hyphens(
 __all__ = [
     "HYPHEN_CHARS",
     "trailing_hyphen_char",
+    "forward_partner_id",
     "link_hyphen_pairs",
     "disambiguate_page_ids",
     "link_cross_page_hyphens",

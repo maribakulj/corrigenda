@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from lxml import etree
 
+from corrigenda.core._parse import parse_int_tolerant
+
 
 def _detect_namespace(root: etree._Element) -> str:
     """Return the namespace URI from the root tag, or '' if none.
@@ -38,16 +40,13 @@ def _int_attr(el: etree._Element, name: str, default: int = 0) -> int:
     attrs (L10/B3).
 
     Spec F5 — some ALTO producers emit float-valued coordinates
-    (``HPOS="123.0"``, ``WIDTH="12.5"``). ``int("123.0")`` raises
-    ``ValueError`` and used to abort the whole file. We parse via
-    ``int(float(raw))`` so floats truncate toward zero (``"12.9" → 12``,
-    ``"-1.9" → -1``). A genuinely non-numeric value (``"abc"``) still
-    raises ``ValueError`` — only float-shaped strings are newly accepted.
+    (``HPOS="123.0"``, ``WIDTH="12.5"``); floats truncate toward zero. A
+    genuinely non-numeric value (``"abc"``) still raises ``ValueError`` (the
+    ``strict`` policy) — only blank/float-shaped strings are tolerated. The
+    parse policy lives in :func:`corrigenda.core._parse.parse_int_tolerant`,
+    shared with the PAGE parser so the two never drift.
     """
-    raw = el.get(name)
-    if raw is None or raw == "":
-        return default
-    return int(float(raw))
+    return parse_int_tolerant(el.get(name), default, strict=True)
 
 
 def make_safe_parser() -> etree.XMLParser:

@@ -20,22 +20,19 @@ from __future__ import annotations
 from lxml import etree
 
 from corrigenda.core._norm import nfc
+from corrigenda.core._parse import parse_int_tolerant
 from corrigenda.formats.page._ns import _tag
 
 
 def _index_of(te: etree._Element) -> int:
     """The ``@index`` of a TextEquiv, defaulting to 0 when absent/blank.
 
-    A non-integer index is treated as 0 rather than aborting the file —
-    the same tolerance the ALTO backend applies to malformed attributes.
+    A blank, float-shaped, or non-integer index defaults to 0 rather than
+    aborting the file — the shared tolerant policy the ALTO backend applies
+    to malformed attributes (previously this used ``int(raw)`` and so
+    aborted a float-valued ``@index`` to 0 where ALTO truncated it).
     """
-    raw = te.get("index")
-    if raw is None or raw == "":
-        return 0
-    try:
-        return int(raw)
-    except ValueError:
-        return 0
+    return parse_int_tolerant(te.get("index"), 0)
 
 
 def _direct_children(el: etree._Element, local: str, ns: str) -> list[etree._Element]:
