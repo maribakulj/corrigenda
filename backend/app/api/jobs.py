@@ -17,12 +17,12 @@ from starlette.background import BackgroundTask
 
 from app.api.deps import get_job_store
 from app.api.rate_limit import limiter
+from app.api.read_models import build_diff, build_layout
 from app.jobs import runner as _runner_module
 from app.jobs.runner import JobRunner
 from app.protocols import JobStore
 from app.schemas import (
     CreateJobResponse,
-    HyphenRole,
     JobManifest,
     JobStatus,
     JobStatusResponse,
@@ -332,56 +332,16 @@ async def get_job_trace(job: JobManifest = Depends(get_completed_job)) -> dict:
 
 @router.get("/{job_id}/diff")
 async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
-    """Return per-line OCR vs corrected diff data for a completed job."""
-    pages_out = []
-    total_lines = 0
-    modified_lines = 0
-    hyphen_pairs = 0
+    """Return per-line OCR vs corrected diff data for a completed job.
 
-    # get_completed_job already 404s if document_manifest is None, but
-    # an `assert` here would disappear under `python -O` (bandit B101).
-    # Keep a real runtime guard instead so the contract holds in any
-    # interpreter mode.
+    Thin adapter: the projection lives in ``app.api.read_models.build_diff``
+    (pure, unit-tested). ``get_completed_job`` already 404s on a missing
+    manifest, but an ``assert`` would disappear under ``python -O`` (bandit
+    B101), so keep a real runtime guard.
+    """
     if job.document_manifest is None:
         raise HTTPException(status_code=500, detail="Job has no document_manifest.")
-    for page in job.document_manifest.pages:
-        lines_out = []
-        for lm in page.lines:
-            corrected = lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
-            modified = corrected != lm.ocr_text
-            lines_out.append(
-                {
-                    "line_id": lm.line_id,
-                    "ocr_text": lm.ocr_text,
-                    "corrected_text": corrected,
-                    "modified": modified,
-                    "hyphen_role": lm.hyphen_role.value,
-                    "hyphen_subs_content": lm.hyphen_subs_content,
-                }
-            )
-            total_lines += 1
-            if modified:
-                modified_lines += 1
-            if lm.hyphen_role == HyphenRole.PART1:
-                hyphen_pairs += 1
-
-        pages_out.append(
-            {
-                "page_id": page.page_id,
-                "page_index": page.page_index,
-                "lines": lines_out,
-            }
-        )
-
-    return {
-        "job_id": job.job_id,
-        "pages": pages_out,
-        "stats": {
-            "total_lines": total_lines,
-            "modified_lines": modified_lines,
-            "hyphen_pairs": hyphen_pairs,
-        },
-    }
+    return build_diff(job.job_id, job.document_manifest)
 
 
 # ---------------------------------------------------------------------------
@@ -391,73 +351,13 @@ async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
 
 @router.get("/{job_id}/layout")
 async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
-    """Return structural layout data (blocks + lines with ALTO coordinates)."""
-    pages_out = []
+    """Return structural layout data (blocks + lines with ALTO coordinates).
+
+    Thin adapter over ``app.api.read_models.build_layout`` (pure, unit-tested).
+    """
     if job.document_manifest is None:
         raise HTTPException(status_code=500, detail="Job has no document_manifest.")
-    for page in job.document_manifest.pages:
-        line_by_id = {lm.line_id: lm for lm in page.lines}
-
-        blocks_out = []
-        for block in page.blocks:
-            lines_out = []
-            for line_id in block.line_ids:
-                lm = line_by_id.get(line_id)
-                if lm is None:
-                    continue
-                corrected = lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
-                lines_out.append(
-                    {
-                        "line_id": lm.line_id,
-                        "hpos": lm.coords.hpos,
-                        "vpos": lm.coords.vpos,
-                        "width": lm.coords.width,
-                        "height": lm.coords.height,
-                        "ocr_text": lm.ocr_text,
-                        "corrected_text": corrected,
-                        "modified": corrected != lm.ocr_text,
-                        "hyphen_role": lm.hyphen_role.value,
-                    }
-                )
-            blocks_out.append(
-                {
-                    "block_id": block.block_id,
-                    "hpos": block.coords.hpos,
-                    "vpos": block.coords.vpos,
-                    "width": block.coords.width,
-                    "height": block.coords.height,
-                    "lines": lines_out,
-                }
-            )
-
-        # Derive page dimensions from line coordinates if the ALTO Page element
-        # doesn't carry WIDTH/HEIGHT (some producers omit these attributes).
-        pw = page.page_width
-        ph = page.page_height
-        if pw == 0 or ph == 0:
-            xs = [lm.coords.hpos + lm.coords.width for lm in page.lines]
-            ys = [lm.coords.vpos + lm.coords.height for lm in page.lines]
-            if pw == 0 and xs:
-                pw = max(xs)
-            if ph == 0 and ys:
-                ph = max(ys)
-
-        # images map is keyed by source_file (not page_id) to avoid collisions
-        # when multiple ALTO files share the same Page/@ID value.
-        image_filename = job.images.get(page.source_file)
-        image_url = f"/api/jobs/{job.job_id}/images/{image_filename}" if image_filename else None
-        pages_out.append(
-            {
-                "page_id": page.page_id,
-                "page_index": page.page_index,
-                "page_width": pw,
-                "page_height": ph,
-                "image_url": image_url,
-                "blocks": blocks_out,
-            }
-        )
-
-    return {"job_id": job.job_id, "pages": pages_out}
+    return build_layout(job.job_id, job.document_manifest, job.images)
 
 
 # ---------------------------------------------------------------------------

@@ -304,7 +304,7 @@ class TestTraceKeyCollision:
         )
 
         job = store.get_job(job_id)
-        traces = job.line_traces
+        traces = job.report.lines
 
         # Total traces should equal total lines across both pages (no collision)
         total_lines = sum(len(p.lines) for p in doc.pages)
@@ -313,7 +313,7 @@ class TestTraceKeyCollision:
         )
 
         # All traces should have 5 text states
-        for t in traces.values():
+        for t in traces:
             assert t.source_ocr_text is not None
             assert t.output_alto_text is not None
 
@@ -377,7 +377,7 @@ class TestLineAcceptanceIntegration:
         )
 
         job = store.get_job(job_id)
-        by_line = {t.line_id: t for t in job.line_traces.values()}
+        by_line = {t.line_id: t for t in job.report.lines}
 
         # The swapped lines should have been caught and fallen back
         t0 = by_line[lines[0].line_id]

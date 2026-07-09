@@ -16,6 +16,7 @@ from pathlib import Path
 
 from lxml import etree
 
+from corrigenda.core._parse import parse_int_tolerant
 from corrigenda.core.pairing import (
     HYPHEN_CHARS,
     disambiguate_page_ids,
@@ -166,12 +167,8 @@ def parse_page_file(
 
 
 def _int_or_zero(raw: str | None) -> int:
-    if raw is None or raw == "":
-        return 0
-    try:
-        return int(float(raw))
-    except ValueError:
-        return 0
+    """PAGE dimensions: blank/float/garbage → 0 (shared tolerant policy)."""
+    return parse_int_tolerant(raw, 0)
 
 
 def build_document_manifest(

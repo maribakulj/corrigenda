@@ -18,6 +18,33 @@ Upload one or more ALTO XML files, choose a provider and model, and get correcte
 
 ---
 
+## Documentation map
+
+The correction engine has been extracted into a standalone library
+(`packages/corrigenda/`); this repo is that library **plus** a FastAPI +
+React app around it. Start with the authoritative docs; the rest are design
+history kept for provenance.
+
+**Authoritative (kept current):**
+
+| Doc | Scope |
+|---|---|
+| `README.md` (this file) | The app: what it does, how to run and deploy it |
+| `packages/corrigenda/docs/` | The library: `quickstart`, `formats`, `edit-protocol`, `versioning` |
+| `packages/corrigenda/CHANGELOG.md` | The library's released changes (SemVer) |
+| `SPECS_LIB_V2.md` | Normative spec for the `corrigenda` library |
+| `SPECS_API.md` / `SPECS_JOBS.md` / `SPECS_FRONTEND.md` | Backend / jobs / frontend specs |
+| `CONTRIBUTING.md`, `CLAUDE.md` | Contributor + assistant guidance |
+
+**Historical (design & audit trail — non-normative; may name modules that
+have since moved, e.g. the pre-extraction `backend/app/alto/*` layout):**
+`SPECS.md` (original app spec), `ARCHITECTURE.md`, `MIGRATION.md`,
+`AUDIT.md`, `ISSUE_LEDGER.md`, `REMEDIATION_STATUS.md`, `PLAN_V2.md`,
+`PROGRESS_V1.md`, `ROADMAP.md`, and the topic `SPECS_*` drafts. Read them for
+*why* a decision was made, not for *where* code lives today.
+
+---
+
 ## Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) 24+
@@ -94,7 +121,7 @@ Single-worker on purpose — see Dockerfile comments. A multi-worker setup would
 
 ## Hyphenation Reconciler
 
-ALTO files often encode inter-line hyphenation via `SUBS_TYPE="HypPart1/HypPart2"` and `SUBS_CONTENT` attributes, or via a trailing dash heuristic. The **Hyphenation Reconciler** (`backend/app/alto/hyphenation.py`) treats such pairs as atomic units:
+ALTO files often encode inter-line hyphenation via `SUBS_TYPE="HypPart1/HypPart2"` and `SUBS_CONTENT` attributes, or via a trailing dash heuristic. The **Hyphenation Reconciler** (`corrigenda.core.hyphenation`, in the `packages/corrigenda` library) treats such pairs as atomic units:
 
 - Both lines are always sent in the **same LLM chunk** — never split across requests.
 - The LLM is instructed to correct each line individually without moving text between them.

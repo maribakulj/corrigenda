@@ -15,6 +15,7 @@ from corrigenda.core.pairing import (
     disambiguate_page_ids as _disambiguate_page_ids,
     link_cross_page_hyphens as _link_cross_page_hyphens,
     link_hyphen_pairs as _link_hyphen_pairs,
+    trailing_hyphen_char,
 )
 from corrigenda.core.schemas import (
     DEFAULT_PAIRING_POLICY,
@@ -103,34 +104,19 @@ def _parse_textline_hyphen_info(
                 if sc:
                     forward_subs = sc
 
-    # Heuristic: last non-space token ends with "-" AND contains at
-    # least one alphabetic character before the trailing dash.
-    # L10/B6 — the pre-fix check accepted any token ending in "-",
-    # including pure-numeric forms ("1789-", "n°5-") and dialog
-    # em-dashes ("—"). A page like "Régnait de 1789-\n1799" would
-    # mark "1789-" as PART1 and "1799" as PART2; the rewriter
-    # would then emit a phantom HYP element on output. Requiring
-    # an alpha-before-dash narrows the heuristic to genuine
-    # word-break hyphens (the explicit SUBS_TYPE="HypPart1" path
-    # above still catches every legitimate hyphen pair flagged
-    # by the OCR engine itself).
+    # Heuristic: a genuine word-break hyphen is the last non-space token
+    # ending in "-" with an ALPHABETIC character immediately before it.
+    # L10/B6 — this narrowing rejects pure-numeric forms ("1789-", "n°5-")
+    # and dialog em-dashes that would otherwise mark a phantom PART1 and
+    # make the rewriter emit a spurious HYP on output. The rule now lives
+    # in ``core.pairing.trailing_hyphen_char`` (shared with the PAGE parser,
+    # which passes the wider HYPHEN_CHARS repertoire); ALTO restricts it to
+    # the plain hyphen-minus. The explicit SUBS_TYPE="HypPart1" path above
+    # still catches every hyphen pair the OCR engine itself flagged.
     if not is_part1:
-        tokens = line.ocr_text.split()
-        if tokens:
-            last = tokens[-1]
-            if last.endswith("-"):
-                bare = last.rstrip("-")
-                # Require the character IMMEDIATELY before the dash to
-                # be alphabetic — that's the signature of a genuine
-                # word-break hyphen ("écri-", "infor-"). Pre-fix "any
-                # alpha anywhere" let `n°5-` slip through because "n"
-                # is alpha; a year range like `1789-` was rejected
-                # correctly, but mixed alpha-numeric like list numbers
-                # still produced false positives. Adjacent-alpha is
-                # the strict version of the original heuristic.
-                if bare and bare[-1].isalpha():
-                    is_part1 = True
-                    forward_explicit = False
+        if trailing_hyphen_char(line.ocr_text, ("-",)) is not None:
+            is_part1 = True
+            forward_explicit = False
 
     # --- Set role based on detection ---
     if is_part2 and is_part1:

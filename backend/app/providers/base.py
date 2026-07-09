@@ -24,11 +24,12 @@ from corrigenda.core.protocols import (  # noqa: F401  re-exported
     BaseProvider,
     ProviderTransientError,
 )
-from corrigenda.core.schemas import Usage
 from corrigenda.producers.llm import (  # noqa: F401  re-exported
     OUTPUT_JSON_SCHEMA,
     SYSTEM_PROMPT,
 )
+
+from app.schemas import Usage
 
 logger = logging.getLogger(__name__)
 

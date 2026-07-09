@@ -42,7 +42,6 @@ class JobStore(Protocol):
         duration_seconds: float | None = None,
         error: str | None = None,
         images: dict[str, str] | None = None,
-        line_traces: dict[str, Any] | None = None,
         report: Any | None = None,
     ) -> None: ...
 

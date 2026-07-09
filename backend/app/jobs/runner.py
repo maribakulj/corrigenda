@@ -17,11 +17,10 @@ import warnings
 from pathlib import Path
 
 from corrigenda import CorrectionPipeline, CorrectionResult, sanitize_error
-from corrigenda.core.schemas import PipelineEventType
 
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore, OutputWriter
-from app.schemas import DocumentManifest, JobStatus
+from app.schemas import DocumentManifest, JobStatus, PipelineEventType
 
 logger = logging.getLogger(__name__)
 
@@ -257,10 +256,10 @@ class JobRunner:
             job_id,
             retries=result.retry_count,
             fallbacks=result.fallback_count,
-            line_traces=result.traces,
             # §9 unification — the run's CorrectionReport is the job's trace
             # artefact (served by /trace, dumped as trace.json). run_id ==
             # job_id (fed above), so the report self-correlates with the API.
+            # It carries the per-line LineTrace list; no separate copy is kept.
             report=result.report,
         )
 

@@ -153,8 +153,9 @@ def _run_job_with_traces(
     )
 
     job = store.get_job(job_id)
-    # Build a line_id-keyed view (traces use composite page_id:line_id keys internally)
-    by_line_id = {t.line_id: t for t in job.line_traces.values()}
+    # Build a line_id-keyed view from the job's CorrectionReport (the single
+    # trace artefact; the former parallel line_traces dict is gone).
+    by_line_id = {t.line_id: t for t in job.report.lines}
     return job_id, by_line_id
 
 

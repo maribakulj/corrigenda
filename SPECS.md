@@ -1,5 +1,13 @@
 # Guide complet — alto-llm-corrector avec Claude Code
 
+> ⚠️ **DOCUMENT HISTORIQUE (non normatif).** Ces specs décrivent l'ancienne
+> *application web* ALTO. La bibliothèque `corrigenda` (le cœur de correction
+> extrait et publié) fait désormais autorité via **`SPECS_LIB_V2.md`** ; le
+> backend/frontend sont couverts par `SPECS_API.md` / `SPECS_FRONTEND.md` /
+> `SPECS_JOBS.md`. Conservé pour la traçabilité de la conception initiale ;
+> plusieurs modules qu'il cite (`orchestrator.py`, `chunk_planner.py`,
+> `line_acceptance.py`, `correction_pipeline.py`) n'existent plus.
+
 ---
 
 ## PARTIE 1 — SPECS

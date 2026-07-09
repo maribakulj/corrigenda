@@ -21,14 +21,15 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from corrigenda.core.schemas import (
+from app.schemas import (
     CorrectionReport,
     DocumentManifest,
-    LineTrace,
+    JobManifest,
+    JobStatus,
     PipelineEventType,
+    Provider,
+    SSEEvent,
 )
-
-from app.schemas import JobManifest, JobStatus, Provider, SSEEvent
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,6 @@ class JobStore:
         duration_seconds: float | None = None,
         error: str | None = None,
         images: dict[str, str] | None = None,
-        line_traces: dict[str, LineTrace] | None = None,
         report: CorrectionReport | None = None,
     ) -> None:
         """Update mutable fields on the job manifest. None means "do not touch".
@@ -137,8 +137,6 @@ class JobStore:
                 job.error = error
             if images is not None:
                 job.images = images
-            if line_traces is not None:
-                job.line_traces = line_traces
             if report is not None:
                 job.report = report
             # Track when a job reaches terminal state for eviction
@@ -182,25 +180,14 @@ class JobStore:
                 raise LookupError(f"unknown or evicted job: {job_id!r}")
             subs = self._subscribers.setdefault(job_id, [])
             if len(subs) >= self.MAX_SUBSCRIBERS_PER_JOB:
-                # Caller (typically the SSE route handler) should
-                # pre-check via `subscriber_count(job_id)` and 503
-                # before reaching this path; the raise here is the
-                # belt-and-suspenders defence against TOCTOU between
-                # the pre-check and this acquire.
+                # Subscriber cap reached. ``stream_events`` catches this and
+                # yields a synthetic ``error`` SSE event to the client, so the
+                # caller never needs a pre-flight count check.
                 raise RuntimeError(
                     f"subscriber cap reached for job {job_id} (max {self.MAX_SUBSCRIBERS_PER_JOB})"
                 )
             subs.append(q)
         return q
-
-    def subscriber_count(self, job_id: str) -> int:
-        """Current number of active subscribers for ``job_id``. The SSE
-        route handler reads this BEFORE calling `subscribe()` so it
-        can return 503 cleanly (rather than racing with the cap-raise
-        inside an async generator, which would fire after the
-        response headers had started to flush)."""
-        # Single dict.get + len is atomic in CPython; no lock needed.
-        return len(self._subscribers.get(job_id, []))
 
     def unsubscribe(self, job_id: str, queue: asyncio.Queue) -> None:
         with self._lock:

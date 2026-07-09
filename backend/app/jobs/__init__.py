@@ -1,9 +1,9 @@
 """Backend's ``app.jobs`` namespace.
 
-Mix of in-place backend code (``store``, ``runner``, ``observers``,
-``task_registry``, ``orchestrator`` compat wrapper) and re-export
-shims onto corrigenda (``chunk_planner``, ``validator``,
-``line_acceptance``, ``correction_pipeline``).
+In-place backend infrastructure only: ``store`` (job state + SSE fan-out),
+``runner`` (drives corrigenda's ``CorrectionPipeline``), ``observers``,
+and ``task_registry``. The correction engine itself lives in the
+``corrigenda`` library; nothing here re-implements or shims it.
 
 Intentionally empty at the package level so the module attributes
 (``app.jobs.runner``, ``app.jobs.store``, …) are resolved through

@@ -3,12 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from corrigenda.core._norm import ncfold
-from corrigenda.core.pairing import HYPHEN_CHARS
-from corrigenda.core.guards import (
-    part1_text_migrated as _part1_text_migrated,
-    part2_boundary_word_diverged as _part2_boundary_word_diverged,
-    part2_text_migrated as _part2_text_migrated,
-)
+from corrigenda.core.pairing import HYPHEN_CHARS, forward_partner_id
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
     GuardConfig,
@@ -19,6 +14,128 @@ from corrigenda.core.schemas import (
 )
 
 _SENTINEL = object()  # distinguishes "not passed" from None
+
+
+# ---------------------------------------------------------------------------
+# Stage-B pair-drift guards (spec §7 stage B)
+#
+# These predicates detect text the LLM migrated ACROSS a hyphen pair —
+# PART1 extended/absorbing, PART2 collapsed/absorbing, or PART2's boundary
+# word diverging from its OCR continuation. They are consumed ONLY by
+# ``reconcile_hyphen_pair`` below (their sole caller), so they live here,
+# beside the reconciliation control flow they gate, rather than in
+# ``guards.py`` (which owns the line-level stage-C guards). Thresholds come
+# from ``GuardConfig`` (F13); the three stages tune together.
+# ---------------------------------------------------------------------------
+
+
+def _part1_text_migrated(
+    ocr_text: str,
+    corrected_text: str,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
+) -> bool:
+    """PART1 appears extended or pulled from PART2.
+
+    ``True`` when any of (thresholds from ``GuardConfig``):
+      - corrected word count exceeds OCR by more than
+        ``part1_max_word_growth`` (text pulled in from the next line);
+      - last word grew by more than ``part1_last_word_char_growth``
+        characters (word completion, e.g. ``"néces" → "nécessaires"``);
+      - overall char length grew past ``ratio*len + slack``.
+    """
+    ocr_bare = ocr_text.rstrip("-").rstrip()
+    corrected_bare = corrected_text.rstrip("-").rstrip(".")
+
+    ocr_words = ocr_bare.split()
+    corrected_words = corrected_bare.split()
+
+    if len(corrected_words) > len(ocr_words) + config.part1_max_word_growth:
+        return True
+
+    if ocr_words and corrected_words:
+        ocr_last = ocr_words[-1].rstrip("-")
+        corrected_last = corrected_words[-1].rstrip("-")
+        if len(corrected_last) > len(ocr_last) + config.part1_last_word_char_growth:
+            return True
+
+    if (
+        len(corrected_bare)
+        > len(ocr_bare) * config.part1_char_growth_ratio
+        + config.part1_char_growth_slack
+    ):
+        return True
+
+    return False
+
+
+def _part2_text_migrated(
+    ocr_text: str,
+    corrected_text: str,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
+) -> bool:
+    """PART2 appears collapsed or pulled from the next line.
+
+    ``True`` when (thresholds from ``GuardConfig``):
+      - corrected word count is less than ``part2_collapse_ratio`` of OCR
+        (text absorbed by PART1); or
+      - corrected word count exceeds OCR by more than
+        ``max(part2_expansion_floor, part2_expansion_ratio * OCR)``
+        (text pulled in from after PART2).
+    """
+    ocr_words = ocr_text.split()
+    corrected_words = corrected_text.split()
+
+    if (
+        ocr_words
+        and len(corrected_words) < len(ocr_words) * config.part2_collapse_ratio
+    ):
+        return True
+
+    expansion = max(
+        config.part2_expansion_floor,
+        int(len(ocr_words) * config.part2_expansion_ratio),
+    )
+    if len(corrected_words) > len(ocr_words) + expansion:
+        return True
+
+    return False
+
+
+def _part2_boundary_word_diverged(
+    ocr_text: str,
+    corrected_text: str,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
+) -> bool:
+    """PART2's first word lost its OCR continuity.
+
+    The first word of PART2 is the continuation of the hyphenated word from
+    PART1. If the LLM replaced it with an unrelated word the pair is
+    semantically broken even when overall lengths line up. Minor OCR
+    corrections (same first 2 chars, similar length) are allowed.
+    """
+    ocr_words = ocr_text.split()
+    cor_words = corrected_text.split()
+
+    if not ocr_words or not cor_words:
+        return False  # empty cases handled by migration/empty checks
+
+    ocr_first = ncfold(ocr_words[0])
+    cor_first = ncfold(cor_words[0])
+
+    if ocr_first == cor_first:
+        return False
+
+    prefix_len = min(config.boundary_prefix_len, len(ocr_first), len(cor_first))
+    if (
+        prefix_len >= config.boundary_prefix_len
+        and ocr_first[:prefix_len] == cor_first[:prefix_len]
+        and config.boundary_len_ratio_min
+        <= len(cor_first) / max(1, len(ocr_first))
+        <= config.boundary_len_ratio_max
+    ):
+        return False
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -285,30 +402,16 @@ def should_stay_in_same_chunk(
     """
     Return True if line_a and line_b must be in the same LLM chunk
     because they form a hyphenated pair.
+
+    Symmetric: true when either line forward-links to the other. The
+    role→field mapping is resolved by the shared ``forward_partner_id``
+    primitive (PART1→pair id, BOTH→forward id), so this predicate never
+    re-encodes it.
     """
-    # PART1 → its forward partner
-    if (
-        line_a.hyphen_role == HyphenRole.PART1
-        and line_a.hyphen_pair_line_id == line_b.line_id
-    ):
-        return True
-    if (
-        line_b.hyphen_role == HyphenRole.PART1
-        and line_b.hyphen_pair_line_id == line_a.line_id
-    ):
-        return True
-    # BOTH → its forward partner (via forward_pair_id)
-    if (
-        line_a.hyphen_role == HyphenRole.BOTH
-        and line_a.hyphen_forward_pair_id == line_b.line_id
-    ):
-        return True
-    if (
-        line_b.hyphen_role == HyphenRole.BOTH
-        and line_b.hyphen_forward_pair_id == line_a.line_id
-    ):
-        return True
-    return False
+    return (
+        forward_partner_id(line_a) == line_b.line_id
+        or forward_partner_id(line_b) == line_a.line_id
+    )
 
 
 # --- __all__ (Stage 3 audit remediation) ---

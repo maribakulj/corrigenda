@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from corrigenda.core.hyphenation import should_stay_in_same_chunk
+from corrigenda.core.pairing import forward_partner_id
 from corrigenda.core.schemas import (
     ChunkGranularity,
     ChunkPlan,
@@ -180,13 +181,9 @@ def _try_block(
             parent[rb] = ra
 
     for lm in page.lines:
-        if lm.hyphen_role == HyphenRole.PART1 and lm.hyphen_pair_line_id:
-            pair = line_by_id.get(lm.hyphen_pair_line_id)
-            if pair and pair.block_id != lm.block_id:
-                if lm.block_id in parent and pair.block_id in parent:
-                    union(lm.block_id, pair.block_id)
-        elif lm.hyphen_role == HyphenRole.BOTH and lm.hyphen_forward_pair_id:
-            pair = line_by_id.get(lm.hyphen_forward_pair_id)
+        partner_id = forward_partner_id(lm)
+        if partner_id:
+            pair = line_by_id.get(partner_id)
             if pair and pair.block_id != lm.block_id:
                 if lm.block_id in parent and pair.block_id in parent:
                     union(lm.block_id, pair.block_id)
@@ -325,13 +322,7 @@ def _plan_line(
         j = i
         while j < len(lines):
             cur = lines[j]
-            forward_pair = (
-                cur.hyphen_pair_line_id
-                if cur.hyphen_role == HyphenRole.PART1
-                else cur.hyphen_forward_pair_id
-                if cur.hyphen_role == HyphenRole.BOTH
-                else None
-            )
+            forward_pair = forward_partner_id(cur)
             if (
                 forward_pair
                 and j + 1 < len(lines)

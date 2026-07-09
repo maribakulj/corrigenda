@@ -103,6 +103,17 @@ if TYPE_CHECKING:  # typed view of the lazy symbols below
 
 __version__ = "1.0.0"
 
+# MAINTAINER NOTE — adding/removing a PUBLIC symbol touches THREE lists here,
+# by design (the friction is a feature: a public API change should be
+# deliberate, and ``tests/test_public_api_snapshot.py`` fails until all three
+# agree):
+#   1. either an eager ``from corrigenda.core... import`` above (pure-core
+#      symbols, no lxml) OR the ``_LAZY`` map below (format/producer symbols
+#      that must stay lazy so ``import corrigenda`` never loads lxml);
+#   2. the ``TYPE_CHECKING`` block above, if the symbol is lazy (so mypy/IDEs
+#      still see it);
+#   3. ``__all__`` at the bottom.
+#
 #: Lazily resolved top-level names -> their home module (PEP 562). These
 #: pull in lxml (formats) or producer surfaces, so they materialise only
 #: on first attribute access — `import corrigenda` alone stays pure.

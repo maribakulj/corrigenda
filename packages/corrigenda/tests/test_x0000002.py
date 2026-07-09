@@ -15,15 +15,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from corrigenda.core.hyphenation import (
-    ReconcileMetrics,
-    classify_reconcile_outcome,
-    reconcile_hyphen_pair,
-)
 from corrigenda.formats.alto.parser import parse_alto_file
 from corrigenda.formats.alto.rewriter import rewrite_alto_file
 
-from corrigenda.core.schemas import HyphenRole
+from corrigenda.core.schemas import HyphenRole, LineStatus
+
+from tests._pipeline_harness import run_pipeline
 
 X0000002_PATH = (
     Path(__file__).resolve().parent.parent.parent.parent / "examples" / "X0000002.xml"
@@ -41,86 +38,6 @@ pytestmark = pytest.mark.skipif(
 
 def _all_lines(pages):
     return {lm.line_id: lm for pg in pages for lm in pg.lines}
-
-
-def _reconcile_all_pairs(pages) -> ReconcileMetrics:
-    from copy import copy
-
-    metrics = ReconcileMetrics()
-    for page in pages:
-        line_by_id = {lm.line_id: lm for lm in page.lines}
-        for lm in page.lines:
-            # PART1 forward pairs
-            if lm.hyphen_role == HyphenRole.PART1 and lm.hyphen_pair_line_id:
-                part2 = line_by_id.get(lm.hyphen_pair_line_id)
-                if part2 is None:
-                    continue
-                corrected_p1 = lm.corrected_text or lm.ocr_text
-                corrected_p2 = part2.corrected_text or part2.ocr_text
-
-                final_p1, final_p2, subs = reconcile_hyphen_pair(
-                    lm,
-                    part2,
-                    corrected_p1,
-                    corrected_p2,
-                )
-                lm.corrected_text = final_p1
-                lm.hyphen_subs_content = subs
-                part2.corrected_text = final_p2
-                part2.hyphen_subs_content = subs
-
-                outcome = classify_reconcile_outcome(
-                    lm.ocr_text,
-                    part2.ocr_text,
-                    corrected_p1,
-                    corrected_p2,
-                    final_p1,
-                    final_p2,
-                    subs,
-                )
-            # BOTH forward pairs
-            elif lm.hyphen_role == HyphenRole.BOTH and lm.hyphen_forward_pair_id:
-                part2 = line_by_id.get(lm.hyphen_forward_pair_id)
-                if part2 is None:
-                    continue
-                corrected_p1 = lm.corrected_text or lm.ocr_text
-                corrected_p2 = part2.corrected_text or part2.ocr_text
-
-                lm_as_p1 = copy(lm)
-                lm_as_p1.hyphen_role = HyphenRole.PART1
-                lm_as_p1.hyphen_subs_content = lm.hyphen_forward_subs_content
-                lm_as_p1.hyphen_source_explicit = lm.hyphen_forward_explicit
-
-                final_p1, final_p2, subs = reconcile_hyphen_pair(
-                    lm_as_p1,
-                    part2,
-                    corrected_p1,
-                    corrected_p2,
-                )
-                lm.corrected_text = final_p1
-                lm.hyphen_forward_subs_content = subs
-                part2.corrected_text = final_p2
-                part2.hyphen_subs_content = subs
-
-                outcome = classify_reconcile_outcome(
-                    lm.ocr_text,
-                    part2.ocr_text,
-                    corrected_p1,
-                    corrected_p2,
-                    final_p1,
-                    final_p2,
-                    subs,
-                )
-            else:
-                continue
-
-            if outcome == "coherent":
-                metrics.coherent += 1
-            elif outcome == "fallback":
-                metrics.fallback += 1
-            else:
-                metrics.neutralised += 1
-    return metrics
 
 
 # ===========================================================================
@@ -402,59 +319,88 @@ class TestX0000002SimulatedCorrections:
 
 
 class TestX0000002ReconcileInvariant:
-    """After reconciliation, no mixed pair (one OCR, one corrected) exists."""
+    """After a REAL pipeline run, no mixed pair (one OCR, one corrected)
+    survives, and the reconciliation counts are those the shipping
+    ``CorrectionPipeline`` produces — not a test-side re-implementation.
 
-    def test_unchanged_reconcile(self):
-        """No corrections → all pairs neutralised (OCR=correction)."""
-        pages, _ = parse_alto_file(X0000002_PATH, "X0000002.xml")
-        rec = _reconcile_all_pairs(pages)
-        # All pairs: correction == OCR text → neutralised
-        assert rec.fallback == 0
-        # 99 PART1 (was 100, -1 from L10/B6 corpus invariant change) + 26 BOTH
-        assert rec.total == 125
+    Audit Phase 1: these tests drive the real pipeline via
+    ``tests._pipeline_harness.run_pipeline`` (identity or targeted
+    corrections through a ``DictProvider``). Injecting a fault into
+    ``pipeline._reconcile_chunk_hyphens`` turns them red — which the
+    former ``_reconcile_all_pairs`` phantom driver never did. The pinned
+    counts (coherent=115 / neutralised=10 / fallback=0, total=125) are the
+    real pipeline's output on the identity pass; a legitimate change to
+    reconciliation must update them consciously here.
+    """
+
+    def _pairs_not_mixed(self, run) -> bool:
+        """No hyphen pair may end with exactly one side reverted to OCR."""
+        for lm in run.lines.values():
+            if lm.hyphen_role == HyphenRole.PART1 and lm.hyphen_pair_line_id:
+                p2 = run.lines.get(lm.hyphen_pair_line_id)
+            elif lm.hyphen_role == HyphenRole.BOTH and lm.hyphen_forward_pair_id:
+                p2 = run.lines.get(lm.hyphen_forward_pair_id)
+            else:
+                continue
+            if p2 is None:
+                continue
+            p1_at_ocr = (lm.corrected_text or lm.ocr_text) == lm.ocr_text
+            p2_at_ocr = (p2.corrected_text or p2.ocr_text) == p2.ocr_text
+            if p1_at_ocr != p2_at_ocr:
+                return False
+        return True
+
+    def test_identity_run_reconciles_every_pair_no_fallback(self):
+        """Identity pass → every forward pair reconciled, zero fallback,
+        zero missing partner. Pins the real coherent/neutralised split."""
+        run = run_pipeline("X0000002.xml")
+        rm = run.result.reconcile_metrics
+        assert rm.fallback == 0
+        assert rm.total == 125  # 99 PART1 + 26 BOTH forward pairs
+        assert rm.coherent == 115
+        assert rm.neutralised == 10
+        assert run.result.total_reconciled == 125
+        # Every same-page partner resolved (guards audit Problem 1).
+        assert run.observer.count("hyphen_partner_missing") == 0
+        assert self._pairs_not_mixed(run)
 
     def test_coherent_pair_necessaires(self):
-        """Simulated coherent correction for néces-/saires."""
-        pages, _ = parse_alto_file(X0000002_PATH, "X0000002.xml")
-        lines = _all_lines(pages)
-
-        # Correct both sides preserving structure
-        lines[
-            "PAG_00000002_TL000014"
-        ].corrected_text = "la municipalité prenne les mesures néces-"
-        lines[
-            "PAG_00000002_TL000015"
-        ].corrected_text = "saires pour y faire les réparations les plus"
-
-        rec = _reconcile_all_pairs(pages)
-        # This specific pair should be coherent (join matches subs)
-        p1 = lines["PAG_00000002_TL000014"]
-        assert p1.hyphen_subs_content == "nécessaires"
+        """Coherent correction for néces-/saires through the real pipeline:
+        the pair is accepted, its explicit SUBS_CONTENT preserved, not mixed."""
+        run = run_pipeline(
+            "X0000002.xml",
+            {
+                "PAG_00000002_TL000014": "la municipalité prenne les mesures néces-",
+                "PAG_00000002_TL000015": "saires pour y faire les réparations les plus",
+            },
+        )
+        p1 = run.lines["PAG_00000002_TL000014"]
+        p2 = run.lines["PAG_00000002_TL000015"]
+        assert p1.corrected_text == "la municipalité prenne les mesures néces-"
+        assert p1.hyphen_subs_content == "nécessaires"  # explicit subs preserved
+        assert p2.corrected_text == "saires pour y faire les réparations les plus"
+        assert self._pairs_not_mixed(run)
 
     def test_no_mixed_pair_after_incoherent_correction(self):
-        """Simulate an incoherent LLM response → verify both fall back."""
-        pages, _ = parse_alto_file(X0000002_PATH, "X0000002.xml")
-        lines = _all_lines(pages)
-
-        # Make TL000033 (con-) incoherent: change boundary word
-        lines[
-            "PAG_00000002_TL000033"
-        ].corrected_text = "crient : « Vive la liberté ! » quand on con-"
-        lines[
-            "PAG_00000002_TL000034"
-        ].corrected_text = (
-            "tinue les patriotes qui crient : « Vive"  # con+tinue ≠ condamne
+        """Incoherent correction (con+tinue ≠ condamne) → the real pipeline
+        neutralises BOTH sides back to OCR and drops the SUBS_CONTENT."""
+        run = run_pipeline(
+            "X0000002.xml",
+            {
+                "PAG_00000002_TL000033": "crient : « Vive la liberté ! » quand on con-",
+                "PAG_00000002_TL000034": "tinue les patriotes qui crient : « Vive",
+            },
         )
-
-        _reconcile_all_pairs(pages)
-
-        p1 = lines["PAG_00000002_TL000033"]
-        p2 = lines["PAG_00000002_TL000034"]
-        # Both must be at OCR (fallback)
+        p1 = run.lines["PAG_00000002_TL000033"]
+        p2 = run.lines["PAG_00000002_TL000034"]
+        # Both reverted to OCR text; SUBS neutralised; pair not mixed.
         assert p1.corrected_text == p1.ocr_text
         assert p2.corrected_text == p2.ocr_text
-        # SUBS neutralised
         assert p1.hyphen_subs_content is None
+        assert self._pairs_not_mixed(run)
+        # LineStatus is a real enum on both sides (regression guard on the
+        # neutralise-to-OCR path leaving a coherent, non-fallback status).
+        assert isinstance(p1.status, LineStatus)
 
 
 # ===========================================================================
@@ -479,8 +425,8 @@ def test_x0000002_diagnostic_report(tmp_path, capsys):
     # Soft-hyphen check
     soft_hyp = [lm for lm in lines.values() if "\u00ad" in lm.ocr_text]
 
-    # Reconcile with no corrections
-    rec = _reconcile_all_pairs(pages)
+    # Reconcile via the REAL pipeline (identity pass), not a test copy.
+    rec = run_pipeline("X0000002.xml").result.reconcile_metrics
 
     # Rewriter with no corrections
     _, rw, _paths = rewrite_alto_file(X0000002_PATH, pages, "test", "test-model")
