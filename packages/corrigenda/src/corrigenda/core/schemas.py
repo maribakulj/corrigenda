@@ -252,14 +252,25 @@ class ChunkPlannerConfig(FrozenPolicy):
 class GuardConfig(FrozenPolicy):
     """All anti-migration / acceptance thresholds in one frozen object (F13).
 
-    The pipeline runs three stages of text-migration guards, each with its
-    own thresholds (see ``pipeline/migration_guards.py`` for the A/B/C
-    matrix). Pre-F13 those numbers were scattered as module constants
-    across ``line_acceptance.py``, ``migration_guards.py`` and the
-    validator. They are gathered here so a consumer can tune them
-    coherently — **the three stages must be tuned together**: tightening
-    one stage without adjusting the others can leak a migration through
+    The pipeline runs three stages of text-migration guards, each living
+    beside the control flow that acts on it (see ``core/guards.py`` for the
+    A/B/C map): Stage A in ``validator._check_pair_drift`` (pre-retry),
+    Stage B in ``hyphenation`` (pair reconciliation), Stage C in
+    ``guards.check_line`` (line-level acceptance). Pre-F13 the numbers were
+    scattered as module constants; they are gathered here so a consumer can
+    tune them coherently — **the three stages must be tuned together**:
+    tightening one stage without the others can leak a migration through
     the gap.
+
+    Intentional per-stage twins (NOT accidental duplication — do not
+    "dedup" them): PART1 word-growth and PART2 collapse are checked at BOTH
+    Stage A and Stage B, deliberately as separate knobs so each stage tunes
+    independently. Stage A (pre-retry) is more permissive — it tolerates a
+    PART1 growth of 2 before forcing a retry — while Stage B (post-retry
+    reconciliation) is stricter at 1 before falling back. Collapsing the
+    twins would either force the two stages to share a value (removing the
+    per-stage flexibility the staged design exists for) or silently change
+    guard behaviour. Each twin below cross-references its partner.
 
     Every default equals the pre-F13 constant, so ``GuardConfig()`` is
     byte-for-byte compatible with the historical behaviour.
@@ -285,8 +296,10 @@ class GuardConfig(FrozenPolicy):
     #: … and matches source+neighbour concatenated above this similarity.
     absorption_concat_similarity: float = 0.8
 
-    # --- Stage B: hyphen-pair reconciliation (migration_guards) ---
+    # --- Stage B: hyphen-pair reconciliation (hyphenation._part1/2_*) ---
     #: PART1 corrected word count may exceed OCR by at most this many.
+    #: Stage-B twin of ``pair_drift_part1_word_growth`` (Stage A); stricter
+    #: here (1) than at Stage A (2) on purpose — see the class docstring.
     part1_max_word_growth: int = 1
     #: PART1 last word may grow by at most this many characters.
     part1_last_word_char_growth: int = 3
@@ -294,6 +307,8 @@ class GuardConfig(FrozenPolicy):
     part1_char_growth_ratio: float = 1.4
     part1_char_growth_slack: int = 8
     #: PART2 collapsed if corrected word count < ratio * OCR word count.
+    #: Stage-B twin of ``pair_drift_part2_collapse_ratio`` (Stage A); same
+    #: default today, kept separate so the two stages tune independently.
     part2_collapse_ratio: float = 0.4
     #: PART2 expansion allowance: OCR word count + max(floor, ratio*OCR).
     part2_expansion_floor: int = 3
@@ -305,11 +320,13 @@ class GuardConfig(FrozenPolicy):
     boundary_len_ratio_max: float = 2.0
 
     # --- Stage A: pre-retry pair drift (validator._check_pair_drift) ---
-    #: PART1 grew by more than this many words → drift (retry).
+    #: PART1 grew by more than this many words → drift (retry). Stage-A twin
+    #: of ``part1_max_word_growth`` (Stage B); more permissive (2) here.
     pair_drift_part1_word_growth: int = 2
     #: PART2 checked for collapse only when OCR had at least this many words.
     pair_drift_part2_min_words: int = 2
     #: PART2 collapsed if corrected word count < ratio * OCR word count.
+    #: Stage-A twin of ``part2_collapse_ratio`` (Stage B).
     pair_drift_part2_collapse_ratio: float = 0.4
 
     # --- Edit protocol E4: per-op span drift (core/editing.py) ---

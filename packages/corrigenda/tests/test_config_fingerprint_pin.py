@@ -104,19 +104,30 @@ _GUARD_FIELDS = {
 
 
 def test_guard_config_field_set_is_frozen():
-    """21 knobs today. Removing one (the Problem-7 dedup) must be a
-    deliberate edit here, paired with a version bump."""
+    """21 knobs today. Removing one is a public-API break (each field is
+    provenance-fingerprinted, §11) → deliberate edit here + a version bump."""
     assert set(GuardConfig.model_fields) == _GUARD_FIELDS
     assert len(_GUARD_FIELDS) == 21
 
 
-def test_duplicated_ratio_knobs_still_present_and_documented():
-    """The two duplicated-concept knob pairs the audit flagged for merge.
-    Pinned so the Phase-4 consolidation is visible and intentional."""
+def test_per_stage_twin_knobs_are_intentional_not_duplication():
+    """Phase-4 decision: the PART1/PART2 knobs that appear at BOTH Stage A
+    (validator, pre-retry) and Stage B (hyphenation, reconcile) are kept as
+    SEPARATE knobs on purpose — NOT accidental duplication to be merged.
+
+    The PART1 twin proves the point directly: the two stages carry
+    DIFFERENT defaults (Stage A tolerates 2, Stage B 1), so they cannot be
+    one field without changing guard behaviour. The PART2 twin shares a
+    default today but stays separate so the stages tune independently.
+    Merging either is a breaking change (removes a fingerprinted field) for
+    no behavioural benefit; this test pins the intent so a future reader
+    doesn't mistake the twins for redundancy.
+    """
     g = GuardConfig()
-    # Same concept ("PART2 collapsed too far"), same value, two knobs.
-    assert g.part2_collapse_ratio == 0.4
-    assert g.pair_drift_part2_collapse_ratio == 0.4
-    # Same concept ("PART1 grew too many words"), DIFFERENT value per stage.
-    assert g.part1_max_word_growth == 1
-    assert g.pair_drift_part1_word_growth == 2
+    # PART1 growth: DIFFERENT per stage → provably not one knob.
+    assert g.part1_max_word_growth == 1  # Stage B (stricter)
+    assert g.pair_drift_part1_word_growth == 2  # Stage A (more permissive)
+    assert g.part1_max_word_growth != g.pair_drift_part1_word_growth
+    # PART2 collapse: same value today, deliberately two independent knobs.
+    assert g.part2_collapse_ratio == 0.4  # Stage B
+    assert g.pair_drift_part2_collapse_ratio == 0.4  # Stage A
