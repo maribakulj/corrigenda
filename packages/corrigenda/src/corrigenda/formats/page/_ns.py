@@ -1,42 +1,26 @@
-"""Shared PAGE XML namespace + geometry helpers.
+"""PAGE-specific namespace + geometry helpers.
 
-PAGE (PRImA) ships a family of dated namespaces
-(``…/pagecontent/2013-07-15`` through ``2019-07-15`` and later). Parser
-and rewriter both detect the namespace from the root tag and address
-elements through :func:`_tag`, exactly like the ALTO backend. The
-hardened lxml parser is shared verbatim with the ALTO backend — XML
-security is format-independent, so there is one canonical
-``make_safe_parser`` and every ``etree.parse``/``fromstring`` call site
-in ``formats/`` goes through it (enforced by ``test_xml_security.py``).
+The format-agnostic pieces — namespace detection, tag qualification, and
+the hardened ``make_safe_parser`` — live in :mod:`corrigenda.formats._xml`
+and are re-exported here under the same private names PAGE call sites
+already use. PAGE no longer reaches sideways into ``formats.alto`` for the
+shared parser (the former ``page → alto`` edge is gone); both formats are
+siblings of the neutral ``_xml`` module. Only the PAGE-specific schema-year
+/ ``MetadataItem`` logic and the polygon→bbox conversion stay here.
 """
 
 from __future__ import annotations
 
-# The hardened parser is format-agnostic; reuse the single canonical
-# implementation rather than forking a second copy (the security grep
-# contract covers every call site under formats/ regardless).
-from corrigenda.formats.alto._ns import make_safe_parser  # noqa: F401  re-exported
+from corrigenda.formats._xml import (
+    detect_namespace as _detect_namespace,
+    make_safe_parser as make_safe_parser,
+    tag as _tag,
+)
 
 #: PAGE namespace URIs are dated; anything from this year onward carries
 #: the richer ``Metadata/MetadataItem`` provenance slot (P7). Earlier
 #: schemas fall back to ``Metadata/Comments``.
 _METADATA_ITEM_MIN_YEAR = 2019
-
-
-def _detect_namespace(root: object) -> str:
-    """Return the namespace URI from the root tag, or '' if none.
-
-    Mirrors the ALTO detector: defensive against a tag that opens with
-    ``{`` but has no closing brace.
-    """
-    tag = getattr(root, "tag", "")
-    if isinstance(tag, str) and tag.startswith("{") and "}" in tag:
-        return tag[1 : tag.index("}")]
-    return ""
-
-
-def _tag(local: str, ns: str) -> str:
-    return f"{{{ns}}}{local}" if ns else local
 
 
 def _namespace_year(ns: str) -> int | None:
@@ -86,6 +70,9 @@ def polygon_to_bbox(points: str) -> tuple[int, int, int, int]:
 
 
 __all__ = [
+    # re-exported from formats._xml for PAGE call sites
+    "_detect_namespace",
+    "_tag",
     "make_safe_parser",
     "supports_metadata_item",
     "polygon_to_bbox",

@@ -2,7 +2,8 @@
 
 Roadmap L10 Phase 1 (B1) — these tests pin the contract that EVERY
 lxml parser instantiation in corrigenda goes through the hardened
-``make_safe_parser()`` helper in ``corrigenda.formats.alto._ns``.
+``make_safe_parser()`` helper in ``corrigenda.formats._xml`` (the
+format-neutral home; each format's ``_ns`` re-exports it).
 
 What the hardened parser actually buys us (and what it does NOT):
 
@@ -227,7 +228,7 @@ def test_make_safe_parser_returns_fresh_instance_per_call():
     (lxml parsers are not documented as thread-safe). A future "cache
     the parser" optimisation that breaks this would surface here.
     """
-    from corrigenda.formats.alto._ns import make_safe_parser
+    from corrigenda.formats._xml import make_safe_parser
 
     p1 = make_safe_parser()
     p2 = make_safe_parser()
@@ -246,15 +247,14 @@ def test_make_safe_parser_enables_all_four_safety_flags():
     """
     import ast
 
-    ns_path = (
+    xml_path = (
         Path(__file__).resolve().parents[1]
         / "src"
         / "corrigenda"
         / "formats"
-        / "alto"
-        / "_ns.py"
+        / "_xml.py"
     )
-    tree = ast.parse(ns_path.read_text(encoding="utf-8"), filename=str(ns_path))
+    tree = ast.parse(xml_path.read_text(encoding="utf-8"), filename=str(xml_path))
     flags: dict[str, ast.expr] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "make_safe_parser":

@@ -17,11 +17,10 @@ import warnings
 from pathlib import Path
 
 from corrigenda import CorrectionPipeline, CorrectionResult, sanitize_error
-from corrigenda.core.schemas import PipelineEventType
 
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore, OutputWriter
-from app.schemas import DocumentManifest, JobStatus
+from app.schemas import DocumentManifest, JobStatus, PipelineEventType
 
 logger = logging.getLogger(__name__)
 

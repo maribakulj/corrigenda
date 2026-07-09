@@ -21,13 +21,15 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from corrigenda.core.schemas import (
+from app.schemas import (
     CorrectionReport,
     DocumentManifest,
+    JobManifest,
+    JobStatus,
     PipelineEventType,
+    Provider,
+    SSEEvent,
 )
-
-from app.schemas import JobManifest, JobStatus, Provider, SSEEvent
 
 logger = logging.getLogger(__name__)
 
