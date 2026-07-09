@@ -24,9 +24,7 @@ def build_diff(job_id: str, document_manifest: DocumentManifest) -> dict:
     for page in document_manifest.pages:
         lines_out = []
         for lm in page.lines:
-            corrected = (
-                lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
-            )
+            corrected = lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
             modified = corrected != lm.ocr_text
             lines_out.append(
                 {
@@ -85,9 +83,7 @@ def build_layout(
                 lm = line_by_id.get(line_id)
                 if lm is None:
                     continue
-                corrected = (
-                    lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
-                )
+                corrected = lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
                 lines_out.append(
                     {
                         "line_id": lm.line_id,
@@ -127,9 +123,7 @@ def build_layout(
         # images is keyed by source_file (not page_id) to avoid collisions
         # when multiple ALTO files share the same Page/@ID value.
         image_filename = images.get(page.source_file)
-        image_url = (
-            f"/api/jobs/{job_id}/images/{image_filename}" if image_filename else None
-        )
+        image_url = f"/api/jobs/{job_id}/images/{image_filename}" if image_filename else None
         pages_out.append(
             {
                 "page_id": page.page_id,
