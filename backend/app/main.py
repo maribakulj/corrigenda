@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+logger = logging.getLogger(__name__)
 
 from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
@@ -32,19 +36,40 @@ _INDEX_HTML = _STATIC_DIR / "index.html"
 # ---------------------------------------------------------------------------
 
 
+#: P1-4 — creation-independent eviction cadence. Eviction used to run
+#: only inside create_job, so a server that stopped receiving new jobs
+#: kept every expired job's files on disk forever.
+SWEEP_INTERVAL_SECONDS = int(os.environ.get("JOB_SWEEP_INTERVAL_SECONDS", "300"))
+
+
+async def _periodic_sweep(app: FastAPI) -> None:
+    while True:
+        await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+        try:
+            evicted = await asyncio.to_thread(app.state.job_store.sweep)
+            if evicted:
+                logger.info("sweep: evicted %d expired job(s)", evicted)
+        except Exception:  # never let a sweep hiccup kill the loop
+            logger.exception("periodic job sweep failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown hooks.
 
-    On startup: nothing extra (state is set up in ``create_app``).
-    On shutdown: ask the background-task registry to drain in-flight
-    correction jobs so we don't leave half-written output files when
-    Docker/HF Spaces sends SIGTERM during a redeploy.
+    On startup: launch the periodic job sweep (P1-4).
+    On shutdown: cancel the sweep, then ask the background-task registry
+    to drain in-flight correction jobs so we don't leave half-written
+    output files when Docker/HF Spaces sends SIGTERM during a redeploy.
     """
-    yield
-    registry: BackgroundTaskRegistry | None = getattr(app.state, "tasks", None)
-    if registry is not None:
-        await registry.shutdown(timeout=30.0)
+    sweep_task = asyncio.create_task(_periodic_sweep(app), name="job-sweep")
+    try:
+        yield
+    finally:
+        sweep_task.cancel()
+        registry: BackgroundTaskRegistry | None = getattr(app.state, "tasks", None)
+        if registry is not None:
+            await registry.shutdown(timeout=30.0)
 
 
 def _rate_limit_handler(_request: Request, exc: Exception) -> JSONResponse:

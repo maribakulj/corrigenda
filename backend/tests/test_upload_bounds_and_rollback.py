@@ -202,3 +202,29 @@ def test_successful_creation_still_works(client):
     r = client.post("/api/jobs", data=_form(), files=[_xml_upload("ok.xml")])
     assert r.status_code == 200
     assert "job_id" in r.json()
+
+
+# ---------------------------------------------------------------------------
+# P1-5 — admission control
+# ---------------------------------------------------------------------------
+
+
+def test_admission_refuses_when_at_capacity(client, monkeypatch):
+    """The rate limit throttles requests, not concurrency — the task
+    registry's live count now gates admissions with an explicit 503."""
+    from app.api import jobs as jobs_api
+
+    monkeypatch.setattr(jobs_api, "_MAX_ACTIVE_JOBS", 0)
+    r = client.post("/api/jobs", data=_form(), files=[_xml_upload("ok.xml")])
+    assert r.status_code == 503
+    assert "capacity" in r.json()["detail"]
+    assert r.headers.get("retry-after") == "30"
+    assert _no_jobs_remain(client)  # refused BEFORE creating anything
+
+
+def test_admission_allows_under_capacity(client, monkeypatch):
+    from app.api import jobs as jobs_api
+
+    monkeypatch.setattr(jobs_api, "_MAX_ACTIVE_JOBS", 4)
+    r = client.post("/api/jobs", data=_form(), files=[_xml_upload("ok.xml")])
+    assert r.status_code == 200

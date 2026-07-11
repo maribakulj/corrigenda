@@ -59,6 +59,13 @@ _MAX_UPLOAD_FILE_BYTES = 100 * 1024 * 1024  # 100 MiB
 _MAX_UPLOAD_FILES = 100
 _MAX_TOTAL_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MiB per request
 
+# P1-5 — admission control. The 20/min rate limit throttles REQUESTS,
+# not concurrency: with jobs allowed to run up to 1800 s, unbounded
+# admissions stack dozens of concurrent pipelines (and their provider
+# spend). active_count existed but gated nothing. Refusals are explicit
+# 503s with Retry-After — an overload policy, not a silent queue.
+_MAX_ACTIVE_JOBS = int(os.environ.get("MAX_ACTIVE_JOBS", "4"))
+
 
 # ---------------------------------------------------------------------------
 # Shared dependency for endpoints that require a completed job with a manifest
@@ -103,6 +110,14 @@ async def create_job(
     store: JobStore = Depends(get_job_store),
 ) -> CreateJobResponse:
     """Upload ALTO files and start a correction job."""
+    # P1-5 — admission control before reading a single byte: the task
+    # registry's live count is the source of truth for running pipelines.
+    if request.app.state.tasks.active_count >= _MAX_ACTIVE_JOBS:
+        raise HTTPException(
+            status_code=503,
+            detail=(f"Server is at capacity ({_MAX_ACTIVE_JOBS} concurrent jobs). Retry shortly."),
+            headers={"Retry-After": "30"},
+        )
     # P0-3 — cardinality bound before reading a single byte.
     if len(files) > _MAX_UPLOAD_FILES:
         raise HTTPException(

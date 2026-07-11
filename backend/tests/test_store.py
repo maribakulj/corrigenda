@@ -499,44 +499,78 @@ def test_subscribe_cap_recovers_after_unsubscribe():
 # ---------------------------------------------------------------------------
 
 
-def test_remove_job_is_invoked_under_lock_during_eviction(monkeypatch):
-    """Roadmap remediation S1 — `_remove_job` mutates three dicts AND
-    calls a filesystem cleanup, so the caller MUST hold `self._lock`.
-    The L6 fix removed the in-method re-acquire on the grounds that
-    `_evict_stale` (the only caller) is itself called from `create_job`
-    under the lock. This test pins the contract so a future refactor
-    that adds a new caller WITHOUT the lock trips here rather than
-    causing a subtle race in production.
+def test_eviction_pops_under_lock_and_cleans_disk_outside_it(monkeypatch):
+    """P1-4 — the eviction contract, INVERTED from the historical one:
+    the in-memory pop (`_pop_job_locked`) must run UNDER the lock, and
+    the filesystem cleanup (`_cleanup_disk`, potentially seconds of
+    rmtree I/O) must run OUTSIDE it. The old design ran rmtree while
+    holding the global lock, stalling every create/update/SSE emit — and
+    the event loop itself — for the duration of the delete.
 
-    We spy on `_remove_job` and record whether the RLock is owned by
-    the current thread at each call. The check uses the CPython-stable
-    `_is_owned()` private method — it's the documented way to test RLock
-    ownership and the same idiom used by asyncio internals.
+    Uses the CPython-stable RLock `_is_owned()` — the documented idiom
+    for testing lock ownership (same as asyncio internals).
     """
     clock = _patched_clock(monkeypatch)
     store = JobStore(ttl_seconds=0)
 
-    # Set up an evictable job: completed, with a timestamp older than
-    # `ttl_seconds=0` will tolerate after any forward tick.
     jid = store.create_job(Provider.OPENAI, "test")
     store.update_job(jid, status=JobStatus.COMPLETED)
     clock.advance(0.01)
 
-    lock_states: list[bool] = []
-    original_remove = store._remove_job
+    pop_lock_states: list[bool] = []
+    cleanup_lock_states: list[bool] = []
+    original_pop = store._pop_job_locked
+    original_cleanup = store._cleanup_disk
 
-    def _spy(job_id: str) -> None:
-        lock_states.append(store._lock._is_owned())  # type: ignore[attr-defined]
-        original_remove(job_id)
+    def _spy_pop(job_id: str) -> None:
+        pop_lock_states.append(store._lock._is_owned())  # type: ignore[attr-defined]
+        original_pop(job_id)
 
-    monkeypatch.setattr(store, "_remove_job", _spy)
+    def _spy_cleanup(job_id: str) -> None:
+        cleanup_lock_states.append(store._lock._is_owned())  # type: ignore[attr-defined]
+        original_cleanup(job_id)
 
-    # Triggers _evict_stale, which calls _remove_job for the stale job.
+    monkeypatch.setattr(store, "_pop_job_locked", _spy_pop)
+    monkeypatch.setattr(store, "_cleanup_disk", _spy_cleanup)
+
+    # Triggers the opportunistic eviction path.
     store.create_job(Provider.OPENAI, "next")
 
-    assert lock_states, "_remove_job was never invoked — eviction did not fire"
-    assert all(lock_states), (
-        f"_remove_job called without holding self._lock at some point: "
-        f"{lock_states}. A new caller has been added that does not enter "
-        f"the lock first — restore the locking discipline."
+    assert pop_lock_states, "eviction never popped the stale job"
+    assert all(pop_lock_states), "in-memory pop ran without the lock — torn reads possible"
+    assert cleanup_lock_states, "disk cleanup never ran for the evicted job"
+    assert not any(cleanup_lock_states), (
+        "disk cleanup ran UNDER the lock — rmtree I/O stalls every "
+        "store operation and the event loop (the exact P1-4 defect)"
     )
+
+
+def test_sweep_evicts_without_new_job_creations(monkeypatch):
+    """P1-4 — eviction used to fire only inside create_job: a server that
+    stopped receiving jobs kept expired files forever. sweep() is the
+    creation-independent path the periodic lifespan task calls."""
+    clock = _patched_clock(monkeypatch)
+    store = JobStore(ttl_seconds=10)
+
+    jid = store.create_job(Provider.OPENAI, "test")
+    store.update_job(jid, status=JobStatus.COMPLETED)
+    clock.advance(11)
+
+    evicted = store.sweep()
+    assert evicted == 1
+    assert store.get_job(jid) is None
+
+
+def test_completed_with_fallbacks_is_ttl_tracked(monkeypatch):
+    """B1 regression net — the degraded-success terminal state must enter
+    _completed_at like the others; forgetting a terminal state means the
+    job is NEVER evicted."""
+    clock = _patched_clock(monkeypatch)
+    store = JobStore(ttl_seconds=10)
+
+    jid = store.create_job(Provider.OPENAI, "test")
+    store.update_job(jid, status=JobStatus.COMPLETED_WITH_FALLBACKS)
+    clock.advance(11)
+
+    assert store.sweep() == 1
+    assert store.get_job(jid) is None
