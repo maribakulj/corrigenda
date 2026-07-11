@@ -20,6 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **P2-5 — configuration models validate invariants, not just types.**
+  Every policy knob used to be a bare `int`/`float`: negative backoffs,
+  zero chunk limits, out-of-range similarity ratios, temperatures outside
+  [0, 2], a window overlap ≥ the window size, `target_line_ids` outside
+  the chunk's `line_ids` and contradictory `DocumentManifest` totals were
+  silently accepted, then produced arithmetic nonsense deep inside the
+  pipeline. All config models (`ChunkPlannerConfig`, `GuardConfig`,
+  `RetryPolicy`, `PairingPolicy`), `ChunkRequest` and `DocumentManifest`
+  now fail fast at construction (`Field(ge/gt/le)` + cross-field
+  validators). Policy fingerprints are unchanged (values didn't move).
+  Deliberate exception, documented: *data* models fed from wild heritage
+  XML (`Coords`, …) stay tolerant per F5 — a skewed scan's slightly
+  negative position must not abort the file; geometry consumers treat
+  degenerate boxes defensively instead.
 - **P2-8 — `MatchAnchor.occurrence` is now `int | None = None`.** The old
   `int = 0` default conflated "producer said nothing" with "producer wants
   the first occurrence", making the first of a repeated pattern

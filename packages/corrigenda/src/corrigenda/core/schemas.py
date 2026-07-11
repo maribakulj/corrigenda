@@ -5,7 +5,7 @@ import json
 import uuid
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -206,9 +206,36 @@ class DocumentManifest(BaseModel):
     document_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     source_files: list[str]
     pages: list[PageManifest]
-    total_pages: int
-    total_blocks: int
-    total_lines: int
+    total_pages: int = Field(ge=0)
+    total_blocks: int = Field(ge=0)
+    total_lines: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _totals_match_content(self) -> "DocumentManifest":
+        """P2-5 — contradictory counters are a construction bug, not data.
+
+        The format builders always compute these from the pages; a
+        hand-built manifest that lies about its totals would silently
+        skew progress metrics and reports downstream.
+        """
+        if self.total_pages != len(self.pages):
+            raise ValueError(
+                f"total_pages={self.total_pages} but manifest carries "
+                f"{len(self.pages)} page(s)"
+            )
+        real_blocks = sum(len(p.blocks) for p in self.pages)
+        if self.total_blocks != real_blocks:
+            raise ValueError(
+                f"total_blocks={self.total_blocks} but manifest carries "
+                f"{real_blocks} block(s)"
+            )
+        real_lines = sum(len(p.lines) for p in self.pages)
+        if self.total_lines != real_lines:
+            raise ValueError(
+                f"total_lines={self.total_lines} but manifest carries "
+                f"{real_lines} line(s)"
+            )
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -243,10 +270,20 @@ class ChunkPlannerConfig(FrozenPolicy):
     fingerprintable for provenance (§11).
     """
 
-    max_input_chars_per_request: int = 12000
-    max_lines_per_request: int = 80
-    line_window_size: int = 12
-    line_window_overlap: int = 1
+    max_input_chars_per_request: int = Field(default=12000, gt=0)
+    max_lines_per_request: int = Field(default=80, gt=0)
+    line_window_size: int = Field(default=12, gt=0)
+    line_window_overlap: int = Field(default=1, ge=0)
+
+    @model_validator(mode="after")
+    def _overlap_smaller_than_window(self) -> "ChunkPlannerConfig":
+        """P2-5 — an overlap >= the window size can never advance."""
+        if self.line_window_overlap >= self.line_window_size:
+            raise ValueError(
+                f"line_window_overlap={self.line_window_overlap} must be "
+                f"smaller than line_window_size={self.line_window_size}"
+            )
+        return self
 
 
 class GuardConfig(FrozenPolicy):
@@ -283,51 +320,61 @@ class GuardConfig(FrozenPolicy):
 
     # --- Stage C: line-level acceptance (line_acceptance.check_line) ---
     #: Minimum SequenceMatcher ratio between source OCR and correction.
-    min_source_similarity: float = 0.35
+    min_source_similarity: float = Field(default=0.35, ge=0.0, le=1.0)
     #: Reject if the correction resembles a neighbour more than its own
     #: source by at least this margin (text migration suspected).
-    neighbour_margin: float = 0.15
+    neighbour_margin: float = Field(default=0.15, ge=0.0, le=1.0)
     #: Two adjacent corrections are duplicates above this similarity …
-    duplicate_threshold: float = 0.85
+    duplicate_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
     #: … but only when their sources were below this (genuinely distinct).
-    duplicate_source_min_diff: float = 0.70
+    duplicate_source_min_diff: float = Field(default=0.70, ge=0.0, le=1.0)
     #: Absorption fires only when the correction is this much longer …
-    absorption_length_ratio: float = 1.2
+    absorption_length_ratio: float = Field(default=1.2, gt=0.0)
     #: … and matches source+neighbour concatenated above this similarity.
-    absorption_concat_similarity: float = 0.8
+    absorption_concat_similarity: float = Field(default=0.8, ge=0.0, le=1.0)
 
     # --- Stage B: hyphen-pair reconciliation (hyphenation._part1/2_*) ---
     #: PART1 corrected word count may exceed OCR by at most this many.
     #: Stage-B twin of ``pair_drift_part1_word_growth`` (Stage A); stricter
     #: here (1) than at Stage A (2) on purpose — see the class docstring.
-    part1_max_word_growth: int = 1
+    part1_max_word_growth: int = Field(default=1, ge=0)
     #: PART1 last word may grow by at most this many characters.
-    part1_last_word_char_growth: int = 3
+    part1_last_word_char_growth: int = Field(default=3, ge=0)
     #: PART1 total char length may grow by ratio*len + slack.
-    part1_char_growth_ratio: float = 1.4
-    part1_char_growth_slack: int = 8
+    part1_char_growth_ratio: float = Field(default=1.4, gt=0.0)
+    part1_char_growth_slack: int = Field(default=8, ge=0)
     #: PART2 collapsed if corrected word count < ratio * OCR word count.
     #: Stage-B twin of ``pair_drift_part2_collapse_ratio`` (Stage A); same
     #: default today, kept separate so the two stages tune independently.
-    part2_collapse_ratio: float = 0.4
+    part2_collapse_ratio: float = Field(default=0.4, ge=0.0, le=1.0)
     #: PART2 expansion allowance: OCR word count + max(floor, ratio*OCR).
-    part2_expansion_floor: int = 3
-    part2_expansion_ratio: float = 0.4
+    part2_expansion_floor: int = Field(default=3, ge=0)
+    part2_expansion_ratio: float = Field(default=0.4, ge=0.0)
     #: Boundary-word continuity: shared leading-char count required …
-    boundary_prefix_len: int = 2
+    boundary_prefix_len: int = Field(default=2, ge=0)
     #: … within this corrected/OCR first-word length ratio band.
-    boundary_len_ratio_min: float = 0.5
-    boundary_len_ratio_max: float = 2.0
+    boundary_len_ratio_min: float = Field(default=0.5, gt=0.0)
+    boundary_len_ratio_max: float = Field(default=2.0, gt=0.0)
+
+    @model_validator(mode="after")
+    def _boundary_band_ordered(self) -> "GuardConfig":
+        """P2-5 — an inverted ratio band would reject every boundary word."""
+        if self.boundary_len_ratio_min > self.boundary_len_ratio_max:
+            raise ValueError(
+                f"boundary_len_ratio_min={self.boundary_len_ratio_min} must "
+                f"not exceed boundary_len_ratio_max={self.boundary_len_ratio_max}"
+            )
+        return self
 
     # --- Stage A: pre-retry pair drift (validator._check_pair_drift) ---
     #: PART1 grew by more than this many words → drift (retry). Stage-A twin
     #: of ``part1_max_word_growth`` (Stage B); more permissive (2) here.
-    pair_drift_part1_word_growth: int = 2
+    pair_drift_part1_word_growth: int = Field(default=2, ge=0)
     #: PART2 checked for collapse only when OCR had at least this many words.
-    pair_drift_part2_min_words: int = 2
+    pair_drift_part2_min_words: int = Field(default=2, ge=0)
     #: PART2 collapsed if corrected word count < ratio * OCR word count.
     #: Stage-A twin of ``part2_collapse_ratio`` (Stage B).
-    pair_drift_part2_collapse_ratio: float = 0.4
+    pair_drift_part2_collapse_ratio: float = Field(default=0.4, ge=0.0, le=1.0)
 
     # --- Edit protocol E4: per-op span drift (core/editing.py) ---
     # These bound a ``replace_span`` op ONLY. ``replace_line`` (the historical
@@ -336,13 +383,13 @@ class GuardConfig(FrozenPolicy):
     # response as ``replace_line`` ops stays byte-for-byte identical.
     #: A span replacement may be at most this many times as long as the span
     #: it replaces (``len(replacement) <= ratio * max(1, span_len)``).
-    edit_span_max_growth_ratio: float = 4.0
+    edit_span_max_growth_ratio: float = Field(default=4.0, gt=0.0)
     #: Total characters a line's span ops may actually change (P2-9): per
     #: op, the size of the differing window after trimming the common
     #: prefix/suffix of (original span, replacement) — so a length-neutral
     #: rewrite costs its real size, not 0. Generous by default; a rules
     #: pre-pass makes small, local edits well under it.
-    edit_line_max_changed_chars: int = 200
+    edit_line_max_changed_chars: int = Field(default=200, ge=0)
 
 
 #: Module-level default reused wherever a caller passes no GuardConfig, so
@@ -392,7 +439,7 @@ class PairingPolicy(FrozenPolicy):
     #: Only meaningful WITHIN a page: VPOS restarts on every page, so the
     #: check is skipped for cross-page candidates (a legitimate cross-page
     #: pair would otherwise be broken by a spurious negative/huge gap).
-    max_vertical_gap: int | None = None
+    max_vertical_gap: int | None = Field(default=None, ge=0)
     #: When ``True``, only pair lines in the same TextBlock. Because a
     #: cross-page partner is by definition in a different block, this also
     #: forbids cross-page pairing — intended reading of the constraint.
@@ -403,12 +450,12 @@ class PairingPolicy(FrozenPolicy):
     #: Max downward gap between the PART1 line's bottom and the candidate's
     #: top, in units of the PART1 line's height. Same-block candidates and
     #: cross-block downward continuations both use it.
-    max_gap_line_heights: float = 3.0
+    max_gap_line_heights: float = Field(default=3.0, ge=0.0)
     #: Tolerance for a candidate whose top sits ABOVE the PART1 line's
     #: bottom (box overlap, skewed scans), in line heights. Beyond it, an
     #: upward candidate is only plausible as a column jump (cross-block,
     #: horizontally disjoint).
-    max_rise_line_heights: float = 0.5
+    max_rise_line_heights: float = Field(default=0.5, ge=0.0)
 
     @staticmethod
     def _explicit(part1: LineManifest, candidate: LineManifest) -> bool:
@@ -497,11 +544,19 @@ class RetryPolicy(FrozenPolicy):
     reproducible runs.
     """
 
-    max_attempts: int = 3
+    max_attempts: int = Field(default=3, ge=1)
     temperatures: tuple[float, ...] = (0.0, 0.3, 0.5)
-    transient_backoff_base: float = 2.0
-    output_backoff_base: float = 1.0
-    per_chunk_budget: int = 6
+    transient_backoff_base: float = Field(default=2.0, ge=0.0)
+    output_backoff_base: float = Field(default=1.0, ge=0.0)
+    per_chunk_budget: int = Field(default=6, ge=1)
+
+    @model_validator(mode="after")
+    def _temperatures_in_range(self) -> "RetryPolicy":
+        """P2-5 — every provider rejects temperatures outside [0, 2]."""
+        for t in self.temperatures:
+            if not (0.0 <= t <= 2.0):
+                raise ValueError(f"temperature {t} outside the valid [0, 2] range")
+        return self
 
     @classmethod
     def default(cls) -> RetryPolicy:
@@ -544,7 +599,20 @@ class ChunkRequest(BaseModel):
         """The line_ids this chunk owns (all of them when unrestricted)."""
         return self.line_ids if self.target_line_ids is None else self.target_line_ids
 
-    attempt: int = 0
+    attempt: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def _targets_subset_of_lines(self) -> "ChunkRequest":
+        """P2-5 — a target outside the chunk's lines would be silently
+        ignored at correction time (it has no enriched input) while still
+        counting as "owned" — a line lost without a trace."""
+        if self.target_line_ids is not None:
+            extra = set(self.target_line_ids) - set(self.line_ids)
+            if extra:
+                raise ValueError(
+                    f"target_line_ids not contained in line_ids: {sorted(extra)!r}"
+                )
+        return self
 
 
 class ChunkPlan(BaseModel):
