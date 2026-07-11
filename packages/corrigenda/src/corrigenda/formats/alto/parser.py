@@ -143,6 +143,86 @@ def _parse_textline_hyphen_info(
 
 
 # ---------------------------------------------------------------------------
+# Block discovery + reading order (P1-1)
+# ---------------------------------------------------------------------------
+
+
+def _blocks_in_reading_order(
+    container: etree._Element, ns: str
+) -> list[etree._Element]:
+    """Every ``TextBlock`` under ``container``, in reading order.
+
+    P1-1 — the historical ``findall`` only saw *direct* children, so any
+    ``TextBlock`` nested inside a ``ComposedBlock`` group (articles,
+    figures-with-caption, …) was silently dropped from the manifest.
+    ``iter`` walks the whole subtree in document order instead (ALTO does
+    not allow a TextBlock inside a TextBlock, so no double-visit).
+
+    When blocks carry the optional ``IDNEXT`` attribute (ALTO's explicit
+    next-block-in-reading-sequence chain), the chains override document
+    order: heads are visited in document order and each chain is followed
+    to its end. The reorder is strictly validated — a dangling reference,
+    a self-reference, two blocks naming the same successor, or a cycle
+    falls back to plain document order (never guess on inconsistent
+    declarations). Cross-page IDNEXT links are ignored (out of scope of a
+    single page's ordering).
+
+    Container rule unchanged: ``PrintSpace`` when present (margins stay
+    out of correction scope), else the whole ``Page``.
+    """
+    blocks = list(container.iter(_tag("TextBlock", ns)))
+    if len(blocks) < 2:
+        return blocks
+
+    by_id: dict[str, etree._Element] = {}
+    for b in blocks:
+        bid = b.get("ID")
+        if bid:
+            if bid in by_id:
+                # Duplicate block IDs — the manifest-level P0-5 check will
+                # refuse the file; don't attempt any reordering here.
+                return blocks
+            by_id[bid] = b
+
+    succ: dict[str, str] = {}
+    referenced: set[str] = set()
+    for b in blocks:
+        nxt = b.get("IDNEXT")
+        if nxt is None or not nxt.strip():
+            continue
+        nxt = nxt.strip()
+        bid = b.get("ID")
+        if bid is None or nxt == bid or nxt not in by_id or nxt in referenced:
+            # Dangling / self / converging chain → inconsistent declaration.
+            return blocks
+        succ[bid] = nxt
+        referenced.add(nxt)
+
+    if not succ:
+        return blocks
+
+    ordered: list[etree._Element] = []
+    visited: set[str] = set()
+    for b in blocks:
+        bid = b.get("ID")
+        if bid is None:
+            ordered.append(b)
+            continue
+        if bid in visited or bid in referenced:
+            continue  # emitted (or will be) as part of a chain
+        cur: str | None = bid
+        while cur is not None and cur not in visited:
+            visited.add(cur)
+            ordered.append(by_id[cur])
+            cur = succ.get(cur)
+
+    if len(ordered) != len(blocks):
+        # Unreached blocks = every remaining chain is a cycle → fall back.
+        return blocks
+    return ordered
+
+
+# ---------------------------------------------------------------------------
 # Core parsing
 # ---------------------------------------------------------------------------
 
@@ -185,7 +265,7 @@ def parse_alto_file(
         container = printspace if printspace is not None else page_el
 
         block_order = 0
-        for tb in container.findall(_tag("TextBlock", ns)):
+        for tb in _blocks_in_reading_order(container, ns):
             block_id = tb.get("ID", f"TB_{page_id}_{block_order}")
             block_coords = Coords(
                 hpos=_int_attr(tb, "HPOS"),

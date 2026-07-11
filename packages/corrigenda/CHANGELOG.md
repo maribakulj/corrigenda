@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **P1-1 — recursive structure traversal.** Both parsers only visited
+  *direct* children: ALTO ``TextBlock``s nested inside a ``ComposedBlock``
+  and PAGE ``TextRegion``s nested inside another region were silently
+  dropped — their lines never entered the manifest and were never
+  corrected. Both parsers now walk the whole subtree in document order
+  (each PAGE region still contributes only its direct lines, so nothing
+  is double-counted). ALTO's container rule is unchanged (``PrintSpace``
+  when present, else the whole ``Page``).
+
 ### Added
+
+- **P1-1 — explicit reading order.** PAGE ``ReadingOrder`` declarations
+  (nested Ordered/Unordered groups, ``RegionRefIndexed`` by ``@index``)
+  and ALTO ``IDNEXT`` block chains now drive block/region order — hence
+  ``line_order_global``, prev/next neighbour context and hyphen pairing —
+  instead of raw XML serialisation order (wrong on multicolumn layouts
+  whose declaration diverges). Conservative by construction: regions not
+  covered by the declaration follow in document order; an inconsistent
+  declaration (dangling ref, cycle, converging IDNEXT chains) falls back
+  to document order entirely — the library never guesses. Corpus files
+  whose declaration matches document order (all of ``examples/``) produce
+  byte-identical output.
 
 - **`DuplicateIdError`** *(top-level, subclasses `ParseError`)* — P0-5
   identity-uniqueness invariant. A source file whose Page / TextBlock /

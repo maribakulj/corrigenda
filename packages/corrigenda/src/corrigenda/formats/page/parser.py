@@ -79,6 +79,75 @@ def _assign_hyphen_roles(lines: list[LineManifest]) -> None:
         # Heuristic mode throughout — no explicit flags, no subs content.
 
 
+def _reading_order_refs(page_el: etree._Element, ns: str) -> list[str]:
+    """Region ids in the page's declared ``ReadingOrder``, flattened.
+
+    P1-1 — ``OrderedGroup`` children are visited by ascending ``@index``
+    (document order breaks ties / missing indexes), ``UnorderedGroup``
+    children in document order; groups nest arbitrarily. Returns ``[]``
+    when the page declares no reading order. Unknown children are skipped.
+    """
+    ro = page_el.find(_tag("ReadingOrder", ns))
+    if ro is None:
+        return []
+
+    _BIG = 10**9
+
+    def group_refs(group: etree._Element) -> list[str]:
+        entries: list[tuple[int, int, list[str]]] = []
+        for seq, child in enumerate(c for c in group if isinstance(c.tag, str)):
+            local = etree.QName(child.tag).localname
+            if local in ("RegionRefIndexed", "RegionRef"):
+                ref = child.get("regionRef")
+                refs = [ref] if ref else []
+            elif local in (
+                "OrderedGroup",
+                "OrderedGroupIndexed",
+                "UnorderedGroup",
+                "UnorderedGroupIndexed",
+            ):
+                refs = group_refs(child)
+            else:
+                continue
+            raw_index = child.get("index")
+            key = parse_int_tolerant(raw_index, _BIG) if raw_index is not None else _BIG
+            entries.append((key, seq, refs))
+        entries.sort(key=lambda t: (t[0], t[1]))
+        return [r for _, _, refs in entries for r in refs]
+
+    return group_refs(ro)
+
+
+def _regions_in_reading_order(page_el: etree._Element, ns: str) -> list[etree._Element]:
+    """Every ``TextRegion`` under the page, in reading order.
+
+    P1-1 — the historical ``findall`` only saw *direct* children of
+    ``Page``, silently dropping regions nested inside another region
+    (PAGE's region hierarchy). ``iter`` collects the whole subtree in
+    document order; each region later contributes only its *direct*
+    ``TextLine`` children, so nested regions' lines are attributed to
+    their own block, never double-counted.
+
+    When the page declares a ``ReadingOrder``, referenced regions are
+    reordered to the declared sequence (first occurrence of an id wins);
+    regions the declaration does not cover keep document order after the
+    referenced ones — deterministic, and a declaration full of dangling
+    refs degrades gracefully to document order.
+    """
+    regions = list(page_el.iter(_tag("TextRegion", ns)))
+    refs = _reading_order_refs(page_el, ns)
+    if not refs or len(regions) < 2:
+        return regions
+    pos: dict[str, int] = {}
+    for i, rid in enumerate(refs):
+        pos.setdefault(rid, i)
+    fallback = len(refs)
+    return sorted(
+        regions,
+        key=lambda r: pos.get(r.get("id") or "", fallback),
+    )
+
+
 def parse_page_file(
     xml_path: Path,
     source_name: str,
@@ -105,7 +174,7 @@ def parse_page_file(
         lines: list[LineManifest] = []
 
         block_order = 0
-        for region in page_el.findall(_tag("TextRegion", ns)):
+        for region in _regions_in_reading_order(page_el, ns):
             block_id = region.get("id", f"TR_{page_id}_{block_order}")
             block_coords = _coords_of(region, ns)
             line_ids: list[str] = []
