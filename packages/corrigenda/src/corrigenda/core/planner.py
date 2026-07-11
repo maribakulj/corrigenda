@@ -1,4 +1,19 @@
-"""Chunk planner: splits a page's lines into LLM-sized chunks."""
+"""Chunk planner: splits a page's lines into LLM-sized chunks.
+
+Budget semantics (P1-8): ``max_input_chars_per_request`` bounds the sum of
+the chunk lines' RAW OCR text — it deliberately excludes the JSON
+envelope, system prompt, neighbour context and optional geometry the
+enrichment step adds (all of which grow roughly linearly with the same
+line count). Consumers sizing the budget against a provider's token limit
+should keep generous headroom (the 12 000 default assumes ~3-4× overhead
+against 128k-class context windows). Two documented exceptions may
+overshoot the budget, both bounded by ``max_lines_per_request``:
+
+  * a hyphen CHAIN is atomic — splitting a hyphenated word across chunks
+    corrupts reconciliation, so chain extension outranks the char budget;
+  * a single line longer than the whole budget still ships alone (a line
+    is the smallest unit the pipeline corrects).
+"""
 
 from __future__ import annotations
 
@@ -251,16 +266,32 @@ def _try_window(
 
     window_size = config.line_window_size
     overlap = config.line_window_overlap
-    step = window_size - overlap
 
     window_line_ids: list[list[str]] = []
     start = 0
 
     while start < n:
-        end = min(start + window_size, n)  # exclusive
+        # P1-8 — a window is bounded by BOTH the line count and the char
+        # budget (historically only PAGE/BLOCK honoured the char budget;
+        # a window of pathologically long lines blew straight past
+        # max_input_chars_per_request). At least one line always enters,
+        # even over budget — a single line is atomic.
+        end = start + 1
+        chars = len(lines[start].ocr_text)
+        while end < min(start + window_size, n):
+            c = len(lines[end].ocr_text)
+            if chars + c > config.max_input_chars_per_request:
+                break
+            chars += c
+            end += 1
+        core_end = end  # budget/size-limited end, drives the overlap step
 
         # Extend to keep hyphen chains intact at window boundary,
-        # but cap to avoid unbounded growth beyond the token budget.
+        # but cap to avoid unbounded growth beyond the line budget.
+        # Chain atomicity deliberately outranks the char budget: splitting
+        # a hyphenated word across chunks corrupts reconciliation, while
+        # a temporarily oversized request only risks a producer error
+        # (retried / downgraded). The extension stays line-capped.
         extension_limit = max(config.max_lines_per_request, end - start + 10)
         max_end = min(n, start + extension_limit)
         while end < max_end:
@@ -273,10 +304,16 @@ def _try_window(
 
         window_line_ids.append([lines[i].line_id for i in range(start, end)])
 
-        next_start = start + step
-        if next_start <= start:
-            next_start = start + 1
-        start = next_start
+        # Step relative to the ACTUAL core window when the char budget
+        # shortened it, so nothing is skipped (a fixed step would jump
+        # past unvisited lines). When the budget did not bind, keep the
+        # historical fixed step exactly (byte-parity with the pre-P1-8
+        # planner, including its tail-window behaviour near page end).
+        budget_bound = core_end < min(start + window_size, n)
+        if budget_bound:
+            start = max(start + 1, core_end - overlap)
+        else:
+            start = start + (window_size - overlap)
 
     # F8 — each line is a target in exactly one window (its last, best-context
     # window); overlaps become pure context in the other window.
@@ -320,7 +357,12 @@ def _plan_line(
         # All lines linked by forward hyphen pairs must stay together.
         chain_ids = [lm.line_id]
         j = i
-        while j < len(lines):
+        # P1-8 — the chain follow is capped: an adversarial page where
+        # every line ends in a dash would otherwise produce one unbounded
+        # request. Truncating a >cap chain is the lesser evil at this
+        # last-resort granularity — the pair guards fall the cut pair
+        # back to OCR instead of mis-joining it.
+        while j < len(lines) and len(chain_ids) < config.max_lines_per_request:
             cur = lines[j]
             forward_pair = forward_partner_id(cur)
             if (

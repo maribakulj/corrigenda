@@ -70,6 +70,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restores the historical behaviour exactly. Composite config
   fingerprint moves ``3a06d0a93ac4eedc`` → ``216aa712f1e99b79``.
 
+### Fixed (guards & budgets)
+
+- **P1-8 — `max_input_chars_per_request` is now a real bound.** Only PAGE
+  and BLOCK honoured the char budget; a WINDOW of pathologically long
+  lines blew straight past it and LINE mode could follow an unbounded
+  hyphen chain. Windows are now bounded by BOTH the line count and the
+  char budget (the overlap step follows the actual window end so a
+  budget-shortened window never skips lines — full windows keep the
+  historical fixed step exactly), and LINE chains are capped at
+  `max_lines_per_request`. Two documented atomic exceptions may
+  overshoot: a hyphen chain (splitting corrupts reconciliation) and a
+  single line longer than the whole budget. The budget's semantics are
+  now documented precisely: it counts RAW OCR text, not the enriched
+  request envelope — size it with headroom.
+- **P2-6 — duplications straddling a chunk boundary are now caught.**
+  Adjacent-duplicate detection ran per chunk on that chunk's target
+  lines only, so two document-adjacent lines owned by different chunks
+  were never compared. A page-level pass after all chunks re-checks
+  every adjacent pair in reading order (idempotent over the intra-chunk
+  results) and reverts both sides of a boundary duplicate to OCR with
+  `adjacent_duplicate_detected`.
+- **P2-7 — guards stage-strictness doc contradiction resolved.**
+  `guards.py` called Stage A "the strictest" while the config documents
+  Stage A as more permissive on PART1 growth (2 words vs 1 at Stage B).
+  The docs now say what the code does: Stage A carries the most
+  aggressive *remedy* (whole-chunk retry), Stage B the strictest
+  *thresholds* — a maintainer can no longer tune them backwards on the
+  strength of the old sentence.
+
 ### Added
 
 - **P1-1 — explicit reading order.** PAGE ``ReadingOrder`` declarations

@@ -878,6 +878,34 @@ class CorrectionPipeline:
                     },
                 )
 
+        # P2-6 — cross-chunk adjacency pass. Per-chunk finalization only
+        # sees that chunk's TARGET lines, so two document-adjacent lines
+        # owned by different chunks were never compared: a duplication
+        # straddling a chunk boundary escaped the guard entirely. This
+        # page-level pass re-checks every adjacent pair in reading order;
+        # intra-chunk pairs were already checked with the same function
+        # and config, so re-checking them is a deterministic no-op.
+        page_accepted = [
+            (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text)
+            for lm in page.lines
+        ]
+        cross_reverts = check_adjacent_duplicates(
+            page_accepted, config=self.guard_config
+        )
+        for lm in page.lines:
+            if lm.line_id in cross_reverts:
+                lm.corrected_text = lm.ocr_text
+                lm.status = LineStatus.FALLBACK
+                _set_trace(
+                    traces,
+                    lm,
+                    projected_text=lm.ocr_text,
+                    validation_status=lm.status.value,
+                )
+                trace = traces.get(_trace_key(lm)) if traces is not None else None
+                if trace is not None and not trace.fallback_reason:
+                    trace.fallback_reason = cross_reverts[lm.line_id]
+
         page_corrections = sum(
             1
             for lm in page.lines

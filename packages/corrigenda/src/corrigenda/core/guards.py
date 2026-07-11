@@ -30,8 +30,14 @@ The thresholds intentionally differ and tune TOGETHER (all read from
 ``GuardConfig``, F13): tightening one stage without the others can leak
 migrations through the gap.
 
-  - Stage A is the *strictest* — a hyphen drift is suspicious enough to
-    retry the whole chunk before any fallback.
+  - Stage A carries the *most aggressive remedy* — a hyphen drift is
+    suspicious enough to retry the whole chunk before any fallback. Its
+    numeric thresholds are deliberately MORE permissive than Stage B's
+    (PART1 growth: 2 words at A vs 1 at B — see ``GuardConfig``): a cheap
+    retry only fires on gross drift, then the strict Stage B bound decides
+    what actually survives reconciliation. (P2-7 — this line used to call
+    Stage A "the strictest", contradicting the config's documented
+    values; "strict" here always meant the remedy, not the thresholds.)
   - Stage B catches drift the LLM produced despite the retry; the fallback
     preserves the OCR pair atomically. Its predicates live in
     ``hyphenation.py`` beside their sole caller (``reconcile_hyphen_pair``).
