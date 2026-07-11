@@ -297,6 +297,18 @@ class JobStore:
             for jid in by_age[:excess]:
                 self._remove_job(jid)
 
+    def delete_job(self, job_id: str) -> None:
+        """Remove a job's record, subscribers and disk artefacts.
+
+        P1-10 — public rollback seam: ``create_job``'s HTTP handler
+        registers the job before extraction/parsing/validation, so any
+        failure in that window must delete the half-created job instead
+        of leaving it QUEUED forever (a never-terminal job is never
+        TTL-evicted). Also usable by an explicit user-facing delete.
+        """
+        with self._lock:
+            self._remove_job(job_id)
+
     def _remove_job(self, job_id: str) -> None:
         """Pop a job + its subscribers + its completion timestamp.
 
