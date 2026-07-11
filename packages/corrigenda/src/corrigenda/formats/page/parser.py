@@ -147,9 +147,10 @@ def _regions_in_reading_order(page_el: etree._Element, ns: str) -> list[etree._E
     pos: dict[str, int] = {}
     for i, rid in enumerate(refs):
         pos.setdefault(rid, i)
-    region_ids = [rid for r in regions if (rid := r.get("id"))]
-    if any(rid not in pos for rid in region_ids):
-        return regions  # partial/dangling declaration → document order
+    for region in regions:
+        region_id = region.get("id")
+        if region_id and region_id not in pos:
+            return regions  # partial/dangling declaration → document order
     return sorted(
         regions,
         key=lambda r: pos.get(r.get("id") or "", len(refs)),
