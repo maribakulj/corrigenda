@@ -422,10 +422,16 @@ def test_get_job_known(client: TestClient):
     )
     assert create_resp.status_code == 200
     job_id = create_resp.json()["job_id"]
+    token = create_resp.json()["job_token"]
 
-    # Poll status
-    resp = client.get(f"/api/jobs/{job_id}")
+    # Poll status. P1-7 — API-created jobs require their capability token.
+    resp = client.get(f"/api/jobs/{job_id}", headers={"X-Job-Token": token})
     assert resp.status_code == 200
+
+    # Without (or with a wrong) token the job is indistinguishable from
+    # a missing one.
+    assert client.get(f"/api/jobs/{job_id}").status_code == 404
+    assert client.get(f"/api/jobs/{job_id}", headers={"X-Job-Token": "wrong"}).status_code == 404
     body = resp.json()
     assert body["job_id"] == job_id
     assert "status" in body

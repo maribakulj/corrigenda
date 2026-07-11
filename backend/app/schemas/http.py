@@ -31,6 +31,11 @@ class ListModelsResponse(BaseModel):
 
 class CreateJobResponse(BaseModel):
     job_id: str
+    # P1-7 — capability token, shown ONCE at creation. Only its SHA-256
+    # hash is stored server-side; every subsequent job endpoint requires
+    # it (X-Job-Token header, or ?token= for EventSource/img/download
+    # links that cannot carry headers).
+    job_token: str | None = None
 
 
 class JobStatusResponse(BaseModel):

@@ -60,6 +60,10 @@ class JobManifest(BaseModel):
     job_id: str
     provider: Provider
     model: str
+    # P1-7 — SHA-256 hex of the capability token required to access this
+    # job's endpoints. None = legacy/direct-store job (no enforcement) —
+    # every job created through the public API carries one.
+    token_hash: str | None = None
     status: JobStatus = JobStatus.QUEUED
     document_manifest: DocumentManifest | None = None
     total_lines: int = 0

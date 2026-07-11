@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { withToken } from '../api/client'
 import type { JobProgress, JobStatus, LogEntry, LogType, SSEEventData } from '../types'
 
 const MAX_LOGS = 500
@@ -266,14 +267,14 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
         retryTimeoutRef.current = setTimeout(() => {
           retryTimeoutRef.current = null
           if (cancelled) return
-          const reconnect = new EventSource(`/api/jobs/${jobId}/events`)
+          const reconnect = new EventSource(withToken(`/api/jobs/${jobId}/events`))
           esRef.current = reconnect
           attach(reconnect)
         }, delay)
       }
     }
 
-    const es = new EventSource(`/api/jobs/${jobId}/events`)
+    const es = new EventSource(withToken(`/api/jobs/${jobId}/events`))
     esRef.current = es
     attach(es)
 

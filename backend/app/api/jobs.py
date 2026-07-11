@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
 import tempfile
 import zipfile
 from collections.abc import AsyncGenerator
@@ -68,18 +70,53 @@ _MAX_ACTIVE_JOBS = int(os.environ.get("MAX_ACTIVE_JOBS", "4"))
 
 
 # ---------------------------------------------------------------------------
-# Shared dependency for endpoints that require a completed job with a manifest
+# Shared dependencies: capability-token access + completed-job resolution
 # ---------------------------------------------------------------------------
 
 
-def get_completed_job(
+def _token_matches(job: JobManifest, presented: str | None) -> bool:
+    if not presented:
+        return False
+    digest = hashlib.sha256(presented.encode("utf-8")).hexdigest()
+    return secrets.compare_digest(digest, job.token_hash or "")
+
+
+def require_job_access(
     job_id: str,
+    request: Request,
     store: JobStore = Depends(get_job_store),
 ) -> JobManifest:
-    """FastAPI dependency: resolve job_id → JobManifest or raise 4xx."""
+    """P1-7 — capability-token gate on every job endpoint.
+
+    The job_id used to be the ONLY secret — a UUID that leaks into
+    operator logs, browser history and referrers gave full read access
+    to a stranger's OCR text, corrections and images. Every job created
+    through the public API now carries a token (only its SHA-256 hash is
+    stored); callers present it via the ``X-Job-Token`` header, or via
+    ``?token=`` for the surfaces that cannot set headers (EventSource,
+    <img>, download links). Jobs created OUTSIDE the HTTP layer (direct
+    store access — tests, embedding consumers) have no hash and are not
+    gated. Missing/wrong token → 404, not 403: an unauthenticated caller
+    must not be able to distinguish "job exists" from "job doesn't".
+
+    Deployment model (decided): the app runs behind the institution's
+    SSO/reverse-proxy for authentication; this token provides per-job
+    isolation BETWEEN authenticated users, not user authentication.
+    """
     job = store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+    if job.token_hash is not None:
+        presented = request.headers.get("x-job-token") or request.query_params.get("token")
+        if not _token_matches(job, presented):
+            raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+    return job
+
+
+def get_completed_job(
+    job: JobManifest = Depends(require_job_access),
+) -> JobManifest:
+    """FastAPI dependency: access-checked job in a terminal-success state."""
     # P0-1 — both terminal success states expose their (valid) outputs;
     # COMPLETED_WITH_FALLBACKS is degraded but downloadable by design.
     if job.status not in TERMINAL_SUCCESS_STATES:
@@ -180,6 +217,10 @@ async def create_job(
     # roll both back. Historically a parse failure left a QUEUED job with
     # files on disk forever (never terminal -> never TTL-evicted).
     job_id = store.create_job(provider_enum, model)
+    # P1-7 — capability token: shown once in the response; only its hash
+    # is stored. Every job endpoint requires it from now on.
+    job_token = secrets.token_urlsafe(32)
+    store.update_job(job_id, token_hash=hashlib.sha256(job_token.encode("utf-8")).hexdigest())
     try:
         init_job_dirs(job_id)
 
@@ -251,7 +292,7 @@ async def create_job(
         store.delete_job(job_id)
         raise
 
-    return CreateJobResponse(job_id=job_id)
+    return CreateJobResponse(job_id=job_id, job_token=job_token)
 
 
 # ---------------------------------------------------------------------------
@@ -261,14 +302,9 @@ async def create_job(
 
 @router.get("/{job_id}", response_model=JobStatusResponse)
 async def get_job(
-    job_id: str,
-    store: JobStore = Depends(get_job_store),
+    job: JobManifest = Depends(require_job_access),
 ) -> JobStatusResponse:
     """Poll the status of a correction job."""
-    job = store.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
-
     return JobStatusResponse(
         job_id=job.job_id,
         status=job.status,
@@ -291,10 +327,10 @@ async def get_job(
 async def job_events(
     job_id: str,
     store: JobStore = Depends(get_job_store),
+    _job: JobManifest = Depends(require_job_access),
 ) -> EventSourceResponse:
-    """SSE stream of correction job events."""
-    if store.get_job(job_id) is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+    """SSE stream of correction job events. P1-7 — EventSource cannot set
+    headers, so the capability token arrives as ``?token=``."""
 
     async def generator() -> AsyncGenerator[dict, None]:
         async for sse_event in store.stream_events(job_id):
@@ -314,12 +350,9 @@ async def job_events(
 @router.get("/{job_id}/download")
 async def download_job(
     job_id: str,
-    store: JobStore = Depends(get_job_store),
+    job: JobManifest = Depends(require_job_access),
 ) -> Response:
     """Download corrected XML file(s)."""
-    job = store.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
     # P0-4 — outputs are only served for a terminal-success job. The
     # writer stages files and only commits on success, but this guard is
     # the contract: a FAILED/RUNNING job's /download can never return a
@@ -449,11 +482,10 @@ _IMAGE_MIME: dict[str, str] = {
 async def get_job_image(
     job_id: str,
     image_name: str,
-    store: JobStore = Depends(get_job_store),
+    _job: JobManifest = Depends(require_job_access),
 ) -> Response:
-    """Serve a source scan image for a job."""
-    if store.get_job(job_id) is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+    """Serve a source scan image for a job. P1-7 — <img> tags cannot set
+    headers, so the capability token arrives as ``?token=``."""
 
     # Sanitise: only allow plain filenames (no path traversal)
     if "/" in image_name or "\\" in image_name or image_name.startswith("."):

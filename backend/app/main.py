@@ -111,6 +111,15 @@ def create_app() -> FastAPI:
     # Bind infrastructure to app.state for dependency injection.
     # Endpoints reach this through `Depends(get_job_store)` rather than
     # importing a module-level singleton — see app/api/deps.py.
+    @app.middleware("http")
+    async def _no_store_api_responses(request: Request, call_next):
+        """P1-7 — job responses carry document text, corrections and
+        capability tokens: no shared cache / proxy may retain them."""
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        return response
+
     app.state.job_store = JobStore()
     # Strong-referenced registry for fire-and-forget background tasks
     # (correction runs spawned from POST /api/jobs). Drained on

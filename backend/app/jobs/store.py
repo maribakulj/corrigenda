@@ -125,6 +125,7 @@ class JobStore:
         error: str | None = None,
         images: dict[str, str] | None = None,
         report: CorrectionReport | None = None,
+        token_hash: str | None = None,
     ) -> None:
         """Update mutable fields on the job manifest. None means "do not touch".
 
@@ -159,6 +160,8 @@ class JobStore:
                 job.images = images
             if report is not None:
                 job.report = report
+            if token_hash is not None:
+                job.token_hash = token_hash
             # Track when a job reaches terminal state for eviction.
             # Uses the full terminal set — COMPLETED_WITH_FALLBACKS (P0-1)
             # included; forgetting a terminal state here means the job is
