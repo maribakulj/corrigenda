@@ -53,6 +53,31 @@ class ProviderTransientError(Exception):
         self.status_code = status_code
 
 
+class ProviderPermanentError(Exception):
+    """Raised by a ``BaseProvider`` for a failure that will NEVER heal by
+    retrying: invalid credentials (401/403), unknown model (404), a
+    schema the vendor definitively rejects — the client-side 4xx family
+    other than 429.
+
+    P0-1 — semantics contract: the pipeline treats this as FATAL for the
+    whole run. It is never retried, never downgraded, and NEVER converted
+    into an OCR fallback: a run whose provider rejected every call must
+    fail loudly, not report success with silently uncorrected text.
+    Propagates out of :meth:`CorrectionPipeline.run` like
+    :class:`~corrigenda.errors.CorrectionAborted` does — before any
+    output is written.
+
+    Deliberately NOT a ``ValueError`` (the retry classifier routes
+    ``ValueError`` to the malformed-output retry branch) and NOT a
+    ``CorrectionError`` (the chunk loop treats ``CorrectionError`` as a
+    recoverable per-chunk condition).
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 @runtime_checkable
 class BaseProvider(Protocol):
     """LLM client contract used by the pipeline.
@@ -214,6 +239,7 @@ __all__ = [
     "OutputWriter",
     "PipelineObserver",
     "ProviderTransientError",
+    "ProviderPermanentError",
     "RewriteMetrics",
     "require_source_images",
 ]

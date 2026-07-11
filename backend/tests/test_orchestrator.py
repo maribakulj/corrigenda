@@ -248,7 +248,8 @@ async def test_retry_on_invalid_json(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_fallback_on_persistent_failure(tmp_path: Path):
-    """Persistent provider failure → OCR source kept, job still completed.
+    """Persistent provider failure → OCR source kept, terminal state is
+    the DEGRADED success (P0-1: completed strictly means zero fallbacks).
 
     F1 — a *transient* burst of failures now recovers by downgrading
     granularity and retrying, so the provider must fail persistently
@@ -260,7 +261,7 @@ async def test_fallback_on_persistent_failure(tmp_path: Path):
 
     job = store.get_job(job_id)
     assert job is not None
-    assert job.status.value == "completed"
+    assert job.status.value == "completed_with_fallbacks"
     assert job.fallbacks >= 1
 
     # Output file must still exist
@@ -763,11 +764,14 @@ async def test_pipeline_classifies_client_http_4xx_as_non_retryable(
     retries = [e for e in events if e.event == "retry"]
     assert retries == [], f"4xx HTTPStatusError should emit zero retry events; got {len(retries)}"
 
-    # Pin 3: fallback path was taken — job still completes, but every
-    # chunk fell back to OCR source.
+    # Pin 3: fallback path was taken — the job finishes in the DEGRADED
+    # terminal state (P0-1). NB fail-fast on 4xx requires the provider to
+    # wrap it as ProviderPermanentError (our providers do, via
+    # _wrap_if_transient — pinned in test_providers.py); this test injects
+    # a duck-typed raw error, i.e. a third-party provider that opted out.
     job = store.get_job(job_id)
     assert job is not None
-    assert job.status.value == "completed"
+    assert job.status.value == "completed_with_fallbacks"
     assert job.fallbacks >= 1, "expected fallback path to be taken on 4xx"
 
     # Pin 4: exactly one provider call per chunk — no retries. The
@@ -936,11 +940,11 @@ async def test_persistent_failure_across_all_chunks_falls_back(
 
     job = store.get_job(job_id)
     assert job is not None
-    # The runner reports completion even when every chunk fell back —
-    # the job has finished its work, the WORK just didn't yield
-    # any corrections. This matches the contract documented in
-    # runner.py: completion ≠ correctness.
-    assert job.status.value == "completed", (
+    # P0-1 — the run finishes, but a run where every chunk fell back is
+    # a DEGRADED success and must say so in its terminal state. (This
+    # test used to pin status == "completed" here — the audit's central
+    # false-success finding. The old contract is gone on purpose.)
+    assert job.status.value == "completed_with_fallbacks", (
         f"job status should be completed even after total fallback, got {job.status.value}"
     )
     assert job.fallbacks >= 1, "no fallback recorded despite provider always failing"

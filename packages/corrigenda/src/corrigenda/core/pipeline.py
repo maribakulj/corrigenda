@@ -49,7 +49,7 @@ from corrigenda.core.identity import (
     ensure_unique_identities,
     ensure_unique_page_ids_across_files,
 )
-from corrigenda.errors import CorrectionAborted
+from corrigenda.errors import CorrectionAborted, CorrectionError
 from corrigenda.core.planner import downgrade_granularity, plan_page
 from corrigenda.core.guards import check_adjacent_duplicates, check_line
 from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
@@ -59,6 +59,7 @@ from corrigenda.core.protocols import (
     FormatAdapter,
     OutputWriter,
     PipelineObserver,
+    ProviderPermanentError,
     ProviderTransientError,
     require_source_images,
 )
@@ -889,10 +890,13 @@ class CorrectionPipeline:
                     should_abort=should_abort,
                 )
                 page_reconciled += n
-            except CorrectionAborted:
-                # F10 — the descent-level probe raises inside _run_chunk;
-                # cancellation must propagate, never be downgraded to a
-                # chunk_error event.
+            except (CorrectionAborted, ProviderPermanentError):
+                # F10 — cancellation must propagate, never be downgraded
+                # to a chunk_error event. P0-1 — a permanent provider
+                # rejection (401/403/404) is fatal for the whole run: it
+                # would hit every remaining chunk identically, and
+                # converting it into per-chunk OCR fallbacks would let the
+                # run END AS A SUCCESS with silently uncorrected text.
                 raise
             except Exception as exc:
                 # ADR-006: pipeline does not log directly; emit an
@@ -905,6 +909,13 @@ class CorrectionPipeline:
                         "exception_type": type(exc).__name__,
                     },
                 )
+                # P0-2 — only RECOVERABLE domain errors may be absorbed as
+                # a chunk_error + continue. Anything else (KeyError,
+                # AttributeError, a pydantic bug, a broken invariant) is a
+                # programming error: continuing would let the run complete
+                # "successfully" with lines in an unknown state.
+                if not isinstance(exc, CorrectionError):
+                    raise
 
         # P2-6 — cross-chunk adjacency pass. Per-chunk finalization only
         # sees that chunk's TARGET lines, so two document-adjacent lines
@@ -1358,6 +1369,10 @@ class CorrectionPipeline:
                 )
                 return response, attempts_used, False, "", chunk_usage
 
+            except ProviderPermanentError:
+                # P0-1 — credentials/model rejected: retrying is pointless
+                # and falling back would fake success. Fatal for the run.
+                raise
             except Exception as exc:
                 # §5.1 — the pipeline no longer holds credentials; the
                 # pattern-based redaction still masks secret-shaped

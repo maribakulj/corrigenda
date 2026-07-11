@@ -22,9 +22,9 @@ from app.jobs import runner as _runner_module
 from app.jobs.runner import JobRunner
 from app.protocols import JobStore
 from app.schemas import (
+    TERMINAL_SUCCESS_STATES,
     CreateJobResponse,
     JobManifest,
-    JobStatus,
     JobStatusResponse,
     Provider,
 )
@@ -65,7 +65,9 @@ def get_completed_job(
     job = store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
-    if job.status != JobStatus.COMPLETED:
+    # P0-1 — both terminal success states expose their (valid) outputs;
+    # COMPLETED_WITH_FALLBACKS is degraded but downloadable by design.
+    if job.status not in TERMINAL_SUCCESS_STATES:
         raise HTTPException(
             status_code=400,
             detail=f"Job is not completed yet (status: {job.status.value})",

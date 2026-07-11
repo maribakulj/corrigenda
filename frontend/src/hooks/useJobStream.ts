@@ -186,8 +186,11 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
           setLogs((l) => appendLog(l, makeLog('warning', ev.message)))
           break
 
-        case 'completed':
-          setStatus('completed')
+        case 'completed': {
+          // P0-1 — the server distinguishes clean success from degraded
+          // success (some lines kept their OCR text); adopt its status.
+          const terminal = ev.status ?? 'completed'
+          setStatus(terminal)
           setProgress((p) => ({
             ...p,
             lines_done: ev.total_lines,
@@ -202,8 +205,21 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
               ),
             ),
           )
+          if (terminal === 'completed_with_fallbacks') {
+            const n = ev.fallbacks ?? 0
+            setLogs((l) =>
+              appendLog(
+                l,
+                makeLog(
+                  'warning',
+                  `Degraded success — ${n} line(s) fell back to their OCR source text (provider output rejected). Review them in the trace panel.`,
+                ),
+              ),
+            )
+          }
           esRef.current?.close()
           break
+        }
 
         case 'failed':
           setStatus('failed')
@@ -224,7 +240,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
         es.close()
         if (cancelled) return
         const s = statusRef.current
-        if (s === 'completed' || s === 'failed') return
+        if (s === 'completed' || s === 'completed_with_fallbacks' || s === 'failed') return
 
         if (retryCountRef.current >= MAX_RETRIES) {
           setLogs((l) =>

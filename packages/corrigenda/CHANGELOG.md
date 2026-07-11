@@ -70,6 +70,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restores the historical behaviour exactly. Composite config
   fingerprint moves ``3a06d0a93ac4eedc`` → ``216aa712f1e99b79``.
 
+### Added (provider error taxonomy — P0-1/P0-2)
+
+- **`ProviderPermanentError`** *(in `corrigenda.core.protocols`, next to
+  `ProviderTransientError`)* — the provider definitively rejected the
+  request (invalid credentials, unknown model — the 4xx-non-429 family).
+  The pipeline treats it as **fatal for the whole run**: never retried,
+  never downgraded, never converted into an OCR fallback; it propagates
+  out of `run()` before any output is written, like `CorrectionAborted`.
+  Providers that don't wrap keep the old degrade-to-fallback behaviour.
+- **P0-2 — the per-chunk `except Exception` is gone.** Only recoverable
+  domain errors (`CorrectionError` subclasses) may be absorbed as a
+  `chunk_error` event + continue; a programming error (KeyError, broken
+  invariant, pydantic bug) now fails the run instead of letting it
+  complete "successfully" with lines in an unknown state.
+
 ### Fixed (adversarial-review wave over the remediation itself)
 
 - **Planner window walk survives config-validation bypass.** Pydantic's

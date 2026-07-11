@@ -17,6 +17,7 @@ import warnings
 from pathlib import Path
 
 from corrigenda import CorrectionPipeline, CorrectionResult, sanitize_error
+from corrigenda.core.protocols import ProviderPermanentError
 
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore, OutputWriter
@@ -108,9 +109,17 @@ class JobRunner:
             )
             elapsed = round(time.monotonic() - start_time, 2)
 
+            # P0-1 — COMPLETED strictly means "zero fallbacks". A run where
+            # some lines silently kept their OCR source text is a DEGRADED
+            # success and says so in its terminal state.
+            terminal = (
+                JobStatus.COMPLETED_WITH_FALLBACKS
+                if result.fallback_count > 0
+                else JobStatus.COMPLETED
+            )
             self.job_store.update_job(
                 job_id,
-                status=JobStatus.COMPLETED,
+                status=terminal,
                 chunks_total=total_chunks,
                 lines_modified=lines_modified,
                 duration_seconds=elapsed,
@@ -140,6 +149,12 @@ class JobRunner:
                     "hyphen_pairs_total": total_reconciled,
                     "chunks_total": total_chunks,
                     "duration_seconds": elapsed,
+                    # P0-1 — degraded-success visibility: the terminal
+                    # status and the fallback count ride the event so the
+                    # client can render "success" vs "success with N
+                    # uncorrected lines" without an extra round-trip.
+                    "status": terminal.value,
+                    "fallbacks": result.fallback_count,
                 },
             )
 
@@ -182,6 +197,31 @@ class JobRunner:
             # propagates it correctly (this is the documented asyncio
             # pattern for handling CancelledError — never silently swallow).
             raise
+
+        except ProviderPermanentError as exc:
+            # P0-1 — the provider definitively rejected the request
+            # (invalid key, unknown model, 4xx family). The message is
+            # already built provider-side without credentials; sanitise
+            # anyway (defence in depth) and fail with a clear, actionable
+            # error instead of ever reaching COMPLETED.
+            logger.error(
+                "Job %s failed on a permanent provider error (HTTP %s)",
+                job_id,
+                exc.status_code,
+            )
+            elapsed = round(time.monotonic() - start_time, 2)
+            safe_error = sanitize_error(str(exc), api_key)[:500]
+            self.job_store.update_job(
+                job_id,
+                status=JobStatus.FAILED,
+                error=safe_error,
+                duration_seconds=elapsed,
+            )
+            self.job_store.emit(
+                job_id,
+                PipelineEventType.FAILED,
+                {"job_id": job_id, "error": safe_error},
+            )
 
         except Exception as exc:
             logger.exception("Job %s failed", job_id)

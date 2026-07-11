@@ -389,7 +389,7 @@ def test_fallback_on_invalid_json():
 
     job = store.get_job(job_id)
     assert job is not None
-    assert job.status.value == "completed"
+    assert job.status.value == "completed_with_fallbacks"
     assert job.fallbacks > 0, "Expected at least one fallback to OCR source"
 
     # Output must still be valid ALTO XML

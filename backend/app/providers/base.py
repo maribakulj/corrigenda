@@ -22,6 +22,7 @@ import httpx
 # Re-exports — public LLM contract lives in corrigenda now.
 from corrigenda.core.protocols import (  # noqa: F401  re-exported
     BaseProvider,
+    ProviderPermanentError,
     ProviderTransientError,
 )
 from corrigenda.producers.llm import (  # noqa: F401  re-exported
@@ -49,22 +50,26 @@ _TRANSIENT_HTTPX_TYPES: tuple[type[BaseException], ...] = (
 
 
 def _wrap_if_transient(exc: BaseException) -> BaseException:
-    """Return a ``ProviderTransientError`` chained to ``exc`` when ``exc``
-    is one of the known transient httpx classes; otherwise return
-    ``exc`` unchanged so the caller's raise leaves the original
-    traceback intact.
+    """Classify an httpx failure into the pipeline's provider taxonomy.
 
     httpx.HTTPStatusError is intentionally split: 4xx (other than 429)
-    is a client-side bug — bad credentials, malformed schema — that
-    won't heal on retry, so we leave it alone. 5xx and 429 ARE
-    transient. The split happens here rather than at the catch site so
-    the pipeline doesn't need to know httpx status semantics.
+    is a client-side rejection — bad credentials, unknown model,
+    definitively refused schema — that won't heal on retry. P0-1: it is
+    wrapped as ``ProviderPermanentError`` so the pipeline FAILS THE RUN
+    instead of silently falling every chunk back to OCR and reporting
+    success. 5xx and 429 are transient; transport-level failures too.
+    The split happens here rather than at the catch site so the
+    pipeline doesn't need to know httpx status semantics.
     """
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         # 4xx is client error — only 429 (rate-limit) is worth retrying.
         if 400 <= status < 500 and status != 429:
-            return exc
+            return ProviderPermanentError(
+                f"provider rejected the request (HTTP {status}) — check the "
+                "API key, model name and request format",
+                status_code=status,
+            ).with_traceback(exc.__traceback__)
         return ProviderTransientError(str(exc), status_code=status).with_traceback(
             exc.__traceback__
         )
