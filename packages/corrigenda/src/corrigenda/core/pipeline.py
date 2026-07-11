@@ -45,7 +45,8 @@ from corrigenda.core.hyphenation import (
     enrich_chunk_lines,
     reconcile_hyphen_pair,
 )
-from corrigenda.errors import CorrectionAborted
+from corrigenda.core.identity import ensure_unique_identities
+from corrigenda.errors import CorrectionAborted, DuplicateIdError
 from corrigenda.core.planner import downgrade_granularity, plan_page
 from corrigenda.core.guards import check_adjacent_duplicates, check_line
 from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
@@ -628,6 +629,28 @@ class CorrectionPipeline:
         # §5.1 — a vision producer without its images is a start-up error,
         # never a silent image-less call.
         require_source_images(self.producer, list(source_files.keys()), source_images)
+
+        # P0-5 — identity-uniqueness invariant, enforced at the pipeline
+        # door so hand-built manifests get the same guarantee as
+        # parser-built ones: within one source file every page/block/line
+        # ID must be unique (correction-to-line association is keyed by
+        # bare line_id per file), and page_ids must be unique across the
+        # whole document (trace keys, per-page image/dimension lookups).
+        pages_by_file: dict[str, list[PageManifest]] = {}
+        for page in document_manifest.pages:
+            pages_by_file.setdefault(page.source_file, []).append(page)
+        for src_name, src_pages in pages_by_file.items():
+            ensure_unique_identities(src_pages, src_name)
+        seen_page_ids: dict[str, str] = {}
+        for page in document_manifest.pages:
+            first = seen_page_ids.setdefault(page.page_id, page.source_file)
+            if first != page.source_file:
+                raise DuplicateIdError(
+                    f"page_id {page.page_id!r} appears in both {first!r} and "
+                    f"{page.source_file!r} — cross-file page ids must be "
+                    "disambiguated before running (the format parsers' "
+                    "build_document_manifest does this automatically)."
+                )
         # §4.1 — per-page vision envelope lookups, resolved once. Pure
         # copying: the ImageRef stays an opaque string end to end.
         images = source_images or {}

@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`DuplicateIdError`** *(top-level, subclasses `ParseError`)* — P0-5
+  identity-uniqueness invariant. A source file whose Page / TextBlock /
+  TextLine IDs are not unique is now refused explicitly instead of being
+  silently mis-corrected: previously, two `TextLine` elements sharing an ID
+  made the rewriters apply the *last* parsed manifest to **both** physical
+  lines (last-write-wins on an internal `line_id` dict), destroying one
+  line's text. Enforced in four layers: both format parsers (right after
+  manifest construction), `CorrectionPipeline.run()` (at the door, so
+  hand-built manifests get the same guarantee — including cross-file
+  `page_id` collisions), both rewriters, and both `extract_output_texts`.
+  Duplicate IDs across *different* source files remain legitimate (every
+  downstream lookup is scoped to one file). Additive change: existing
+  `except ParseError` / `except CorrectionError` call sites keep working.
 
 ## [1.0.0] — 2026-07-06
 

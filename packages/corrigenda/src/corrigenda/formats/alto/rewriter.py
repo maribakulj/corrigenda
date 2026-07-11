@@ -8,6 +8,7 @@ from pathlib import Path
 from lxml import etree
 
 from corrigenda.core._norm import clean_content, nfc
+from corrigenda.errors import DuplicateIdError
 from corrigenda.formats.alto._ns import (
     _detect_namespace,
     _int_attr,
@@ -613,16 +614,34 @@ def rewrite_alto_file(
     metrics = RewriterMetrics()
     line_paths: dict[str, str] = {}
 
+    # P0-5 — a bare line_id keys every correction-to-element association
+    # below. A duplicate (in the manifests OR on the XML elements) would
+    # silently apply one line's correction to another physical line, so
+    # both sides fail loudly instead. Parsers enforce the same invariant
+    # up front; this guards direct calls with hand-built manifests.
     line_by_id: dict[str, LineManifest] = {}
     for page in page_manifests:
         for lm in page.lines:
+            if lm.line_id in line_by_id:
+                raise DuplicateIdError(
+                    f"duplicate line_id {lm.line_id!r} across page manifests "
+                    f"for {xml_path.name!r} — correction-to-line association "
+                    "would be ambiguous (P0-5)."
+                )
             line_by_id[lm.line_id] = lm
 
+    seen_element_ids: set[str] = set()
     textline_tag = _tag("TextLine", ns)
     for tl_el in root.iter(textline_tag):
         line_id = tl_el.get("ID")
         if line_id not in line_by_id:
             continue
+        if line_id in seen_element_ids:
+            raise DuplicateIdError(
+                f"duplicate TextLine ID {line_id!r} in {xml_path.name!r} — "
+                "two physical lines would receive the same correction (P0-5)."
+            )
+        seen_element_ids.add(line_id)
         lm = line_by_id[line_id]
 
         corrected = lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
@@ -684,6 +703,13 @@ def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]
     for tl_el in root.iter(textline_tag):
         line_id = tl_el.get("ID")
         if line_id in line_ids:
+            if line_id in result:
+                # P0-5 — a repeated ID would silently collapse two physical
+                # lines into one trace entry.
+                raise DuplicateIdError(
+                    f"duplicate TextLine ID {line_id!r} in rewritten ALTO — "
+                    "output-text extraction would be ambiguous (P0-5)."
+                )
             result[line_id] = reconstruct_textline(tl_el, ns)
     return result
 

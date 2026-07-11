@@ -5,6 +5,7 @@ raises so consumers can ``except CorrectionError`` once::
 
     CorrectionError
     ├── ParseError          (also ValueError)
+    │   └── DuplicateIdError       — ambiguous identities in source/manifest
     ├── ValidationError     (also ValueError) — producer response invalid
     │   └── HyphenIntegrityError   (defined in pipeline.validator)
     └── CorrectionAborted
@@ -28,6 +29,23 @@ class ParseError(CorrectionError, ValueError):
 
     Inherits ``ValueError`` for backwards compatibility with call sites
     that caught the bare ``ValueError`` the parser used to raise.
+    """
+
+
+class DuplicateIdError(ParseError):
+    """A source document or manifest set carries duplicate identities (P0-5).
+
+    Every internal association between a correction and its physical line
+    (rewriter lookup, trace projection, hyphen partner resolution) is keyed
+    by ``line_id`` within one source file. A document where two ``TextLine``
+    elements share an ID — or a hand-built manifest repeating a ``line_id``
+    within one file — is *ambiguous*: silently continuing would risk applying
+    a correction to the wrong physical line. The library refuses such input
+    explicitly instead of guessing.
+
+    Inherits :class:`ParseError` (hence ``CorrectionError`` and
+    ``ValueError``) so existing ``except ParseError`` call sites keep
+    working.
     """
 
 
@@ -57,6 +75,7 @@ class CorrectionAborted(CorrectionError):
 __all__ = [
     "CorrectionError",
     "ParseError",
+    "DuplicateIdError",
     "ValidationError",
     "CorrectionAborted",
 ]

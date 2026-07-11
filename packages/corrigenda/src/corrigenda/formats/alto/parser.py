@@ -11,6 +11,7 @@ from corrigenda.formats.alto._ns import (
     make_safe_parser,
 )
 from corrigenda.formats.alto._text import reconstruct_textline
+from corrigenda.core.identity import ensure_unique_identities
 from corrigenda.core.pairing import (
     disambiguate_page_ids as _disambiguate_page_ids,
     link_cross_page_hyphens as _link_cross_page_hyphens,
@@ -255,6 +256,10 @@ def parse_alto_file(
                 lines=lines,
             )
         )
+
+    # P0-5 — duplicate IDs within one file make every downstream
+    # correction-to-line association ambiguous. Refuse explicitly.
+    ensure_unique_identities(pages, source_name)
 
     return pages, root
 

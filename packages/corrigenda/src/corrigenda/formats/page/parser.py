@@ -17,6 +17,7 @@ from pathlib import Path
 from lxml import etree
 
 from corrigenda.core._parse import parse_int_tolerant
+from corrigenda.core.identity import ensure_unique_identities
 from corrigenda.core.pairing import (
     HYPHEN_CHARS,
     disambiguate_page_ids,
@@ -162,6 +163,10 @@ def parse_page_file(
                 lines=lines,
             )
         )
+
+    # P0-5 — duplicate IDs within one file make every downstream
+    # correction-to-line association ambiguous. Refuse explicitly.
+    ensure_unique_identities(pages, source_name)
 
     return pages, root
 

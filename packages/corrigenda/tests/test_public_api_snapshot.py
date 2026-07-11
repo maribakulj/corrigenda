@@ -62,6 +62,7 @@ PUBLIC_API_1_0 = sorted(
         # Errors (§8.4)
         "CorrectionError",
         "ParseError",
+        "DuplicateIdError",  # P0-5 — additive, subclasses ParseError
         "ValidationError",
         "CorrectionAborted",
         # Ports

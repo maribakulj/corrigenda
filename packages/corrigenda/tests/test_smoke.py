@@ -188,6 +188,8 @@ def test_changelog_added_symbols_are_importable():
             ["BaseProvider", "PipelineObserver", "OutputWriter"],
         ),
         ("corrigenda.producers.llm", ["OUTPUT_JSON_SCHEMA", "SYSTEM_PROMPT"]),
+        # corrigenda.errors — P0-5 (Unreleased ### Added)
+        ("corrigenda.errors", ["DuplicateIdError"]),
     ]
 
     missing: list[str] = []
