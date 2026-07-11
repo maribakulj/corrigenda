@@ -84,6 +84,31 @@ def _wrap_if_transient(exc: BaseException) -> BaseException:
 # HTTP helpers
 # ---------------------------------------------------------------------------
 
+# P2-10 — one shared AsyncClient for every provider call. Historically
+# call_llm and get_json each opened (and tore down) a fresh client per
+# request: no connection reuse, a TLS handshake per chunk, and an extra
+# socket churn under concurrency. The shared client pools connections;
+# per-request timeouts are still passed per call. Closed by the app's
+# lifespan via aclose_shared_client() (harmless to skip in short-lived
+# scripts — the loop teardown closes sockets anyway).
+_shared_client: httpx.AsyncClient | None = None
+
+
+def get_shared_client() -> httpx.AsyncClient:
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)
+        )
+    return _shared_client
+
+
+async def aclose_shared_client() -> None:
+    global _shared_client
+    if _shared_client is not None and not _shared_client.is_closed:
+        await _shared_client.aclose()
+    _shared_client = None
+
 
 async def call_llm(
     *,
@@ -103,27 +128,27 @@ async def call_llm(
     routes them to exponential backoff.
     """
     try:
-        async with httpx.AsyncClient() as client:
+        client = get_shared_client()
+        resp = await client.post(
+            url,
+            headers=headers,
+            json=body,
+            params=params,
+            timeout=timeout,
+        )
+
+        if resp.status_code in (400, 422) and fallback_body is not None:
+            logger.info("Schema rejected (%s) — retrying with fallback body", resp.status_code)
             resp = await client.post(
                 url,
                 headers=headers,
-                json=body,
+                json=fallback_body,
                 params=params,
                 timeout=timeout,
             )
 
-            if resp.status_code in (400, 422) and fallback_body is not None:
-                logger.info("Schema rejected (%s) — retrying with fallback body", resp.status_code)
-                resp = await client.post(
-                    url,
-                    headers=headers,
-                    json=fallback_body,
-                    params=params,
-                    timeout=timeout,
-                )
-
-            resp.raise_for_status()
-            return resp.json()
+        resp.raise_for_status()
+        return resp.json()
     except Exception as exc:
         wrapped = _wrap_if_transient(exc)
         if wrapped is exc:
@@ -190,15 +215,14 @@ async def get_json(
     happens in one place.
     """
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                url,
-                headers=headers or {},
-                params=params,
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            return resp.json()
+        resp = await get_shared_client().get(
+            url,
+            headers=headers or {},
+            params=params,
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
     except Exception as exc:
         wrapped = _wrap_if_transient(exc)
         if wrapped is exc:

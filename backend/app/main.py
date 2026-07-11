@@ -70,6 +70,10 @@ async def lifespan(app: FastAPI):
         registry: BackgroundTaskRegistry | None = getattr(app.state, "tasks", None)
         if registry is not None:
             await registry.shutdown(timeout=30.0)
+        # P2-10 — close the pooled provider HTTP client.
+        from app.providers.base import aclose_shared_client
+
+        await aclose_shared_client()
 
 
 def _rate_limit_handler(_request: Request, exc: Exception) -> JSONResponse:
@@ -212,6 +216,13 @@ def create_app() -> FastAPI:
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
+        # P2-1 — the catch-all must NEVER swallow API/health paths: a
+        # typo like /api/job/123 (singular) used to return index.html
+        # with a 200, masking deployment errors and fooling probes.
+        reserved = full_path == "api" or full_path.startswith("api/")
+        reserved = reserved or full_path == "health" or full_path.startswith("health/")
+        if reserved:
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
         if _INDEX_HTML.exists():
             return FileResponse(str(_INDEX_HTML))
         return JSONResponse({"status": "ok"})

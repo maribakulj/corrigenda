@@ -11,6 +11,7 @@ import zipfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+from corrigenda.core.schemas import PairingPolicy
 from corrigenda.formats.alto.parser import build_document_manifest
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -144,6 +145,10 @@ async def create_job(
     provider: str = Form(...),
     api_key: str = Form(...),
     model: str = Form(...),
+    # P1-2 opt-out — the default PairingPolicy vets heuristic hyphen
+    # pairs geometrically; exotic layouts can restore the historical
+    # purely-sequential pairing without forking the deployment.
+    geometric_pairing: bool = Form(True),
     store: JobStore = Depends(get_job_store),
 ) -> CreateJobResponse:
     """Upload ALTO files and start a correction job."""
@@ -239,9 +244,10 @@ async def create_job(
             )
 
         # Build document manifest
+        pairing_policy = PairingPolicy(geometric_checks=geometric_pairing)
         file_pairs = [(path, name) for name, path in saved.items()]
         try:
-            doc_manifest = build_document_manifest(file_pairs)
+            doc_manifest = build_document_manifest(file_pairs, pairing_policy=pairing_policy)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Failed to parse files: {exc}") from exc
 
@@ -499,4 +505,6 @@ async def get_job_image(
         raise HTTPException(status_code=404, detail=f"Image not found: {image_name!r}")
 
     mime = _IMAGE_MIME.get(img_path.suffix.lower(), "application/octet-stream")
-    return Response(content=img_path.read_bytes(), media_type=mime)
+    # P2-12 — stream in chunks like the XML download does; read_bytes()
+    # buffered whole scans (tens of MB) per request in memory.
+    return FileResponse(img_path, media_type=mime)
