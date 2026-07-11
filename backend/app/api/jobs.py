@@ -302,8 +302,18 @@ async def download_job(
     store: JobStore = Depends(get_job_store),
 ) -> Response:
     """Download corrected XML file(s)."""
-    if store.get_job(job_id) is None:
+    job = store.get_job(job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+    # P0-4 — outputs are only served for a terminal-success job. The
+    # writer stages files and only commits on success, but this guard is
+    # the contract: a FAILED/RUNNING job's /download can never return a
+    # partial or stale set, whatever is on disk.
+    if job.status not in TERMINAL_SUCCESS_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Job is not in a downloadable state (status: {job.status.value})."),
+        )
 
     out_files = get_output_files(job_id)
     if not out_files:

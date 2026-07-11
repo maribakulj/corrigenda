@@ -300,6 +300,10 @@ def test_download_multi_file_returns_valid_zip(client: TestClient):
     payload_b = b"<alto><B/></alto>"
     (out_dir / "a.corrected.xml").write_bytes(payload_a)
     (out_dir / "b.corrected.xml").write_bytes(payload_b)
+    # P0-4 — /download now requires a terminal-success state.
+    from app.schemas import JobStatus
+
+    store.update_job(job_id, status=JobStatus.COMPLETED)
 
     resp = client.get(f"/api/jobs/{job_id}/download")
     assert resp.status_code == 200
@@ -433,12 +437,14 @@ def test_get_job_known(client: TestClient):
 
 
 def test_download_not_ready(client: TestClient):
-    # Create job but do NOT wait for completion
+    # Create job but do NOT wait for completion. P0-4 — a non-terminal
+    # job is explicitly NOT downloadable (409), regardless of what is
+    # on disk.
     from app.schemas import Provider
 
     job_id = client.app.state.job_store.create_job(Provider.OPENAI, "mock")
     resp = client.get(f"/api/jobs/{job_id}/download")
-    assert resp.status_code == 404
+    assert resp.status_code == 409
 
 
 # ---------------------------------------------------------------------------

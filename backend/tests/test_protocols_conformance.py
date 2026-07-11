@@ -57,11 +57,16 @@ def test_filesystem_output_writer_implements_output_writer_protocol(tmp_path: Pa
 
 
 def test_filesystem_output_writer_persists_corrected_and_trace(tmp_path: Path):
-    """Writer round-trip: bytes/strings handed in are read back identically."""
+    """Writer round-trip: bytes/strings handed in are read back identically.
+
+    P0-4 — writes are STAGED and only become visible after commit()
+    (called by the JobRunner on success); the round-trip therefore
+    includes the commit."""
     writer = FilesystemOutputWriter(tmp_path)
 
     writer.write_corrected(source_stem="doc1", xml_bytes=b"<xml>corrected</xml>")
     writer.write_trace(traces_payload='{"job_id":"j1","lines":[]}')
+    writer.commit()
 
     assert (tmp_path / "doc1_corrected.xml").read_bytes() == b"<xml>corrected</xml>"
     assert (tmp_path / "trace.json").read_text(encoding="utf-8") == '{"job_id":"j1","lines":[]}'

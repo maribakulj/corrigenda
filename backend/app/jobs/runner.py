@@ -52,6 +52,23 @@ class JobRunner:
     def __init__(self, job_store: JobStore) -> None:
         self.job_store = job_store
 
+    @staticmethod
+    def _commit_outputs(output_writer: OutputWriter) -> None:
+        """P0-4 — promote staged outputs atomically after a successful
+        run. Duck-typed: writers without a staging concept (in-memory
+        test doubles, custom sinks) simply skip it."""
+        commit = getattr(output_writer, "commit", None)
+        if callable(commit):
+            commit()
+
+    @staticmethod
+    def _discard_outputs(output_writer: OutputWriter) -> None:
+        """P0-4 — drop staged outputs on failure/timeout/cancellation so
+        nothing partial ever becomes downloadable."""
+        discard = getattr(output_writer, "discard", None)
+        if callable(discard):
+            discard()
+
     async def run(
         self,
         *,
@@ -109,6 +126,11 @@ class JobRunner:
             )
             elapsed = round(time.monotonic() - start_time, 2)
 
+            # P0-4 — promote the staged outputs BEFORE the job turns
+            # terminal-success: a client that sees the status can always
+            # download the complete, committed set.
+            self._commit_outputs(output_writer)
+
             # P0-1 — COMPLETED strictly means "zero fallbacks". A run where
             # some lines silently kept their OCR source text is a DEGRADED
             # success and says so in its terminal state.
@@ -159,6 +181,7 @@ class JobRunner:
             )
 
         except TimeoutError:
+            self._discard_outputs(output_writer)
             logger.error("Job %s timed out after %ss", job_id, timeout_seconds)
             elapsed = round(time.monotonic() - start_time, 2)
             safe_error = f"Job timed out after {timeout_seconds}s"
@@ -173,6 +196,7 @@ class JobRunner:
             )
 
         except asyncio.CancelledError:
+            self._discard_outputs(output_writer)
             # L10/B8 — SIGTERM during shutdown cancels the runner task
             # via `BackgroundTaskRegistry.shutdown()` past the 30 s grace
             # deadline. `CancelledError` extends `BaseException` (not
@@ -199,6 +223,7 @@ class JobRunner:
             raise
 
         except ProviderPermanentError as exc:
+            self._discard_outputs(output_writer)
             # P0-1 — the provider definitively rejected the request
             # (invalid key, unknown model, 4xx family). The message is
             # already built provider-side without credentials; sanitise
@@ -224,6 +249,7 @@ class JobRunner:
             )
 
         except Exception as exc:
+            self._discard_outputs(output_writer)
             logger.exception("Job %s failed", job_id)
             # Sanitise BEFORE truncating: if the api_key straddles the 500-char
             # boundary, slicing first would leave half the key visible and the
