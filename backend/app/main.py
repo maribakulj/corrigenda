@@ -18,6 +18,8 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 logger = logging.getLogger(__name__)
 
+from corrigenda import __version__ as _corrigenda_version
+
 from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
 from app.api.providers import router as providers_router
@@ -106,9 +108,12 @@ def create_app() -> FastAPI:
     setup_json_logging()
 
     app = FastAPI(
-        title="ALTO LLM Corrector",
-        description="Post-OCR text correction of ALTO XML files using LLM providers.",
-        version="1.0.0",
+        title="Corrigenda",
+        description="Post-OCR text correction of ALTO/PAGE XML files using LLM providers.",
+        # Single version source: the backend tracks the corrigenda library
+        # it embeds (audit: backend version was a hardcoded "1.0.0"
+        # drifting from the package version).
+        version=_corrigenda_version,
         lifespan=lifespan,
     )
 

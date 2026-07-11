@@ -13,7 +13,7 @@ readme = "README.md"
 # the hatch.build.targets.sdist include below.
 requires-python = ">=3.11"
 authors = [
-    { name = "alto-llm-corrector contributors" },
+    { name = "corrigenda contributors" },
 ]
 keywords = ["alto", "page-xml", "ocr", "xml", "llm", "digital-heritage", "transkribus", "escriptorium"]
 classifiers = [
@@ -30,8 +30,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/maribakulj/alto-llm-corrector"
-Issues = "https://github.com/maribakulj/alto-llm-corrector/issues"
+Homepage = "https://github.com/maribakulj/corrigenda"
+Issues = "https://github.com/maribakulj/corrigenda/issues"
 
 [build-system]
 requires = ["hatchling"]
