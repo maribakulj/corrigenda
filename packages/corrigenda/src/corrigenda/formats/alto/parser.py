@@ -238,7 +238,9 @@ def parse_alto_file(
     Parse one ALTO XML file and return (list_of_PageManifest, root_element).
 
     ``pairing_policy`` (F7) is forwarded to the hyphen-pair linker; the
-    default reproduces the historical purely-sequential pairing.
+    default (P1-2) vets heuristic pairs geometrically; pass
+    ``PairingPolicy(geometric_checks=False)`` for the historical
+    purely-sequential pairing.
     """
     # Hardened parser shared with rewriter.py + extract_output_texts.
     # See corrigenda.formats.alto._ns.make_safe_parser docstring.
@@ -353,7 +355,7 @@ def build_document_manifest(
     Files are processed in order; page/line indices are continuous.
 
     ``pairing_policy`` (F7) is applied to both intra-page and cross-page
-    hyphen linking; the default reproduces the historical behaviour.
+    hyphen linking; the default (P1-2) vets heuristic pairs geometrically.
     """
     source_files: list[str] = []
     page_offset = 0

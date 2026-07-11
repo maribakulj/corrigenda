@@ -62,8 +62,13 @@ def _default_pipeline() -> CorrectionPipeline:
 
 def test_config_fingerprint_is_pinned():
     """The composite fingerprint stamped into every corrected XML's
-    processingStep. Changing any default policy value changes this."""
-    assert _default_pipeline().config_fingerprint() == "3a06d0a93ac4eedc"
+    processingStep. Changing any default policy value changes this.
+
+    History: ``3a06d0a93ac4eedc`` (1.0.0) → ``216aa712f1e99b79`` after the
+    P1-2 geometric pairing defaults landed (PairingPolicy grew
+    ``geometric_checks`` / ``max_gap_line_heights`` / ``max_rise_line_heights``;
+    behaviour change recorded in CHANGELOG under [Unreleased])."""
+    assert _default_pipeline().config_fingerprint() == "216aa712f1e99b79"
 
 
 def test_each_policy_fingerprint_is_pinned():

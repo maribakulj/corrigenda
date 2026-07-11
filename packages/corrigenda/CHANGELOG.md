@@ -18,6 +18,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is double-counted). ALTO's container rule is unchanged (``PrintSpace``
   when present, else the whole ``Page``).
 
+### Changed
+
+- **P1-2 — the default `PairingPolicy` is now geometric.** The historical
+  default accepted *every* sequential hyphen-pair candidate — on layouts
+  whose serialisation order diverges from reading order, a PART1 line
+  could silently pair with a marginal note, an unrelated block, or an
+  out-of-order line, shaping the LLM context with the wrong partner.
+  Heuristic (trailing-dash) pairs are now vetted at pairing time: same
+  block → candidate below within ``max_gap_line_heights`` (default 3.0)
+  of the line's own height; cross-block same page → either a downward
+  continuation with horizontal overlap (next block, same column) or an
+  upward, horizontally disjoint, entirely-above jump (top of the next
+  column — direction-agnostic, RTL-safe). Engine-asserted (explicit
+  ``SUBS_TYPE``/``HYP``) pairs, cross-page seams and degenerate
+  (coordinate-less) geometry are always trusted. New fingerprinted
+  fields ``geometric_checks`` / ``max_gap_line_heights`` /
+  ``max_rise_line_heights``; ``PairingPolicy(geometric_checks=False)``
+  restores the historical behaviour exactly. Composite config
+  fingerprint moves ``3a06d0a93ac4eedc`` → ``216aa712f1e99b79``.
+
 ### Added
 
 - **P1-1 — explicit reading order.** PAGE ``ReadingOrder`` declarations

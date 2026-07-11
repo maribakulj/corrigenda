@@ -278,15 +278,17 @@ def test_page_multicolumn_hyphen_pairs_follow_reading_order(tmp_path: Path):
     """The P1-2 prerequisite: with a declared reading order, a PART1 line at
     the bottom of column 1 now sees column 1's real successor — not
     whatever region happened to come next in raw XML order."""
+    # Realistic multicolumn geometry: the hyphenated line sits at the
+    # BOTTOM of column 1; its continuation is the TOP line of column 2.
     col2 = (
-        '<TextRegion id="col2"><Coords points="500,0 1000,0 1000,900 500,900"/>'
-        '<TextLine id="c2l1"><Coords points="500,0 1000,0 1000,20 500,20"/>'
+        '<TextRegion id="col2"><Coords points="510,0 1000,0 1000,900 510,900"/>'
+        '<TextLine id="c2l1"><Coords points="510,10 1000,10 1000,30 510,30"/>'
         "<TextEquiv><Unicode>suite du mot</Unicode></TextEquiv></TextLine>"
         "</TextRegion>"
     )
     col1 = (
         '<TextRegion id="col1"><Coords points="0,0 500,0 500,900 0,900"/>'
-        '<TextLine id="c1l1"><Coords points="0,0 500,0 500,20 0,20"/>'
+        '<TextLine id="c1l1"><Coords points="0,870 500,870 500,890 0,890"/>'
         "<TextEquiv><Unicode>debut coupe-</Unicode></TextEquiv></TextLine>"
         "</TextRegion>"
     )

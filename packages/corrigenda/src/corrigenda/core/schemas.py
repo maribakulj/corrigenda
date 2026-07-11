@@ -351,23 +351,42 @@ DEFAULT_GUARD_CONFIG = GuardConfig()
 class PairingPolicy(FrozenPolicy):
     """Decides whether a PART1/BOTH line may pair with the following line (F7).
 
-    Hyphen pairing is purely sequential: the parser links a PART1/BOTH line
-    to the line immediately after it, with no geometric check. That is a
-    documented *assumption*, not a proven fact — a PART1 at the bottom of a
-    column and an unrelated line at the top of the next column can be
-    mis-paired. The downstream migration guards (stages A/B/C) already
-    catch the fallout, so the default here stays permissive; this policy is
-    the seam that lets a consumer harden pairing (reject partners too far
-    below, or in an unrelated block) **without forking the parser**.
+    Hyphen pairing is sequential — the parser proposes the next line in
+    reading order — and this policy vets the proposal. P1-2: the default
+    is now *geometric* for **heuristic** pairs (trailing-dash detection):
 
-    Defaults reproduce the historical behaviour exactly: no geometric
-    constraint, cross-block pairing allowed — ``can_pair`` always returns
-    ``True``.
+    * same block — the candidate must sit BELOW the PART1 line, within
+      ``max_gap_line_heights`` of the line's own height (and no more than
+      ``max_rise_line_heights`` above it, tolerance for skew/overlap).
+      Rejects segmentation noise and table-cell jumps.
+    * different block, same page — the candidate must look like a real
+      reading continuation: either *downward with horizontal overlap*
+      (next block in the same column) or *upward and horizontally
+      disjoint* (top of the next column; direction-agnostic, so RTL
+      layouts are treated identically). A note in the margin or a block
+      far below the column is rejected.
+    * different page — always accepted: cross-page linking is only ever
+      proposed between the last line of page N and the first line of
+      page N+1 (see ``link_cross_page_hyphens``), and VPOS restarts per
+      page so geometry is not comparable.
+    * **explicit** pairs (ALTO ``SUBS_TYPE``/``HYP`` markup on either
+      side) are always accepted: the OCR engine asserted the
+      continuation; sequential order in the engine's own serialisation
+      is stronger evidence than our geometric plausibility check.
+    * degenerate geometry (zero-height/width boxes, common in minimal
+      PAGE exports) — accepted: there is nothing to verify, and refusing
+      would silently disable hyphenation for every coordinate-less
+      document.
+
+    ``geometric_checks=False`` restores the historical accept-everything
+    behaviour exactly.
     """
 
     #: Reject a partner whose top is more than this many ALTO units below
     #: the PART1 line's bottom (``candidate.vpos - (part1.vpos + height)``).
-    #: ``None`` disables the check (default = historical behaviour).
+    #: ``None`` disables the check (default). Legacy absolute-units knob,
+    #: kept for consumers who tuned it; the relative ``*_line_heights``
+    #: knobs below are the preferred interface.
     #: Only meaningful WITHIN a page: VPOS restarts on every page, so the
     #: check is skipped for cross-page candidates (a legitimate cross-page
     #: pair would otherwise be broken by a spurious negative/huge gap).
@@ -375,8 +394,37 @@ class PairingPolicy(FrozenPolicy):
     #: When ``True``, only pair lines in the same TextBlock. Because a
     #: cross-page partner is by definition in a different block, this also
     #: forbids cross-page pairing — intended reading of the constraint.
-    #: Default ``False`` keeps the historical cross-block pairing.
     same_block_only: bool = False
+    #: Master switch for the P1-2 geometric vetting of heuristic pairs.
+    #: ``False`` restores the historical purely-sequential behaviour.
+    geometric_checks: bool = True
+    #: Max downward gap between the PART1 line's bottom and the candidate's
+    #: top, in units of the PART1 line's height. Same-block candidates and
+    #: cross-block downward continuations both use it.
+    max_gap_line_heights: float = 3.0
+    #: Tolerance for a candidate whose top sits ABOVE the PART1 line's
+    #: bottom (box overlap, skewed scans), in line heights. Beyond it, an
+    #: upward candidate is only plausible as a column jump (cross-block,
+    #: horizontally disjoint).
+    max_rise_line_heights: float = 0.5
+
+    @staticmethod
+    def _explicit(part1: LineManifest, candidate: LineManifest) -> bool:
+        """Engine-asserted continuation on either side of the pair."""
+        forward_explicit = (
+            part1.hyphen_forward_explicit
+            if part1.hyphen_role == HyphenRole.BOTH
+            else part1.hyphen_source_explicit
+        )
+        backward_explicit = (
+            candidate.hyphen_role in (HyphenRole.PART2, HyphenRole.BOTH)
+            and candidate.hyphen_source_explicit
+        )
+        return forward_explicit or backward_explicit
+
+    @staticmethod
+    def _degenerate(c: Coords) -> bool:
+        return c.height <= 0 or c.width <= 0
 
     def can_pair(self, part1: LineManifest, candidate: LineManifest) -> bool:
         """Return ``True`` if ``candidate`` may be ``part1``'s PART2 partner."""
@@ -389,7 +437,33 @@ class PairingPolicy(FrozenPolicy):
             gap = candidate.coords.vpos - (part1.coords.vpos + part1.coords.height)
             if gap > self.max_vertical_gap:
                 return False
-        return True
+
+        # --- P1-2 geometric vetting (heuristic pairs, intra-page) ---
+        if not self.geometric_checks:
+            return True
+        if part1.page_id != candidate.page_id:
+            return True  # last-of-page → first-of-next by construction
+        if self._explicit(part1, candidate):
+            return True
+        a, b = part1.coords, candidate.coords
+        if self._degenerate(a) or self._degenerate(b):
+            return True  # nothing to verify
+        gap = b.vpos - (a.vpos + a.height)
+        below_ok = gap <= self.max_gap_line_heights * a.height
+        rise_ok = gap >= -self.max_rise_line_heights * a.height
+
+        if part1.block_id == candidate.block_id:
+            return below_ok and rise_ok
+
+        # Cross-block: downward continuation must overlap horizontally
+        # (next block, same column); an upward jump must be horizontally
+        # disjoint (start of another column — either side, so RTL works)
+        # AND entirely above the PART1 line: a block merely *beside* the
+        # column (marginal note at the same height) is not a column start.
+        h_overlap = b.hpos < a.hpos + a.width and a.hpos < b.hpos + b.width
+        if rise_ok:
+            return below_ok and h_overlap
+        return not h_overlap and (b.vpos + b.height <= a.vpos)
 
 
 #: Module-level default reused wherever a caller passes no PairingPolicy.

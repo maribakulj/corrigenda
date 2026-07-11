@@ -95,10 +95,12 @@ def link_hyphen_pairs(
                 (backward fields were already set by a previous iteration)
 
     ``pairing_policy`` (F7) gates each candidate: when it rejects a pair
-    (e.g. the candidate sits too far below, or in an unrelated block), the
-    link is skipped and the PART1 line is left unpaired for the downstream
-    guards to handle. The default policy accepts every next line — the
-    historical purely-sequential behaviour.
+    (e.g. the candidate sits too far below, or is an implausible reading
+    continuation in another block), the link is skipped and the PART1 line
+    is left unpaired for the downstream guards to handle. The default
+    policy (P1-2) vets *heuristic* pairs geometrically and always trusts
+    engine-asserted (explicit) ones; ``PairingPolicy(geometric_checks=
+    False)`` restores the historical accept-every-next-line behaviour.
     """
     for i, line in enumerate(lines):
         # Skip lines that don't have a forward (PART1) role
