@@ -419,13 +419,17 @@ class PairingPolicy(FrozenPolicy):
       page N+1 (see ``link_cross_page_hyphens``), and VPOS restarts per
       page so geometry is not comparable.
     * **explicit** pairs (ALTO ``SUBS_TYPE``/``HYP`` markup on either
-      side) are always accepted: the OCR engine asserted the
+      side) bypass the geometric vetting: the OCR engine asserted the
       continuation; sequential order in the engine's own serialisation
-      is stronger evidence than our geometric plausibility check.
-    * degenerate geometry (zero-height/width boxes, common in minimal
-      PAGE exports) — accepted: there is nothing to verify, and refusing
-      would silently disable hyphenation for every coordinate-less
-      document.
+      is stronger evidence than our geometric plausibility check. NB the
+      opt-in legacy vetoes (``same_block_only``, ``max_vertical_gap``)
+      still apply to explicit pairs — a consumer who set them asked for
+      an absolute restriction.
+    * degenerate geometry — zero-height/width boxes, or the two lines
+      carrying IDENTICAL boxes (block coords copied onto every line, a
+      common lazy export) — accepted: there is nothing trustworthy to
+      verify, and refusing would silently disable hyphenation for every
+      coordinate-less document.
 
     ``geometric_checks=False`` restores the historical accept-everything
     behaviour exactly.
@@ -497,6 +501,11 @@ class PairingPolicy(FrozenPolicy):
         a, b = part1.coords, candidate.coords
         if self._degenerate(a) or self._degenerate(b):
             return True  # nothing to verify
+        if (a.hpos, a.vpos, a.width, a.height) == (b.hpos, b.vpos, b.width, b.height):
+            # Two "consecutive" lines with IDENTICAL boxes = synthetic
+            # geometry (block coords copied onto every line) — treat as
+            # degenerate rather than rejecting every pair in such files.
+            return True
         gap = b.vpos - (a.vpos + a.height)
         below_ok = gap <= self.max_gap_line_heights * a.height
         rise_ok = gap >= -self.max_rise_line_heights * a.height

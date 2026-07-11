@@ -29,6 +29,7 @@ from pathlib import Path
 from lxml import etree
 
 from corrigenda.core._norm import nfc
+from corrigenda.core.identity import ensure_unique_identities
 from corrigenda.core.pairing import HYPHEN_CHARS, trailing_hyphen_char
 from corrigenda.errors import DuplicateIdError
 from corrigenda.core.schemas import LineManifest, PageManifest
@@ -312,17 +313,12 @@ def rewrite_page_file(
 
     # P0-5 — a bare line_id keys every correction-to-element association
     # below; duplicates (manifest or element side) fail loudly instead of
-    # silently rewriting the wrong physical line. Mirrors the ALTO rewriter.
-    line_by_id: dict[str, LineManifest] = {}
-    for page in page_manifests:
-        for lm in page.lines:
-            if lm.line_id in line_by_id:
-                raise DuplicateIdError(
-                    f"duplicate line_id {lm.line_id!r} across page manifests "
-                    f"for {xml_path.name!r} — correction-to-line association "
-                    "would be ambiguous (P0-5)."
-                )
-            line_by_id[lm.line_id] = lm
+    # silently rewriting the wrong physical line. Mirrors the ALTO
+    # rewriter: canonical shared check for the manifest side.
+    ensure_unique_identities(page_manifests, xml_path.name)
+    line_by_id: dict[str, LineManifest] = {
+        lm.line_id: lm for page in page_manifests for lm in page.lines
+    }
 
     seen_element_ids: set[str] = set()
     textline_tag = _tag("TextLine", ns)

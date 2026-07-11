@@ -70,6 +70,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restores the historical behaviour exactly. Composite config
   fingerprint moves ``3a06d0a93ac4eedc`` → ``216aa712f1e99b79``.
 
+### Fixed (adversarial-review wave over the remediation itself)
+
+- **Planner window walk survives config-validation bypass.** Pydantic's
+  `model_copy(update=…)` bypasses the P2-5 validators, so
+  `line_window_overlap >= line_window_size` spun the window loop forever
+  (reproduced). A progress clamp restores the historical guarantee.
+- **LINE-mode chain cap now UNLINKS the cut pair.** Truncating a
+  longer-than-cap hyphen chain used to leave the pair straddling the cut
+  still linked across two chunks — the validator skips such pairs and the
+  reconciler could write across the boundary. Both sides now degrade to
+  independent lines (OCR text preserved verbatim), so pair atomicity
+  stays true by construction.
+- **ALTO IDNEXT:** an empty-string block ID crashed the chain walk with a
+  raw `KeyError`; an IDNEXT pointing outside the page (cross-page article
+  continuation — a legitimate METS/ALTO pattern — or a margin block) now
+  ends the chain instead of voiding the page's whole declared order.
+- **ALTO margins:** without `PrintSpace` the recursive block walk swept
+  margin-nested blocks (running heads, page numbers) into correction
+  scope; they are explicitly excluded again in both container shapes.
+- **Duplicate-ID gate covers the whole tree.** The rewriters match
+  TextLine ids document-wide, but the parse gate only checked manifest
+  scope: a margin line reusing a body line's ID passed upload validation
+  and exploded at rewrite time, after the full producer spend. Both
+  parsers now scan every TextLine id in the file.
+- **Block IDs are page-scoped.** Per-page OCR exports that reuse
+  `block_0`/`block_1` on every page of a file are legitimate (every block
+  lookup downstream is page-scoped) — the per-file check refused them.
+- **PAGE ReadingOrder: partial declarations are ignored.** A declaration
+  covering only some regions used to yank the referenced regions ahead of
+  everything else, reordering text it said nothing about; only a
+  declaration covering every id-bearing region now reorders (same
+  conservative rule as the IDNEXT fallbacks).
+- **Identical line boxes = synthetic geometry.** Exports that copy the
+  block's coords onto every line no longer have their heuristic hyphen
+  pairing silently disabled by the P1-2 geometric vetting.
+- **Duplicate reverts are pair-atomic and cover page seams.** Reverting
+  one member of a reconciled hyphen pair left a mixed OCR+corrected pair
+  (the state `reconcile_hyphen_pair` forbids) — the revert now extends to
+  the partner (`adjacent_duplicate_pair_atomicity`), the revert logic is
+  one shared helper instead of two divergent copies, the P2-6 pass is
+  restricted to actual chunk-boundary pairs (no redundant re-checking),
+  and page-boundary seams are checked too (the same leak one level up).
+- The explicit-pair bypass in `PairingPolicy` is documented precisely:
+  the opt-in legacy vetoes (`same_block_only`, `max_vertical_gap`) still
+  apply to explicit pairs; only the geometric vetting is bypassed.
+- `docs/edit-protocol.md` updated to the new `occurrence` semantics.
+
 ### Fixed (guards & budgets)
 
 - **P1-8 — `max_input_chars_per_request` is now a real bound.** Only PAGE

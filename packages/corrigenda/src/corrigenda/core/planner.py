@@ -311,9 +311,16 @@ def _try_window(
         # planner, including its tail-window behaviour near page end).
         budget_bound = core_end < min(start + window_size, n)
         if budget_bound:
-            start = max(start + 1, core_end - overlap)
+            next_start = max(start + 1, core_end - overlap)
         else:
-            start = start + (window_size - overlap)
+            next_start = start + (window_size - overlap)
+        # Defensive progress guard: the P2-5 validator forbids
+        # overlap >= window_size, but pydantic's model_copy(update=...)
+        # BYPASSES validation — without this clamp such a config spins
+        # this loop forever (review finding, reproduced).
+        if next_start <= start:
+            next_start = start + 1
+        start = next_start
 
     # F8 — each line is a target in exactly one window (its last, best-context
     # window); overlaps become pure context in the other window.
@@ -359,9 +366,7 @@ def _plan_line(
         j = i
         # P1-8 — the chain follow is capped: an adversarial page where
         # every line ends in a dash would otherwise produce one unbounded
-        # request. Truncating a >cap chain is the lesser evil at this
-        # last-resort granularity — the pair guards fall the cut pair
-        # back to OCR instead of mis-joining it.
+        # request.
         while j < len(lines) and len(chain_ids) < config.max_lines_per_request:
             cur = lines[j]
             forward_pair = forward_partner_id(cur)
@@ -374,6 +379,47 @@ def _plan_line(
                 j += 1
             else:
                 break
+
+        # Review fix (pair atomicity, CLAUDE.md): if the cap cut the chain
+        # BETWEEN a forward line and its partner, the two halves would sit
+        # in different chunks as a still-linked pair — the validator skips
+        # such pairs (both members must be in-chunk) and the reconciler
+        # could write across the boundary. UNLINK the cut pair explicitly:
+        # both sides degrade to independent lines (their OCR text,
+        # including the trailing dash, is preserved verbatim — the
+        # conservative fallback), so every remaining pair is fully
+        # contained in one chunk and atomicity stays true by construction.
+        if len(chain_ids) >= config.max_lines_per_request and j + 1 < len(lines):
+            tail = lines[j]
+            head = lines[j + 1]
+            if forward_partner_id(tail) == head.line_id:
+                if tail.hyphen_role == HyphenRole.BOTH:
+                    tail.hyphen_role = HyphenRole.PART2  # keeps backward link
+                    tail.hyphen_forward_pair_id = None
+                    tail.hyphen_forward_pair_page_id = None
+                    tail.hyphen_forward_subs_content = None
+                else:  # PART1
+                    tail.hyphen_role = HyphenRole.NONE
+                    tail.hyphen_pair_line_id = None
+                    tail.hyphen_pair_page_id = None
+                    tail.hyphen_subs_content = None
+                if head.hyphen_role == HyphenRole.BOTH:
+                    # Keeps its own forward pair; loses the backward link.
+                    # PART1 carries its forward link/subs in the plain pair
+                    # fields, so migrate them from the BOTH forward fields.
+                    head.hyphen_role = HyphenRole.PART1
+                    head.hyphen_pair_line_id = head.hyphen_forward_pair_id
+                    head.hyphen_pair_page_id = head.hyphen_forward_pair_page_id
+                    head.hyphen_subs_content = head.hyphen_forward_subs_content
+                    head.hyphen_source_explicit = head.hyphen_forward_explicit
+                    head.hyphen_forward_pair_id = None
+                    head.hyphen_forward_pair_page_id = None
+                    head.hyphen_forward_subs_content = None
+                else:  # PART2
+                    head.hyphen_role = HyphenRole.NONE
+                    head.hyphen_pair_line_id = None
+                    head.hyphen_pair_page_id = None
+                    head.hyphen_subs_content = None
 
         chunks.append(
             _make_chunk(

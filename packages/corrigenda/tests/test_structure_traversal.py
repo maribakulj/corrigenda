@@ -145,8 +145,7 @@ def test_alto_idnext_dangling_ref_falls_back_to_document_order(tmp_path: Path):
 
 def test_alto_idnext_cycle_falls_back_to_document_order(tmp_path: Path):
     xml = _alto_doc(
-        _tb("B1", "un", idnext="B2", vpos=10)
-        + _tb("B2", "deux", idnext="B1", vpos=50)
+        _tb("B1", "un", idnext="B2", vpos=10) + _tb("B2", "deux", idnext="B1", vpos=50)
     )
     pages, _ = parse_alto_file(_write(tmp_path, xml), "t.xml")
     assert _texts(pages) == ["un", "deux"]
@@ -227,7 +226,7 @@ def test_page_reading_order_overrides_document_order(tmp_path: Path):
 def test_page_reading_order_respects_index_not_document_position(tmp_path: Path):
     # RegionRefIndexed serialised out of index order.
     ro = (
-        "<ReadingOrder><OrderedGroup id=\"g0\">"
+        '<ReadingOrder><OrderedGroup id="g0">'
         '<RegionRefIndexed index="1" regionRef="r1"/>'
         '<RegionRefIndexed index="0" regionRef="r2"/>'
         "</OrderedGroup></ReadingOrder>"
@@ -239,7 +238,7 @@ def test_page_reading_order_respects_index_not_document_position(tmp_path: Path)
 
 def test_page_reading_order_nested_groups(tmp_path: Path):
     ro = (
-        "<ReadingOrder><OrderedGroup id=\"g0\">"
+        '<ReadingOrder><OrderedGroup id="g0">'
         '<RegionRefIndexed index="0" regionRef="r3"/>'
         '<OrderedGroupIndexed index="1" id="g1">'
         '<RegionRefIndexed index="0" regionRef="r2"/>'
@@ -247,22 +246,23 @@ def test_page_reading_order_nested_groups(tmp_path: Path):
         "</OrderedGroupIndexed>"
         "</OrderedGroup></ReadingOrder>"
     )
-    xml = _page_doc(
-        _tr("r1", "c") + _tr("r2", "b") + _tr("r3", "a"), reading_order=ro
-    )
+    xml = _page_doc(_tr("r1", "c") + _tr("r2", "b") + _tr("r3", "a"), reading_order=ro)
     pages, _ = parse_page_file(_write(tmp_path, xml), "t.xml")
     assert _texts(pages) == ["a", "b", "c"]
 
 
-def test_page_unreferenced_regions_keep_document_order_after_declared(
-    tmp_path: Path,
-):
+def test_page_partial_reading_order_is_ignored(tmp_path: Path):
+    """Review fix: a PARTIAL declaration (covers only some regions) is
+    ignored entirely — document order is kept for everything. Yanking the
+    referenced regions ahead of every unreferenced one would reorder text
+    the declaration said nothing about (Transkribus commonly groups only
+    some articles/tables)."""
     xml = _page_doc(
         _tr("r9", "hors declaration") + _tr("r2", "deux") + _tr("r1", "une"),
         reading_order=_ro("r1", "r2"),
     )
     pages, _ = parse_page_file(_write(tmp_path, xml), "t.xml")
-    assert _texts(pages) == ["une", "deux", "hors declaration"]
+    assert _texts(pages) == ["hors declaration", "deux", "une"]
 
 
 def test_page_reading_order_with_only_dangling_refs_is_harmless(tmp_path: Path):

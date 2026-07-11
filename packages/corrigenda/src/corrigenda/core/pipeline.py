@@ -45,8 +45,11 @@ from corrigenda.core.hyphenation import (
     enrich_chunk_lines,
     reconcile_hyphen_pair,
 )
-from corrigenda.core.identity import ensure_unique_identities
-from corrigenda.errors import CorrectionAborted, DuplicateIdError
+from corrigenda.core.identity import (
+    ensure_unique_identities,
+    ensure_unique_page_ids_across_files,
+)
+from corrigenda.errors import CorrectionAborted
 from corrigenda.core.planner import downgrade_granularity, plan_page
 from corrigenda.core.guards import check_adjacent_duplicates, check_line
 from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
@@ -641,16 +644,7 @@ class CorrectionPipeline:
             pages_by_file.setdefault(page.source_file, []).append(page)
         for src_name, src_pages in pages_by_file.items():
             ensure_unique_identities(src_pages, src_name)
-        seen_page_ids: dict[str, str] = {}
-        for page in document_manifest.pages:
-            first = seen_page_ids.setdefault(page.page_id, page.source_file)
-            if first != page.source_file:
-                raise DuplicateIdError(
-                    f"page_id {page.page_id!r} appears in both {first!r} and "
-                    f"{page.source_file!r} — cross-file page ids must be "
-                    "disambiguated before running (the format parsers' "
-                    "build_document_manifest does this automatically)."
-                )
+        ensure_unique_page_ids_across_files(document_manifest.pages)
         # §4.1 — per-page vision envelope lookups, resolved once. Pure
         # copying: the ImageRef stays an opaque string end to end.
         images = source_images or {}
@@ -734,6 +728,40 @@ class CorrectionPipeline:
             )
             total_chunks += page_chunks
             total_reconciled += page_reconciled
+
+        # Review fix (P2-6, one level up): a duplication straddling a PAGE
+        # boundary was still invisible — chunk plans and the page-level
+        # pass are both page-scoped, while page-boundary lines DO see each
+        # other through cross-page hyphen context. Check each page seam
+        # explicitly (O(#pages), one pair per seam). The lookup is built
+        # per seam, never document-wide: bare line_ids may legitimately
+        # repeat across FILES, and a global bare-id dict is the exact
+        # ambiguity P0-5 bans — an ambiguous seam is skipped instead.
+        for prev_page, next_page in zip(
+            document_manifest.pages, document_manifest.pages[1:]
+        ):
+            if not prev_page.lines or not next_page.lines:
+                continue
+            seam_map = {lm.line_id: lm for lm in (*prev_page.lines, *next_page.lines)}
+            if len(seam_map) != len(prev_page.lines) + len(next_page.lines):
+                continue  # cross-file line_id reuse → ambiguous, skip
+            a, b = prev_page.lines[-1], next_page.lines[0]
+            seam_reverts = check_adjacent_duplicates(
+                [
+                    (
+                        lm.line_id,
+                        lm.ocr_text,
+                        lm.corrected_text
+                        if lm.corrected_text is not None
+                        else lm.ocr_text,
+                    )
+                    for lm in (a, b)
+                ],
+                config=self.guard_config,
+            )
+            self._apply_duplicate_reverts(
+                reverts=seam_reverts, traces=traces, line_by_id=seam_map
+            )
 
         self._write_outputs(
             document_manifest=document_manifest,
@@ -881,30 +909,37 @@ class CorrectionPipeline:
         # P2-6 — cross-chunk adjacency pass. Per-chunk finalization only
         # sees that chunk's TARGET lines, so two document-adjacent lines
         # owned by different chunks were never compared: a duplication
-        # straddling a chunk boundary escaped the guard entirely. This
-        # page-level pass re-checks every adjacent pair in reading order;
-        # intra-chunk pairs were already checked with the same function
-        # and config, so re-checking them is a deterministic no-op.
-        page_accepted = [
-            (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text)
-            for lm in page.lines
-        ]
-        cross_reverts = check_adjacent_duplicates(
-            page_accepted, config=self.guard_config
-        )
-        for lm in page.lines:
-            if lm.line_id in cross_reverts:
-                lm.corrected_text = lm.ocr_text
-                lm.status = LineStatus.FALLBACK
-                _set_trace(
-                    traces,
-                    lm,
-                    projected_text=lm.ocr_text,
-                    validation_status=lm.status.value,
+        # straddling a chunk boundary escaped the guard entirely. Only
+        # the boundary pairs are new — intra-chunk pairs were already
+        # checked with the same function and config — so the pass is
+        # restricted to adjacent pairs whose target owners differ
+        # (review fix: re-checking whole pages re-ran SequenceMatcher
+        # over every already-checked pair for nothing).
+        if len(plan.chunks) > 1:
+            owner_by_line: dict[str, int] = {}
+            for ci, chunk in enumerate(plan.chunks):
+                for lid in chunk.targets():
+                    owner_by_line[lid] = ci
+            boundary_reverts: dict[str, str] = {}
+            for a, b in zip(page.lines, page.lines[1:]):
+                if owner_by_line.get(a.line_id) == owner_by_line.get(b.line_id):
+                    continue
+                pair = [
+                    (
+                        lm.line_id,
+                        lm.ocr_text,
+                        lm.corrected_text
+                        if lm.corrected_text is not None
+                        else lm.ocr_text,
+                    )
+                    for lm in (a, b)
+                ]
+                boundary_reverts.update(
+                    check_adjacent_duplicates(pair, config=self.guard_config)
                 )
-                trace = traces.get(_trace_key(lm)) if traces is not None else None
-                if trace is not None and not trace.fallback_reason:
-                    trace.fallback_reason = cross_reverts[lm.line_id]
+            self._apply_duplicate_reverts(
+                reverts=boundary_reverts, traces=traces, line_by_id=line_by_id
+            )
 
         page_corrections = sum(
             1
@@ -1120,6 +1155,7 @@ class CorrectionPipeline:
         self._finalize_chunk_traces(
             chunk_lines=target_lines,
             traces=traces,
+            line_by_id=line_by_id,
         )
 
         self.observer.on_event(
@@ -1547,11 +1583,59 @@ class CorrectionPipeline:
                 lm.status = LineStatus.FALLBACK
                 _set_trace(traces, lm, fallback_reason=result.reason)
 
+    def _apply_duplicate_reverts(
+        self,
+        *,
+        reverts: dict[str, str],
+        traces: dict[str, LineTrace] | None,
+        line_by_id: dict[str, LineManifest],
+    ) -> None:
+        """Revert duplicate-flagged lines to OCR — atomically with their
+        hyphen partner.
+
+        Shared by the chunk-level sweep, the page-level cross-chunk pass
+        and the page-boundary pass (review fix: the revert logic used to
+        be duplicated and none of the copies preserved pair atomicity —
+        reverting one member of a reconciled pair left a mixed
+        OCR+corrected pair, the exact state ``reconcile_hyphen_pair``
+        guarantees can never survive). A flagged line's partner is
+        reverted too, with its own trace reason.
+        """
+        if not reverts:
+            return
+        extended = dict(reverts)
+        for lid in list(reverts):
+            lm = line_by_id.get(lid)
+            if lm is None:
+                continue
+            for pid in (lm.hyphen_pair_line_id, lm.hyphen_forward_pair_id):
+                if pid and pid not in extended and pid in line_by_id:
+                    extended[pid] = "adjacent_duplicate_pair_atomicity"
+        for lid, reason in extended.items():
+            lm = line_by_id.get(lid)
+            if lm is None:
+                continue
+            lm.corrected_text = lm.ocr_text
+            lm.status = LineStatus.FALLBACK
+            _set_trace(
+                traces,
+                lm,
+                projected_text=lm.ocr_text,
+                validation_status=lm.status.value,
+            )
+            # Only stamp the reason if no earlier fallback path (e.g.
+            # orphan_hyphen_completed) already pinned one.
+            if traces is not None:
+                trace = traces.get(_trace_key(lm))
+                if trace is not None and not trace.fallback_reason:
+                    trace.fallback_reason = reason
+
     def _finalize_chunk_traces(
         self,
         *,
         chunk_lines: list[LineManifest],
         traces: dict[str, LineTrace] | None,
+        line_by_id: dict[str, LineManifest],
     ) -> None:
         """Adjacent-duplicate revert + projected_text/validation_status
         for every line trace.
@@ -1568,12 +1652,13 @@ class CorrectionPipeline:
         dup_reverts = check_adjacent_duplicates(
             accepted_lines, config=self.guard_config
         )
-        for lm in chunk_lines:
-            if lm.line_id in dup_reverts:
-                lm.corrected_text = lm.ocr_text
-                lm.status = LineStatus.FALLBACK
+        self._apply_duplicate_reverts(
+            reverts=dup_reverts, traces=traces, line_by_id=line_by_id
+        )
 
         for lm in chunk_lines:
+            if lm.line_id in dup_reverts:
+                continue  # already projected by the revert helper
             _set_trace(
                 traces,
                 lm,
@@ -1582,12 +1667,6 @@ class CorrectionPipeline:
                 ),
                 validation_status=lm.status.value,
             )
-            # Adjacent-duplicate revert: only stamp the reason if no earlier
-            # fallback path (e.g. orphan_hyphen_completed) already pinned one.
-            if traces is not None and lm.line_id in dup_reverts:
-                trace = traces.get(_trace_key(lm))
-                if trace is not None and not trace.fallback_reason:
-                    trace.fallback_reason = dup_reverts[lm.line_id]
 
     # ------------------------------------------------------------------
     # Output writing (rewriter + trace assembly)

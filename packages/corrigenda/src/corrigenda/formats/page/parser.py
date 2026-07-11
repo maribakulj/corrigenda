@@ -17,7 +17,10 @@ from pathlib import Path
 from lxml import etree
 
 from corrigenda.core._parse import parse_int_tolerant
-from corrigenda.core.identity import ensure_unique_identities
+from corrigenda.core.identity import (
+    ensure_unique_element_ids,
+    ensure_unique_identities,
+)
 from corrigenda.core.pairing import (
     HYPHEN_CHARS,
     disambiguate_page_ids,
@@ -128,11 +131,14 @@ def _regions_in_reading_order(page_el: etree._Element, ns: str) -> list[etree._E
     ``TextLine`` children, so nested regions' lines are attributed to
     their own block, never double-counted.
 
-    When the page declares a ``ReadingOrder``, referenced regions are
-    reordered to the declared sequence (first occurrence of an id wins);
-    regions the declaration does not cover keep document order after the
-    referenced ones — deterministic, and a declaration full of dangling
-    refs degrades gracefully to document order.
+    When the page declares a ``ReadingOrder`` that covers EVERY region
+    carrying an id, regions are reordered to the declared sequence (first
+    occurrence of an id wins). A *partial* declaration — common in tools
+    that only group some articles/tables — is ignored entirely and
+    document order is kept: yanking the referenced regions ahead of every
+    unreferenced one would reorder text the declaration said nothing
+    about (review fix; conservative, mirrors the ALTO IDNEXT fallback
+    rule: never guess on an incomplete declaration).
     """
     regions = list(page_el.iter(_tag("TextRegion", ns)))
     refs = _reading_order_refs(page_el, ns)
@@ -141,10 +147,12 @@ def _regions_in_reading_order(page_el: etree._Element, ns: str) -> list[etree._E
     pos: dict[str, int] = {}
     for i, rid in enumerate(refs):
         pos.setdefault(rid, i)
-    fallback = len(refs)
+    region_ids = [rid for r in regions if (rid := r.get("id"))]
+    if any(rid not in pos for rid in region_ids):
+        return regions  # partial/dangling declaration → document order
     return sorted(
         regions,
-        key=lambda r: pos.get(r.get("id") or "", fallback),
+        key=lambda r: pos.get(r.get("id") or "", len(refs)),
     )
 
 
@@ -236,6 +244,15 @@ def parse_page_file(
     # P0-5 — duplicate IDs within one file make every downstream
     # correction-to-line association ambiguous. Refuse explicitly.
     ensure_unique_identities(pages, source_name)
+    # Review fix — the rewriter matches TextLine ids over the WHOLE
+    # document tree; the parse-time gate must scan the same scope so a
+    # duplicate never surfaces only at rewrite time (after the full
+    # producer spend).
+    ensure_unique_element_ids(
+        (tl.get("id") for tl in root.iter(_tag("TextLine", ns))),
+        source_name,
+        kind="TextLine id(s)",
+    )
 
     return pages, root
 

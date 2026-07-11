@@ -8,6 +8,7 @@ from pathlib import Path
 from lxml import etree
 
 from corrigenda.core._norm import clean_content, nfc
+from corrigenda.core.identity import ensure_unique_identities
 from corrigenda.errors import DuplicateIdError
 from corrigenda.formats.alto._ns import (
     _detect_namespace,
@@ -618,17 +619,12 @@ def rewrite_alto_file(
     # below. A duplicate (in the manifests OR on the XML elements) would
     # silently apply one line's correction to another physical line, so
     # both sides fail loudly instead. Parsers enforce the same invariant
-    # up front; this guards direct calls with hand-built manifests.
-    line_by_id: dict[str, LineManifest] = {}
-    for page in page_manifests:
-        for lm in page.lines:
-            if lm.line_id in line_by_id:
-                raise DuplicateIdError(
-                    f"duplicate line_id {lm.line_id!r} across page manifests "
-                    f"for {xml_path.name!r} — correction-to-line association "
-                    "would be ambiguous (P0-5)."
-                )
-            line_by_id[lm.line_id] = lm
+    # up front; this guards direct calls with hand-built manifests via
+    # the canonical shared check (review fix: no third hand-rolled copy).
+    ensure_unique_identities(page_manifests, xml_path.name)
+    line_by_id: dict[str, LineManifest] = {
+        lm.line_id: lm for page in page_manifests for lm in page.lines
+    }
 
     seen_element_ids: set[str] = set()
     textline_tag = _tag("TextLine", ns)
