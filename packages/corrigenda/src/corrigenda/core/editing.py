@@ -63,15 +63,20 @@ class MatchAnchor(BaseModel):
 
     ``occurrence`` selects the n-th (0-indexed) occurrence. Honouring the
     §4.3 uniqueness intent (the convergent practice of aider's
-    search/replace and Anthropic's ``str_replace``), an ``occurrence`` left
-    at its default 0 that matches more than once is *ambiguous* and the op
-    is rejected — a producer disambiguates by setting ``occurrence`` to a
-    non-zero index.
+    search/replace and Anthropic's ``str_replace``), the default ``None``
+    *requires uniqueness*: a match found more than once is ambiguous and
+    the op is rejected. An explicit integer — **including 0 for "the
+    first occurrence"** — always selects that occurrence.
+
+    P2-8 — ``occurrence`` used to default to ``0``, conflating "producer
+    said nothing" with "producer wants the first occurrence": naming the
+    first of several repeats was *inexpressible* (0 + multiple matches →
+    rejected as ambiguous). ``int | None`` separates the two meanings.
     """
 
     model_config = ConfigDict(frozen=True)
     match: str
-    occurrence: int = 0
+    occurrence: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -168,12 +173,16 @@ def normalize_anchor(
 
     if not starts:
         return None, R_ANCHOR_NOT_FOUND
-    if anchor.occurrence == 0 and len(starts) > 1:
-        return None, R_ANCHOR_AMBIGUOUS
-    if anchor.occurrence < 0 or anchor.occurrence >= len(starts):
-        return None, R_ANCHOR_RANGE
-
-    s = starts[anchor.occurrence]
+    if anchor.occurrence is None:
+        # P2-8 — no explicit occurrence: the match must be unique.
+        if len(starts) > 1:
+            return None, R_ANCHOR_AMBIGUOUS
+        s = starts[0]
+    else:
+        # Explicit occurrence — 0 legitimately names the first of several.
+        if anchor.occurrence < 0 or anchor.occurrence >= len(starts):
+            return None, R_ANCHOR_RANGE
+        s = starts[anchor.occurrence]
     return RangeAnchor(start=s, end=s + len(anchor.match)), None
 
 
@@ -184,6 +193,36 @@ def normalize_anchor(
 
 def _has_newline(text: str) -> bool:
     return "\n" in text or "\r" in text
+
+
+def _changed_chars(original: str, replacement: str) -> int:
+    """Characters actually changed by replacing ``original`` with
+    ``replacement`` — the size of the differing window after trimming the
+    common prefix and suffix.
+
+    P2-9 — the E4 line budget used to sum ``abs(len(replacement) -
+    len(original))``: a length-*neutral* rewrite of 100 characters cost 0,
+    so ``edit_line_max_changed_chars`` bounded length drift, not the
+    amount of text changed — much weaker than the invariant's name. The
+    trimmed-window size is cheap, deterministic, and never underestimates
+    the edit (it upper-bounds the Levenshtein distance): identical texts
+    cost 0, a pure insertion/deletion costs its length, a full rewrite
+    costs the larger side.
+    """
+    if original == replacement:
+        return 0
+    p = 0
+    max_p = min(len(original), len(replacement))
+    while p < max_p and original[p] == replacement[p]:
+        p += 1
+    s = 0
+    max_s = min(len(original), len(replacement)) - p
+    while (
+        s < max_s
+        and original[len(original) - 1 - s] == replacement[len(replacement) - 1 - s]
+    ):
+        s += 1
+    return max(len(original), len(replacement)) - p - s
 
 
 def _e5_hyphen_ok(role: HyphenRole, result_text: str) -> bool:
@@ -276,7 +315,9 @@ def _apply_line_ops(
             )
             continue
         accepted.append((rng, text))
-        changed_chars += abs(len(text) - (rng.end - rng.start))
+        # P2-9 — count the characters the op actually changes, not the
+        # length delta (see _changed_chars).
+        changed_chars += _changed_chars(canonical[rng.start : rng.end], text)
         prev_end = rng.end
 
     if not accepted:

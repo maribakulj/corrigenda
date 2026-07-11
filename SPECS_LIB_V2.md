@@ -188,7 +188,8 @@ class RangeAnchor(BaseModel):       # producteurs déterministes
 
 class MatchAnchor(BaseModel):       # producteurs LLM
     match: str                      # sous-chaîne exacte du texte canonique
-    occurrence: int = 0             # n-ième occurrence (0-indexée)
+    occurrence: int | None = None   # None = unicité requise ;
+                                    # n explicite (0 = première) = n-ième occurrence
 ```
 
 Motivation : l'expérience de terrain des formats d'édition LLM montre que
@@ -221,7 +222,9 @@ indépendant du format.
   (un `replace_span` peut être une suppression : `text=""` autorisé si le
   résultat de la ligne reste non vide).
 - E4 : bornes de dérive **par op** (`GuardConfig`) : ratio de longueur max
-  du remplacement vs span remplacé, budget de caractères modifiés par ligne.
+  du remplacement vs span remplacé, budget de caractères réellement
+  modifiés par ligne (fenêtre différente après élagage du préfixe/suffixe
+  communs — une réécriture à longueur constante coûte sa taille réelle).
 - E5 : une ligne de rôle césure (PART1/PART2/BOTH) éditée par span ne peut
   pas voir son mot-frontière supprimé ni son tiret final retiré — mêmes
   gardes qu'aujourd'hui, appliquées au **résultat** de la ligne.

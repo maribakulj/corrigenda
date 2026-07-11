@@ -337,9 +337,11 @@ class GuardConfig(FrozenPolicy):
     #: A span replacement may be at most this many times as long as the span
     #: it replaces (``len(replacement) <= ratio * max(1, span_len)``).
     edit_span_max_growth_ratio: float = 4.0
-    #: Total characters a line may gain/lose across all its span ops
-    #: (``sum(|replacement| - |span|)`` in absolute value). Generous by
-    #: default; a rules pre-pass makes small, local edits well under it.
+    #: Total characters a line's span ops may actually change (P2-9): per
+    #: op, the size of the differing window after trimming the common
+    #: prefix/suffix of (original span, replacement) — so a length-neutral
+    #: rewrite costs its real size, not 0. Generous by default; a rules
+    #: pre-pass makes small, local edits well under it.
     edit_line_max_changed_chars: int = 200
 
 

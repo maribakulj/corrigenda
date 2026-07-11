@@ -81,6 +81,26 @@ def test_match_anchor_occurrence_out_of_range():
     assert rng is None and reason == "anchor_out_of_range"
 
 
+def test_match_anchor_explicit_zero_selects_first_of_several():
+    """P2-8 — occurrence=0 explicitly names the FIRST of several matches.
+
+    Historically 0 doubled as "default / unspecified", so the first of a
+    repeated pattern was inexpressible: 0 + multiple matches was rejected
+    as ambiguous. None now carries the "require uniqueness" meaning."""
+    rng, reason = normalize_anchor(MatchAnchor(match="l", occurrence=0), "hello")
+    assert reason is None and rng == RangeAnchor(start=2, end=3)
+
+
+def test_match_anchor_none_requires_uniqueness_but_accepts_unique():
+    rng, reason = normalize_anchor(MatchAnchor(match="lo", occurrence=None), "hello")
+    assert reason is None and rng == RangeAnchor(start=3, end=5)
+
+
+def test_match_anchor_explicit_zero_on_unique_match_works():
+    rng, reason = normalize_anchor(MatchAnchor(match="lo", occurrence=0), "hello")
+    assert reason is None and rng == RangeAnchor(start=3, end=5)
+
+
 # ---------------------------------------------------------------------------
 # replace_line (E1/E3/conflict; NO E4/E5)
 # ---------------------------------------------------------------------------
@@ -212,6 +232,47 @@ def test_e4_line_budget_rejected():
         guard_config=GuardConfig(edit_line_max_changed_chars=3),
     )
     assert any(r.reason == "e4_line_budget" for r in res.rejected)
+
+
+def test_e4_budget_counts_length_neutral_rewrites():
+    """P2-9 — replacing N chars with N *different* chars must cost N, not 0.
+
+    The historical budget summed abs(len(replacement) - len(span)): a
+    length-neutral rewrite of the whole line cost nothing and E4 was a
+    length-drift bound masquerading as a changed-characters bound."""
+    res = apply_edit_script(
+        EditScript(
+            ops=[
+                ReplaceSpan(
+                    line_id="l1",
+                    anchor=RangeAnchor(start=0, end=10),
+                    text="0123456789",  # same length, all different
+                )
+            ]
+        ),
+        {"l1": "abcdefghij"},
+        guard_config=GuardConfig(edit_line_max_changed_chars=5),
+    )
+    assert any(r.reason == "e4_line_budget" for r in res.rejected)
+    assert res.text_by_id == {}
+
+
+def test_e4_budget_ignores_common_prefix_and_suffix():
+    # "colour" for "color": only 1 char actually changes — well under a
+    # budget of 2 even though the span is 5 chars long.
+    res = apply_edit_script(
+        EditScript(
+            ops=[
+                ReplaceSpan(
+                    line_id="l1", anchor=RangeAnchor(start=0, end=5), text="colour"
+                )
+            ]
+        ),
+        {"l1": "color"},
+        guard_config=GuardConfig(edit_line_max_changed_chars=2),
+    )
+    assert res.text_by_id == {"l1": "colour"}
+    assert res.rejected == []
 
 
 def test_e5_hyphen_forward_line_must_keep_trailing_hyphen():

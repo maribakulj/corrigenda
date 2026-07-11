@@ -20,6 +20,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **P2-8 — `MatchAnchor.occurrence` is now `int | None = None`.** The old
+  `int = 0` default conflated "producer said nothing" with "producer wants
+  the first occurrence", making the first of a repeated pattern
+  *inexpressible* (0 + multiple matches → rejected as ambiguous). `None`
+  (the new default) requires uniqueness — same behaviour as before for
+  producers that never set the field — while an explicit integer,
+  **including 0**, always selects that occurrence. Aligns the
+  implementation with §4.3's own wording ("plusieurs occurrences sans
+  `occurrence` explicite → rejetée").
+- **P2-9 — the E4 line budget counts characters actually changed.**
+  `edit_line_max_changed_chars` used to sum `abs(len(replacement) −
+  len(span))`: a length-neutral rewrite of 100 characters cost 0, so the
+  knob bounded length drift, not the amount of text changed. Each span op
+  is now costed by the size of its differing window after trimming the
+  common prefix/suffix (0 for identical text, its length for a pure
+  insertion, the larger side for a full rewrite — an upper bound on the
+  Levenshtein distance). Length-neutral rewrites that previously slid
+  under the budget are now rejected with `e4_line_budget`.
 - **P1-2 — the default `PairingPolicy` is now geometric.** The historical
   default accepted *every* sequential hyphen-pair candidate — on layouts
   whose serialisation order diverges from reading order, a PART1 line
