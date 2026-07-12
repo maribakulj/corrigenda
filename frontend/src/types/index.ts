@@ -138,6 +138,12 @@ export interface SSEFailed {
 export interface SSEKeepalive {
   event: 'keepalive'
 }
+// Server-sent stream error (job_not_found / subscriber_cap_reached).
+export interface SSEError {
+  event: 'error'
+  reason?: string
+  message?: string
+}
 
 export type SSEEventData =
   | SSEQueued
@@ -153,6 +159,7 @@ export type SSEEventData =
   | SSECompleted
   | SSEFailed
   | SSEKeepalive
+  | SSEError
 
 // ---------------------------------------------------------------------------
 // Layout viewer

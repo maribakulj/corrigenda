@@ -275,7 +275,11 @@ class JobStore:
             #     queue → drain and yield it.
             #   - Job is still running → drop to the normal poll loop.
             job = self._jobs.get(job_id)
-            if job is not None and job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+            # Audit P1 — must include COMPLETED_WITH_FALLBACKS: a degraded
+            # success that finished before the client subscribed would
+            # otherwise drop to the poll loop and hang forever (its real
+            # terminal event already fired and will never come again).
+            if job is not None and job.status in _TERMINAL_STATES:
                 # Drain anything already buffered (events that arrived
                 # between subscribe and this re-check) before falling
                 # back to a synthetic terminal event. `get_nowait` is
@@ -286,7 +290,32 @@ class JobStore:
                     yield buffered
                     if buffered.event in ("completed", "failed"):
                         return
-                yield SSEEvent(event=job.status.value, data={"job_id": job_id})
+                # Synthetic terminal. The event NAME must be one the
+                # client listens for ("completed"/"failed"), NOT the raw
+                # status value ("completed_with_fallbacks" is not a
+                # listener) — and it must carry the full payload the live
+                # 'completed' event does, so the client doesn't read
+                # undefined fields. hyphen_pairs_total isn't stored on the
+                # manifest; 0 is a safe default the client tolerates.
+                if job.status == JobStatus.FAILED:
+                    yield SSEEvent(
+                        event="failed",
+                        data={"job_id": job_id, "error": job.error or "job failed"},
+                    )
+                else:
+                    yield SSEEvent(
+                        event="completed",
+                        data={
+                            "job_id": job_id,
+                            "total_lines": job.total_lines,
+                            "lines_modified": job.lines_modified,
+                            "hyphen_pairs_total": 0,
+                            "chunks_total": job.chunks_total,
+                            "duration_seconds": job.duration_seconds or 0.0,
+                            "status": job.status.value,
+                            "fallbacks": job.fallbacks,
+                        },
+                    )
                 return
 
             while True:

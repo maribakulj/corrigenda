@@ -192,10 +192,12 @@ def test_sse_queue_drops_when_full_without_raising():
 @pytest.mark.asyncio
 async def test_stream_events_fast_path_for_already_completed_job():
     """If the job is already in a terminal state when stream_events starts,
-    yield a single synthetic terminal event and exit."""
+    yield a single synthetic terminal event and exit. Audit P1 — the
+    synthetic 'completed' now carries the FULL payload (not just job_id)
+    so a late-subscribing client doesn't read undefined fields."""
     store = JobStore()
     jid = store.create_job(Provider.OPENAI, "test")
-    store.update_job(jid, status=JobStatus.COMPLETED)
+    store.update_job(jid, status=JobStatus.COMPLETED, total_lines=10, lines_modified=4)
 
     events = []
     async for ev in store.stream_events(jid):
@@ -203,7 +205,46 @@ async def test_stream_events_fast_path_for_already_completed_job():
 
     assert len(events) == 1
     assert events[0].event == "completed"
-    assert events[0].data == {"job_id": jid}
+    assert events[0].data["job_id"] == jid
+    assert events[0].data["total_lines"] == 10
+    assert events[0].data["lines_modified"] == 4
+    assert events[0].data["status"] == "completed"
+    assert "duration_seconds" in events[0].data  # never undefined client-side
+
+
+@pytest.mark.asyncio
+async def test_stream_events_fast_path_for_degraded_success_terminates():
+    """Audit P1 — a COMPLETED_WITH_FALLBACKS job that finished before the
+    client subscribed must still yield a terminal event named 'completed'
+    (a listener the client has) and STOP. Before the fix the fast-path
+    omitted this state, dropping to the poll loop that hangs forever."""
+    store = JobStore()
+    jid = store.create_job(Provider.OPENAI, "test")
+    store.update_job(jid, status=JobStatus.COMPLETED_WITH_FALLBACKS, fallbacks=3)
+
+    events = []
+    async for ev in store.stream_events(jid):
+        events.append(ev)
+
+    assert len(events) == 1
+    assert events[0].event == "completed"  # NOT "completed_with_fallbacks"
+    assert events[0].data["status"] == "completed_with_fallbacks"
+    assert events[0].data["fallbacks"] == 3
+
+
+@pytest.mark.asyncio
+async def test_stream_events_fast_path_for_failed_job():
+    store = JobStore()
+    jid = store.create_job(Provider.OPENAI, "test")
+    store.update_job(jid, status=JobStatus.FAILED, error="boom")
+
+    events = []
+    async for ev in store.stream_events(jid):
+        events.append(ev)
+
+    assert len(events) == 1
+    assert events[0].event == "failed"
+    assert events[0].data["error"] == "boom"
 
 
 @pytest.mark.asyncio
