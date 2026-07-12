@@ -112,19 +112,56 @@ def _assign_window_targets(
 
     target_win: dict[str, int] = {lid: idxs[-1] for lid, idxs in membership.items()}
 
-    # Hyphen atomicity: pin both members of a pair to the last window that
-    # contains both.
+    # Hyphen atomicity (audit P0): a chain of 3+ lines (PART1→BOTH→…→PART2)
+    # must be targeted in ONE window. The previous pairwise pin used
+    # last-write-wins, so on a 3-line chain the middle line got re-pinned
+    # by its forward partner AFTER its backward partner, splitting the pair
+    # across two chunks. Pin whole transitively-connected COMPONENTS
+    # instead (union-find over every hyphen link, the pattern _try_block
+    # already uses), assigning each component the LAST window common to
+    # ALL its members — order-independent by construction.
+    parent: dict[str, str] = {lid: lid for lid in membership}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        parent[find(a)] = find(b)
+
     for lid in list(membership):
         lm = line_by_id.get(lid)
         if lm is None:
             continue
-        partner = _hyphen_partner_id(lm)
-        if not partner or partner not in membership:
+        for partner in (
+            getattr(lm, "hyphen_pair_line_id", None),
+            getattr(lm, "hyphen_forward_pair_id", None),
+        ):
+            if partner and partner in membership:
+                union(lid, partner)
+
+    components: dict[str, list[str]] = {}
+    for lid in membership:
+        components.setdefault(find(lid), []).append(lid)
+
+    for members in components.values():
+        if len(members) < 2:
             continue
-        common = sorted(set(membership[lid]) & set(membership[partner]))
+        # Intersection of every member's membership set = windows that
+        # contain the WHOLE component. Target the last such window.
+        common: set[int] = set(membership[members[0]])
+        for m in members[1:]:
+            common &= set(membership[m])
         if common:
-            target_win[lid] = common[-1]
-            target_win[partner] = common[-1]
+            win = max(common)
+            for m in members:
+                target_win[m] = win
+        # If no single window holds the whole component (a chain longer
+        # than any window — the planner caps chains to a window, so this
+        # is the pathological over-cap case), leave the per-line last-window
+        # assignment: the LINE-granularity downgrade + unlink handles it.
 
     return [
         [lid for lid in w if target_win.get(lid) == i] for i, w in enumerate(windows)

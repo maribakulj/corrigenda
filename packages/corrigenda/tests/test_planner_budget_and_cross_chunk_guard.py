@@ -289,3 +289,40 @@ def test_intra_chunk_duplicates_still_reverted(tmp_path: Path):
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
     assert lines["L1"].corrected_text == lines["L1"].ocr_text
     assert lines["L2"].corrected_text == lines["L2"].ocr_text
+
+
+# ---------------------------------------------------------------------------
+# Audit P0 — 3+ line hyphen chain must be targeted in ONE window
+# ---------------------------------------------------------------------------
+
+
+def test_multiline_hyphen_chain_targeted_in_single_window():
+    """A chain L0=PART1 -> L1=BOTH -> L2=PART2 (two consecutive hyphenated
+    words) must have all three lines as targets of the SAME window — the
+    pairwise last-write-wins pin used to split (L0,L1) across two chunks,
+    corrupting the join order-dependently."""
+    # Surround the chain so windows overlap around it.
+    lines = [_line(0, "avant")]
+    chain = [_line(1, "mot1-"), _line(2, "mot2-"), _line(3, "fin")]
+    _chain(chain)
+    lines += chain + [_line(4, "apres")]
+    for i, lm in enumerate(lines):
+        lm.line_order_global = i
+        lm.line_order_in_block = i
+    cfg = ChunkPlannerConfig(
+        max_input_chars_per_request=10_000,
+        max_lines_per_request=50,
+        line_window_size=3,
+        line_window_overlap=1,
+    )
+    plan = plan_page(_page(lines), "d1", cfg, force_granularity=ChunkGranularity.WINDOW)
+    # Every line is a target of exactly one chunk (F8).
+    owner = {}
+    for ci, c in enumerate(plan.chunks):
+        for lid in c.targets():
+            assert lid not in owner, f"{lid} targeted by two chunks"
+            owner[lid] = ci
+    # The three chain members share one target chunk.
+    assert owner["l1"] == owner["l2"] == owner["l3"], (
+        f"chain split across chunks: {[owner.get(x) for x in ('l1', 'l2', 'l3')]}"
+    )
