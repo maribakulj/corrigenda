@@ -199,8 +199,13 @@ def check_adjacent_duplicates(
         id_a, src_a, cor_a = lines[i]
         id_b, src_b, cor_b = lines[i + 1]
 
-        # Skip if either is already flagged
-        if id_a in revert or id_b in revert:
+        # Skip only if the RIGHT line is already flagged (nothing new to
+        # decide). When only the left line is already flagged we must still
+        # evaluate the right one against it — otherwise a run of three or
+        # more identical corrections leaves its third line unreverted
+        # (i=0 flags lines 0,1; i=1 would `continue` on the flagged line 1
+        # and never test line 2).
+        if id_b in revert:
             continue
 
         # Corrections must be very similar

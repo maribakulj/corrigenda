@@ -12,6 +12,7 @@ from corrigenda.formats.alto._ns import (
 )
 from corrigenda.formats.alto._text import reconstruct_textline
 from corrigenda.core.identity import (
+    ensure_element_ids_present,
     ensure_unique_element_ids,
     ensure_unique_identities,
 )
@@ -403,6 +404,14 @@ def parse_alto_file(
         (tl.get("ID") for tl in root.iter(_tag("TextLine", ns))),
         source_name,
         kind="TextLine ID(s)",
+    )
+    # An ID-less TextLine gets a fabricated manifest id the rewriter can
+    # never match (it keys off the real ``ID`` attribute), so its
+    # correction would be silently dropped — refuse it instead.
+    ensure_element_ids_present(
+        (tl.get("ID") for tl in root.iter(_tag("TextLine", ns))),
+        source_name,
+        kind="TextLine element(s)",
     )
 
     return pages, root

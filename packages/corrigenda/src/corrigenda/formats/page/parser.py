@@ -18,6 +18,7 @@ from lxml import etree
 
 from corrigenda.core._parse import parse_int_tolerant
 from corrigenda.core.identity import (
+    ensure_element_ids_present,
     ensure_unique_element_ids,
     ensure_unique_identities,
 )
@@ -149,11 +150,17 @@ def _regions_in_reading_order(page_el: etree._Element, ns: str) -> list[etree._E
         pos.setdefault(rid, i)
     for region in regions:
         region_id = region.get("id")
-        if region_id and region_id not in pos:
+        if not region_id:
+            # An id-less region can't be placed by the declaration; sorting
+            # would silently yank it to the end (key == len(refs)),
+            # reordering text the declaration said nothing about. Treat it
+            # like a partial declaration and keep document order.
+            return regions
+        if region_id not in pos:
             return regions  # partial/dangling declaration → document order
     return sorted(
         regions,
-        key=lambda r: pos.get(r.get("id") or "", len(refs)),
+        key=lambda r: pos[r.get("id") or ""],
     )
 
 
@@ -253,6 +260,14 @@ def parse_page_file(
         (tl.get("id") for tl in root.iter(_tag("TextLine", ns))),
         source_name,
         kind="TextLine id(s)",
+    )
+    # An id-less TextLine gets a fabricated manifest id the rewriter can
+    # never match (it keys off the real ``id`` attribute), so its
+    # correction would be silently dropped — refuse it instead.
+    ensure_element_ids_present(
+        (tl.get("id") for tl in root.iter(_tag("TextLine", ns))),
+        source_name,
+        kind="TextLine element(s)",
     )
 
     return pages, root

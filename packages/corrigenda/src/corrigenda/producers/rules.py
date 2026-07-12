@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from corrigenda.core._norm import ncfold
 from corrigenda.core.editing import EditScript, RangeAnchor, ReplaceSpan
 from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
 
@@ -89,8 +90,11 @@ class RulesProducer:
         lexicon: set[str] | None = None,
     ) -> None:
         self._rules = list(rules)
-        # Normalise the lexicon once (lower-cased) for guarded matches.
-        self._lexicon = {w.lower() for w in lexicon} if lexicon else set()
+        # Normalise the lexicon once through ncfold (NFC + casefold) for
+        # guarded matches. Tokens come from the parser's already-NFC text, so
+        # a bare .lower() left a decomposed (NFD) lexicon entry unable to
+        # match its composed token — a silently missed guarded correction.
+        self._lexicon = {ncfold(w) for w in lexicon} if lexicon else set()
 
     # -- pure core -------------------------------------------------------
 
@@ -117,7 +121,7 @@ class RulesProducer:
     def _word_ok(self, text: str, start: int, end: int, replacement: str) -> bool:
         ts, te = _token_bounds(text, start, end)
         new_token = text[ts:start] + replacement + text[end:te]
-        return new_token.strip(_STRIP).lower() in self._lexicon
+        return ncfold(new_token.strip(_STRIP)) in self._lexicon
 
     def _spans_for_line(self, text: str) -> list[tuple[int, int, str]]:
         """Greedy non-overlapping selection: earliest start, longest at a tie."""

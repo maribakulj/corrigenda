@@ -101,6 +101,41 @@ class _VisionProducer:
         return EditScript(ops=[]), None
 
 
+class _BuggyProducer:
+    """Producer that raises a genuine programming error (not a provider /
+    transport / validation error) on every attempt."""
+
+    wants_geometry = False
+    wants_image = False
+    requires_full_coverage = False
+
+    async def produce(self, payload, *, policy):
+        raise KeyError("bug in _script_to_raw")
+
+
+@pytest.mark.asyncio
+async def test_programming_error_propagates_not_masked_as_ocr_fallback():
+    """Audit P3 — a genuine programming error on the producer path must FAIL
+    the run, not be silently degraded to OCR fallback (which would report a
+    'successful' run with every chunk left as uncorrected OCR). Provider
+    transport / validation errors still degrade; only programmer bugs
+    propagate."""
+    doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
+    pipeline = CorrectionPipeline(
+        producer=_BuggyProducer(),
+        observer=_Null(),
+        output_writer=_Null(),
+        provider_name="buggy",
+        model="m",
+    )
+    with pytest.raises(KeyError):
+        await pipeline.run(
+            document_manifest=doc,
+            source_files={_SAMPLE.name: _SAMPLE},
+            apply=False,
+        )
+
+
 @pytest.mark.asyncio
 async def test_vision_producer_without_images_fails_at_startup():
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])

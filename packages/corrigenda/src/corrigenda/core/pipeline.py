@@ -87,6 +87,23 @@ from corrigenda.core.schemas import (
     Usage,
 )
 
+# Audit P3 — genuine programming-error types that must FAIL the run rather
+# than degrade silently to OCR fallback on the producer-attempt path.
+# Deliberately EXCLUDES ValueError (JSON/validation/parse errors are
+# expected producer-output failures) and any provider transport error
+# (httpx / SDK exceptions the provider-agnostic pipeline cannot name),
+# which stay recoverable.
+_PROGRAMMING_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    TypeError,
+    AttributeError,
+    KeyError,
+    IndexError,
+    NameError,
+    UnboundLocalError,
+    AssertionError,
+    NotImplementedError,
+)
+
 # Patterns to redact common secret formats in error messages.
 # Each pattern captures a prefix in the first group so the redacted
 # output keeps human-readable context (e.g. "Bearer ****" instead of
@@ -1455,19 +1472,20 @@ class CorrectionPipeline:
                 # and falling back would fake success. Fatal for the run.
                 raise
             except Exception as exc:
-                # Audit P3 (same class as P0-2, on the attempt path): only
-                # EXPECTED producer-output / transport errors may degrade
-                # to retry-then-OCR-fallback. A genuine programming error
-                # (KeyError, AttributeError, TypeError, a broken invariant
-                # in _script_to_raw / validation) must FAIL the run, not be
-                # silently masked as uncorrected OCR text. The expected set
-                # is the documented taxonomy: ValueError (incl.
-                # ValidationError / ParseError / JSONDecodeError /
-                # HyphenIntegrityError), ProviderTransientError, and any
-                # other CorrectionError.
-                if not isinstance(
-                    exc, (ValueError, ProviderTransientError, CorrectionError)
-                ):
+                # Audit P3 (same class as P0-2, on the attempt path): a
+                # genuine PROGRAMMING error — a bug in _script_to_raw /
+                # validation, or a broken invariant — must FAIL the run, not
+                # be silently masked as uncorrected OCR text (which would
+                # degrade EVERY chunk to OCR while still reporting success).
+                # A denylist (not an allowlist) is used deliberately: the
+                # pipeline is provider-agnostic and cannot name every
+                # provider transport type (httpx errors, SDK exceptions),
+                # which are EXPECTED and must remain recoverable. Only the
+                # classic programmer-bug types propagate; ValueError family
+                # (JSON/validation/parse/HyphenIntegrityError),
+                # ProviderTransientError, CorrectionError, and any provider
+                # transport error all degrade to retry-then-OCR-fallback.
+                if isinstance(exc, _PROGRAMMING_ERROR_TYPES):
                     raise
                 # §5.1 — the pipeline no longer holds credentials; the
                 # pattern-based redaction still masks secret-shaped

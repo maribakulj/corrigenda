@@ -303,13 +303,23 @@ def _apply_line_ops(
     if not normalized:
         return None
 
-    # E2 — no overlap between accepted spans (ascending by start).
-    normalized.sort(key=lambda t: t[0].start)
+    # E2 — no overlap between accepted spans (ascending by start, then end
+    # so a zero-length insertion at p sorts before a replacement at p).
+    normalized.sort(key=lambda t: (t[0].start, t[0].end))
     accepted: list[tuple[RangeAnchor, str]] = []
     changed_chars = 0
+    prev_start = -1
     prev_end = -1
     for rng, text, _sp in normalized:
-        if rng.start < prev_end:
+        # A replacement whose interval crosses into the previous span
+        # overlaps. A zero-length insertion at the SAME start offset as an
+        # already-accepted op is equally illegal: it shares a position with
+        # that op, and _apply_spans (right-to-left, stable on equal starts)
+        # would apply the two in an ambiguous order — the insertion could
+        # land inside the replacement's original range, leaving a character
+        # the replacement was meant to remove. Co-located ops (equal start)
+        # are therefore rejected regardless of length.
+        if rng.start < prev_end or rng.start == prev_start:
             rejected.append(
                 EditRejection(line_id=line_id, op="replace_span", reason=R_OVERLAP)
             )
@@ -318,6 +328,7 @@ def _apply_line_ops(
         # P2-9 — count the characters the op actually changes, not the
         # length delta (see _changed_chars).
         changed_chars += _changed_chars(canonical[rng.start : rng.end], text)
+        prev_start = rng.start
         prev_end = rng.end
 
     if not accepted:

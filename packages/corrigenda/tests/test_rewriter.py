@@ -578,7 +578,12 @@ def test_slow_path_does_not_copy_stale_subs(tmp_path):
 
 
 def test_slow_path_part1_preserves_hyp(tmp_path):
-    """Slow path PART1: HYP element is re-created with original attributes."""
+    """Slow path PART1: the HYP element keeps its CONTENT and real WIDTH,
+    but its geometry is REPOSITIONED to the end of the rebuilt line so the
+    child widths sum exactly to the line WIDTH and the HYP does not overlap
+    the last String (Audit P2 — the old code copied the HYP's stale HPOS/
+    WIDTH verbatim while laying the Strings over a 4% estimate, so the
+    children summed past WIDTH and the hyphen overlapped the last String)."""
     lines_xml = """\
 <TextLine ID="TL1" HPOS="10" VPOS="20" WIDTH="400" HEIGHT="30">
   <String ID="S1" CONTENT="por-" HPOS="10" VPOS="20" WIDTH="100" HEIGHT="30"/>
@@ -598,10 +603,75 @@ def test_slow_path_part1_preserves_hyp(tmp_path):
 
     hyps = tl.findall(_ns("HYP"))
     assert len(hyps) == 1
-    assert hyps[0].get("CONTENT") == "-"
-    # Original HYP attributes preserved
-    assert hyps[0].get("HPOS") == "110"
-    assert hyps[0].get("WIDTH") == "16"
+    hyp = hyps[0]
+    assert hyp.get("CONTENT") == "-"
+    # The original HYP's real WIDTH is preserved (reserved for the hyphen).
+    assert hyp.get("WIDTH") == "16"
+    line_hpos, line_width = 10, 400
+    hyp_hpos, hyp_width = int(hyp.get("HPOS")), int(hyp.get("WIDTH"))
+    # The HYP sits flush at the line's right edge — children sum to WIDTH.
+    assert hyp_hpos + hyp_width == line_hpos + line_width
+    # No String overlaps the HYP: every String ends at or before the HYP.
+    for s in tl.findall(_ns("String")):
+        assert int(s.get("HPOS")) + int(s.get("WIDTH")) <= hyp_hpos
+
+
+def test_single_string_both_keeps_backward_subs(tmp_path):
+    """Audit P2 — a BOTH line with a single String must keep its backward
+    HypPart2 marker. The forward HypPart1 write must NOT clobber the same
+    element (the trailing HYP already marks the forward hyphen); flipping it
+    would destroy the "continues from the previous line" signal."""
+    lines_xml = """\
+<TextLine ID="TL1" HPOS="10" VPOS="20" WIDTH="400" HEIGHT="30">
+  <String ID="S1" CONTENT="nau" SUBS_TYPE="HypPart2" SUBS_CONTENT="konau" HPOS="10" VPOS="20" WIDTH="100" HEIGHT="30"/>
+  <HYP CONTENT="-" HPOS="110" VPOS="20" WIDTH="16" HEIGHT="30"/>
+</TextLine>"""
+    lm = LineManifest(
+        line_id="TL1",
+        page_id="P1",
+        block_id="TB1",
+        line_order_global=0,
+        line_order_in_block=0,
+        coords=Coords(hpos=10, vpos=20, width=400, height=30),
+        ocr_text="nau",
+        corrected_text="nau",  # identity → SUBS-only path
+        hyphen_role=HyphenRole.BOTH,
+        hyphen_source_explicit=True,
+        hyphen_subs_content="konau",
+        hyphen_forward_explicit=True,
+        hyphen_forward_subs_content="naukel",
+    )
+    root = write_and_rewrite(tmp_path, lines_xml, [lm])
+    tl = root.find(f".//{_ns('TextLine')}")
+    strings = tl.findall(_ns("String"))
+    assert len(strings) == 1
+    # The single String keeps its backward HypPart2 — NOT flipped to HypPart1.
+    assert strings[0].get("SUBS_TYPE") == "HypPart2"
+    assert strings[0].get("SUBS_CONTENT") == "konau"
+
+
+def test_heuristic_part1_slow_path_no_synthesized_hyp(tmp_path):
+    """Audit P1 — a heuristically-detected PART1 (trailing dash, no HYP /
+    SUBS markup) must NOT gain a synthesised <HYP> on the slow path, nor a
+    phantom trailing hyphen in the output: the trailing dash stays inside
+    the String CONTENT (conservative-heuristic invariant)."""
+    lines_xml = """\
+<TextLine ID="TL1" HPOS="10" VPOS="20" WIDTH="400" HEIGHT="30">
+  <String ID="S1" CONTENT="worthy-" HPOS="10" VPOS="20" WIDTH="200" HEIGHT="30"/>
+</TextLine>"""
+    lm = make_line(
+        "TL1",
+        "worthy-",
+        corrected_text="worthy- more",  # 1 word → 2 words: slow path
+        hyphen_role=HyphenRole.PART1,
+        hyphen_source_explicit=False,  # heuristic
+    )
+    root = write_and_rewrite(tmp_path, lines_xml, [lm])
+    tl = root.find(f".//{_ns('TextLine')}")
+    assert tl.findall(_ns("HYP")) == [], "heuristic PART1 must not synthesise a HYP"
+    contents = [s.get("CONTENT") for s in tl.findall(_ns("String"))]
+    # The dash stays on the token; no phantom hyphen appended.
+    assert contents == ["worthy-", "more"]
 
 
 def test_slow_path_recomputes_sp_geometry(tmp_path):

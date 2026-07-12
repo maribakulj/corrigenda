@@ -29,7 +29,7 @@ from collections import Counter
 from collections.abc import Iterable
 
 from corrigenda.core.schemas import PageManifest
-from corrigenda.errors import DuplicateIdError
+from corrigenda.errors import DuplicateIdError, ParseError
 
 _MAX_REPORTED = 5
 
@@ -106,6 +106,28 @@ def ensure_unique_element_ids(
     _raise_if_duplicates(source_name, [_format_duplicates(kind, counts)])
 
 
+def ensure_element_ids_present(
+    raw_ids: Iterable[str | None], source_name: str, *, kind: str
+) -> None:
+    """Raise :class:`ParseError` when any element lacks an id.
+
+    An id-less element cannot round-trip: the rewriters match on the real
+    ``id``/``ID`` attribute, so a parser-fabricated placeholder id would be
+    unmatchable and that element's correction silently dropped (the LLM
+    spend wasted, the line left as raw OCR while the manifest reports it
+    corrected). Valid ALTO/PAGE requires ids on ``TextLine`` elements, so
+    the library refuses non-conformant input up front rather than losing
+    corrections — mirroring the duplicate-id gate above.
+    """
+    missing = sum(1 for i in raw_ids if not i)
+    if missing:
+        raise ParseError(
+            f"{source_name!r} contains {missing} {kind} without an id — "
+            "an id-less line cannot round-trip through the rewriter (its "
+            "correction would be silently dropped). Assign ids and retry."
+        )
+
+
 def ensure_unique_page_ids_across_files(pages: Iterable[PageManifest]) -> None:
     """Raise :class:`DuplicateIdError` when the same ``page_id`` appears in
     two different source files of one document.
@@ -130,5 +152,6 @@ def ensure_unique_page_ids_across_files(pages: Iterable[PageManifest]) -> None:
 __all__ = [
     "ensure_unique_identities",
     "ensure_unique_element_ids",
+    "ensure_element_ids_present",
     "ensure_unique_page_ids_across_files",
 ]

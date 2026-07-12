@@ -59,10 +59,17 @@ def polygon_to_bbox(points: str) -> tuple[int, int, int, int]:
             continue
         x_str, _, y_str = pair.partition(",")
         try:
-            xs.append(int(float(x_str)))
-            ys.append(int(float(y_str)))
+            # Parse BOTH coordinates before mutating either list, so a pair
+            # with a good x but a bad y (heritage-OCR garbage) is skipped
+            # atomically. Appending x first left a half-added pair (xs longer
+            # than ys), inflating the bbox with a coordinate the docstring
+            # promises to skip.
+            xi = int(float(x_str))
+            yi = int(float(y_str))
         except ValueError:
             continue
+        xs.append(xi)
+        ys.append(yi)
     if not xs or not ys:
         return 0, 0, 0, 0
     hpos, vpos = min(xs), min(ys)

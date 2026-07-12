@@ -481,7 +481,16 @@ class PairingPolicy(FrozenPolicy):
 
     def can_pair(self, part1: LineManifest, candidate: LineManifest) -> bool:
         """Return ``True`` if ``candidate`` may be ``part1``'s PART2 partner."""
-        if self.same_block_only and part1.block_id != candidate.block_id:
+        # Page-qualify the same-block veto: block IDs are reused across
+        # pages (both pages export "TextBlock1"), so a bare block_id compare
+        # sees EQUAL ids for a cross-page candidate and lets it through —
+        # the exact opposite of the documented "forbids cross-page pairing"
+        # guarantee. A cross-page candidate is by definition a different
+        # block, mirroring the page-qualified max_vertical_gap veto below.
+        if self.same_block_only and (
+            part1.page_id != candidate.page_id
+            or part1.block_id != candidate.block_id
+        ):
             return False
         if (
             self.max_vertical_gap is not None

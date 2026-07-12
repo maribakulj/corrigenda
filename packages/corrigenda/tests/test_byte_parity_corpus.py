@@ -14,6 +14,17 @@ corpus files, pinned by sha256:
     F2 (WC/CC dropped on changed Strings) and F6/§6.1 (rebalanced
     slow-path String+SP geometry). No text drift, no structure drift.
 
+    Audit-D rev (2026-07-12) — the scripted hashes moved again, classified
+    per TextLine: the ONLY diff is that a slow-path rebuild of an explicit
+    PART1/BOTH line now emits its trailing ``<HYP>`` with the reserved
+    end-of-line geometry (HPOS/VPOS/WIDTH/HEIGHT flush to the line's right
+    edge) instead of a geometry-less ``<HYP CONTENT="-"/>``. This is the
+    rewriter.py #16 fix: the HYP fills its reserved slot so the child
+    widths sum exactly to the line WIDTH and nothing overlaps the last
+    String. String/SP geometry, text, CONTENT and structure are byte-
+    identical; the identity hashes are unchanged (the rebuild path never
+    fires without a word-count change).
+
 If a hash moves, do NOT regenerate blindly: re-run the classifier
 (scratch parity_classify.py pattern — parse both outputs, diff per
 TextLine, bucket into text/structure/confidence/geometry) and update the
@@ -39,13 +50,13 @@ _GOLDEN = {
         "10eda74a8afbc2eb3a1c3cf5dd488091f05388e887d17a4f86343e5a54855ec7"
     ),
     ("sample.xml", "scripted"): (
-        "41f7eaae9c1ae257ae6c95cb1730be5f05ed9c0f4be833356ecca257681c7859"
+        "cb57188d510352d8525041b669ecd9430556ddaeef97a45ee5132408ab2fa914"
     ),
     ("X0000002.xml", "identity"): (
         "18387a3d4dfdd2a117a0bf4593d9533da3f5aeef35edd6c8a5b5e3d875c759b6"
     ),
     ("X0000002.xml", "scripted"): (
-        "10bfa338c8b4a29c426dda6270d45dec40a1a3fcf9dd6e5bcb99c5e9e2487c41"
+        "c9b67c9d82f9ec8efb73665a7682f1f09f2178b2acc1d29b225868c8871f003c"
     ),
 }
 

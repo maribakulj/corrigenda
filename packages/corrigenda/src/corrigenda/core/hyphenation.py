@@ -338,11 +338,27 @@ def reconcile_hyphen_pair(
     # =================================================================
     if effective_explicit:
         if effective_subs:
-            left_bare = tokens1[-1].rstrip("-")
+            # Strip the FULL hyphen repertoire, matching the widened trailing
+            # hyphen gate above: a PART1 ending in ``¬``/``⸗``/soft-hyphen
+            # (Fraktur/old-print) otherwise kept its break char attached, so
+            # the join never equalled subs_content and every non-ASCII-hyphen
+            # pair was systematically reverted to OCR.
+            left_bare = tokens1[-1].rstrip("".join(HYPHEN_CHARS))
             right_fragment = tokens2[0]
             joined = left_bare + right_fragment
 
             if ncfold(joined) == ncfold(effective_subs):
+                # The boundary join can match while PART2 has absorbed
+                # trailing words from the NEXT line (e.g. "saires" →
+                # "saires du roi"): the join only inspects the first
+                # fragment, and the floor-3 expansion allowance in
+                # _part2_text_migrated is too permissive for a short PART2.
+                # In explicit mode the physical line's word count must not
+                # grow — otherwise a merged line survives, violating the
+                # "lines never merge" invariant (the Stage-C absorption
+                # guard never re-runs on a reconciled member).
+                if len(tokens2) > len(part2.ocr_text.split()):
+                    return _fallback
                 return corrected_part1, corrected_part2, effective_subs
             else:
                 return _fallback
