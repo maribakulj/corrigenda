@@ -19,6 +19,18 @@ _MAX_ZIP_MEMBERS = 1000  # inode-exhaustion limit
 _ZIP_READ_CHUNK = 64 * 1024
 
 
+def _is_extractable(member_path: Path) -> bool:
+    """True if a ZIP member will actually be extracted (allowed ALTO/XML
+    or image extension, not macOS metadata). Used for both the
+    declared-size precheck and the extraction loop so they agree."""
+    if member_path.name.startswith("._"):  # AppleDouble
+        return False
+    if "__MACOSX" in member_path.parts:
+        return False
+    suffix = member_path.suffix.lower()
+    return suffix in _ALLOWED_EXTENSIONS or suffix in _IMAGE_EXTENSIONS
+
+
 def _safe_zip_read(
     zf: zipfile.ZipFile,
     member: zipfile.ZipInfo,
@@ -31,21 +43,22 @@ def _safe_zip_read(
     (a common bomb pattern). Reads in chunks and checks the running total
     against the caller-supplied budget.
     """
-    chunks: list[bytes] = []
-    consumed = 0
+    # Audit P3 — accumulate into a single growable buffer instead of a
+    # list-of-chunks + b"".join(): the join transiently doubled peak
+    # memory (~2x the member size) before the list was freed.
+    buf = bytearray()
     with zf.open(member) as src:
         while True:
             chunk = src.read(_ZIP_READ_CHUNK)
             if not chunk:
                 break
-            consumed += len(chunk)
-            if consumed > remaining_bytes:
+            if len(buf) + len(chunk) > remaining_bytes:
                 raise ValueError(
                     f"ZIP member {member.filename!r} would exceed extraction "
                     f"safety limit ({_MAX_ZIP_EXTRACTED_BYTES} bytes total)"
                 )
-            chunks.append(chunk)
-    return b"".join(chunks)
+            buf.extend(chunk)
+    return bytes(buf)
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +165,15 @@ def save_uploaded_files(
                         f"({len(members)}, max {_MAX_ZIP_MEMBERS})"
                     )
 
-                # Declared-size precheck rejects "honest" bombs early without
-                # opening any member stream (against the job's REMAINING budget).
-                total_declared = sum(m.file_size for m in members)
+                # Declared-size precheck rejects "honest" bombs early
+                # without opening any member stream. Audit P2 — count ONLY
+                # members that will actually be EXTRACTED: a legitimate
+                # upload with a large unrelated member (a 600 MB dataset.csv
+                # next to the ALTO files) is skipped at extraction, so
+                # counting it here false-rejected the whole archive.
+                total_declared = sum(
+                    m.file_size for m in members if _is_extractable(Path(m.filename))
+                )
                 if extracted_total + total_declared > _MAX_ZIP_EXTRACTED_BYTES:
                     raise ValueError(
                         f"ZIP archive declared uncompressed size "
@@ -167,15 +186,9 @@ def save_uploaded_files(
                 # lying central-directory entries can't slip a larger payload past.
                 for member in members:
                     member_path = Path(member.filename)
-                    # Skip macOS metadata: AppleDouble files (._*) and the
-                    # __MACOSX directory that macOS injects into every ZIP.
-                    if member_path.name.startswith("._"):
-                        continue
-                    if "__MACOSX" in member_path.parts:
+                    if not _is_extractable(member_path):
                         continue
                     msuffix = member_path.suffix.lower()
-                    if msuffix not in _ALLOWED_EXTENSIONS and msuffix not in _IMAGE_EXTENSIONS:
-                        continue
 
                     data = _safe_zip_read(
                         zf,

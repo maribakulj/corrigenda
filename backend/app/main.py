@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -41,7 +42,11 @@ _INDEX_HTML = _STATIC_DIR / "index.html"
 #: P1-4 — creation-independent eviction cadence. Eviction used to run
 #: only inside create_job, so a server that stopped receiving new jobs
 #: kept every expired job's files on disk forever.
-SWEEP_INTERVAL_SECONDS = int(os.environ.get("JOB_SWEEP_INTERVAL_SECONDS", "300"))
+# Audit P3 — clamp to a sane minimum: JOB_SWEEP_INTERVAL_SECONDS=0 (or a
+# negative misconfiguration) would make asyncio.sleep return immediately,
+# turning the maintenance loop into a busy-loop that pins a CPU and
+# saturates the thread pool (a self-DoS).
+SWEEP_INTERVAL_SECONDS = max(30, int(os.environ.get("JOB_SWEEP_INTERVAL_SECONDS", "300")))
 
 
 async def _periodic_sweep(app: FastAPI) -> None:
@@ -68,7 +73,12 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Audit P3 — cancel AND await the sweep task so its cancellation
+        # actually settles (a bare cancel() may not run before the loop
+        # tears down); the shared-client close then always runs.
         sweep_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sweep_task
         registry: BackgroundTaskRegistry | None = getattr(app.state, "tasks", None)
         if registry is not None:
             await registry.shutdown(timeout=30.0)

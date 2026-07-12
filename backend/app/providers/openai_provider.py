@@ -72,6 +72,21 @@ class OpenAIProvider:
                 "json_schema": json_schema,
             },
         }
+        # Audit P2 — the allowlist admits gpt-4-0613 / gpt-3.5-turbo, which
+        # do NOT support response_format:{type:'json_schema'} and return a
+        # hard 400. Every other provider passes a fallback_body so a
+        # schema-rejection degrades to json_object instead of killing the
+        # chunk; OpenAI now does too (the system prompt already instructs
+        # JSON-only output, so json_object is safe).
+        fallback_body = {
+            **body,
+            "response_format": {"type": "json_object"},
+        }
 
-        data = await call_llm(url=f"{_BASE}/v1/chat/completions", headers=headers, body=body)
+        data = await call_llm(
+            url=f"{_BASE}/v1/chat/completions",
+            headers=headers,
+            body=body,
+            fallback_body=fallback_body,
+        )
         return extract_chat_text(data, "OpenAI"), extract_usage(data)

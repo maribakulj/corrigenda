@@ -271,6 +271,22 @@ async def create_job(
         runner = JobRunner(job_store=store)
         output_writer_instance = FilesystemOutputWriter(out_dir)
 
+        # Audit P2 — the early admission check (before reading uploads) is
+        # only fail-fast: the handler awaits file reads afterwards, so N
+        # concurrent uploads could all pass it while active_count was
+        # still low, then all spawn. This AUTHORITATIVE re-check sits
+        # immediately before the synchronous spawn() with NO await
+        # between them, so in single-worker asyncio the check-and-spawn is
+        # atomic (no yield point) and the cap is never exceeded.
+        if request.app.state.tasks.active_count >= _MAX_ACTIVE_JOBS:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Server is at capacity ({_MAX_ACTIVE_JOBS} concurrent jobs). Retry shortly."
+                ),
+                headers={"Retry-After": "30"},
+            )
+
         # Spawn correction through the per-app registry so the task is
         # strongly referenced (prevents GC mid-run) AND so the lifespan
         # handler can drain it on SIGTERM. Crash logging is centralised
@@ -497,11 +513,18 @@ async def get_job_image(
     if "/" in image_name or "\\" in image_name or image_name.startswith("."):
         raise HTTPException(status_code=400, detail="Invalid image name.")
 
-    img_path = (images_dir(job_id) / image_name).resolve()
+    # Audit P3 — check is_symlink on the UNRESOLVED path: resolve()
+    # follows symlinks, so the resolved path is never itself a symlink,
+    # making the old post-resolve is_symlink() check dead code. Reject a
+    # symlinked member up front (defence in depth) before resolving.
+    raw_path = images_dir(job_id) / image_name
+    if raw_path.is_symlink():
+        raise HTTPException(status_code=404, detail=f"Image not found: {image_name!r}")
+    img_path = raw_path.resolve()
     allowed_dir = images_dir(job_id).resolve()
     if not img_path.is_relative_to(allowed_dir):
         raise HTTPException(status_code=400, detail="Invalid image name.")
-    if not img_path.is_file() or img_path.is_symlink():
+    if not img_path.is_file():
         raise HTTPException(status_code=404, detail=f"Image not found: {image_name!r}")
 
     mime = _IMAGE_MIME.get(img_path.suffix.lower(), "application/octet-stream")

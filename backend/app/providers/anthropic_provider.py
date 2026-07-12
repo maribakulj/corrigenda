@@ -20,24 +20,45 @@ _VERSION = "2023-06-01"
 # Compute dynamically with a generous per-line budget; cap at the
 # model-family ceiling.
 _MAX_TOKENS_FLOOR = 8192
-_MAX_TOKENS_CEILING = 64_000
 _TOKENS_PER_LINE_BUDGET = 200  # generous: ~150 chars of correction + JSON noise
 
 
-def _compute_max_tokens(user_payload: dict[str, Any]) -> int:
-    """Return a max_tokens that scales with the number of input lines.
+def _model_output_cap(model: str) -> int:
+    """The model's real max output-token ceiling (audit P1).
 
-    Floor at 8192 (preserves current behaviour for small chunks);
-    ceiling at 64k (Claude 4.x family). Per-line budget is intentionally
-    generous: under-budgeting silently truncates the JSON tool-use
-    block, which surfaces as a `json.JSONDecodeError` retry storm
-    (R5).
+    ``list_models`` returns every model unfiltered, so a user can pick a
+    Claude 3 / 3.5 model whose output cap (4096 / 8192) is BELOW the old
+    hardcoded floor+ceiling (8192 / 64000). Requesting max_tokens above
+    the model's cap is a hard HTTP 400 that kills the chunk. Derive a
+    safe cap from the model id (conservative on anything unrecognised).
     """
+    m = model.lower()
+    # Claude 3.5 family — 8192 output tokens.
+    if "claude-3-5" in m or "claude-3.5" in m:
+        return 8192
+    # Claude 3 family (haiku/sonnet/opus) — 4096.
+    if "claude-3" in m:
+        return 4096
+    # Claude 3.7 / 4.x (sonnet-4, opus-4, etc.) — 64k.
+    if "claude-3-7" in m or "claude-3.7" in m or "-4" in m or "claude-4" in m:
+        return 64_000
+    # Unknown / future model: the safe, universally-supported ceiling.
+    return 8192
+
+
+def _compute_max_tokens(user_payload: dict[str, Any], model: str) -> int:
+    """Return a max_tokens that scales with the number of input lines but
+    NEVER exceeds the selected model's real output cap.
+
+    Under-budgeting silently truncates the JSON tool-use block (a
+    JSONDecodeError retry storm); over-budgeting is a hard 400. So we
+    scale by line count, floor generously, then clamp to the model cap.
+    """
+    cap = _model_output_cap(model)
+    floor = min(_MAX_TOKENS_FLOOR, cap)
     lines = user_payload.get("lines")
-    if not isinstance(lines, list):
-        return _MAX_TOKENS_FLOOR
-    estimated = len(lines) * _TOKENS_PER_LINE_BUDGET
-    return max(_MAX_TOKENS_FLOOR, min(_MAX_TOKENS_CEILING, estimated))
+    estimated = len(lines) * _TOKENS_PER_LINE_BUDGET if isinstance(lines, list) else floor
+    return max(floor, min(cap, estimated))
 
 
 # L10/F9 — fallback path used `json.loads(text)` directly. If the model
@@ -116,7 +137,7 @@ class AnthropicProvider:
 
         body: dict[str, Any] = {
             "model": model,
-            "max_tokens": _compute_max_tokens(user_payload),
+            "max_tokens": _compute_max_tokens(user_payload, model),
             "temperature": temperature,
             "system": system_prompt,
             "messages": [

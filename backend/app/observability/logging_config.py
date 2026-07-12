@@ -92,6 +92,16 @@ class RedactionFilter(logging.Filter):
             # present instead of re-formatting exc_info.
             record.exc_text = sanitize_error(logging.Formatter().formatException(record.exc_info))
             record.exc_info = None
+        # Audit P3 — the JSON formatter copies every non-reserved record
+        # attribute (logger.X(..., extra={...})) into the payload
+        # verbatim, so a string extra like {"raw": "Authorization: Bearer
+        # sk-…"} bypassed redaction entirely. Sanitise string-valued
+        # extras here too, closing the docstring's promise.
+        for key, value in record.__dict__.items():
+            if key in _RESERVED_ATTRS or key.startswith("_"):
+                continue
+            if isinstance(value, str):
+                setattr(record, key, sanitize_error(value))
         return True
 
 

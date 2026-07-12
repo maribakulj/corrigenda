@@ -63,8 +63,11 @@ def _wrap_if_transient(exc: BaseException) -> BaseException:
     """
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
-        # 4xx is client error — only 429 (rate-limit) is worth retrying.
-        if 400 <= status < 500 and status != 429:
+        # 4xx is client error EXCEPT the self-healing statuses: 429
+        # (rate-limit), 408 (request timeout) and 425 (too early) are
+        # transient — a CDN/proxy in front of the vendor commonly emits
+        # 408 on a slow upstream. Audit P3 — these were wrongly fatal.
+        if 400 <= status < 500 and status not in (408, 425, 429):
             return ProviderPermanentError(
                 f"provider rejected the request (HTTP {status}) — check the "
                 "API key, model name and request format",

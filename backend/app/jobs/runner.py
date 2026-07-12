@@ -259,7 +259,9 @@ class JobRunner:
                 job_id,
                 status=JobStatus.FAILED,
                 error=safe_error,
-                duration_seconds=time.monotonic() - start_time,
+                # Audit P3 — round like the three other handlers do (was
+                # the only one recording an unrounded float).
+                duration_seconds=round(time.monotonic() - start_time, 2),
             )
             self.job_store.emit(
                 job_id,
