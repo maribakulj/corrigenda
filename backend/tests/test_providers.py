@@ -191,6 +191,46 @@ def test_system_prompt_contains_hyphen_rule():
 
 
 # ---------------------------------------------------------------------------
+# Audit P3 — shared AsyncClient is recreated when the event loop changes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_shared_client_recreated_on_loop_mismatch():
+    """A client bound to a defunct loop must NOT be handed back: is_closed
+    stays False but the loop is dead, so the loop-id mismatch forces a fresh
+    client (else the first request raises 'Event loop is closed')."""
+    from unittest.mock import MagicMock
+
+    from app.providers import base as base_module
+
+    stale = MagicMock()
+    stale.is_closed = False
+    base_module._shared_client = stale
+    base_module._shared_client_loop_id = -1  # bogus id != the running loop
+
+    client = base_module.get_shared_client()
+    try:
+        assert client is not stale
+        assert isinstance(client, httpx.AsyncClient)
+    finally:
+        await base_module.aclose_shared_client()
+
+
+@pytest.mark.asyncio
+async def test_shared_client_reused_within_same_loop():
+    from app.providers import base as base_module
+
+    await base_module.aclose_shared_client()  # reset state
+    c1 = base_module.get_shared_client()
+    c2 = base_module.get_shared_client()
+    try:
+        assert c1 is c2  # one pooled client per loop, no spurious churn
+    finally:
+        await base_module.aclose_shared_client()
+
+
+# ---------------------------------------------------------------------------
 # test_get_provider_registry
 # ---------------------------------------------------------------------------
 

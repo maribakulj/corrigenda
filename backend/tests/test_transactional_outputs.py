@@ -58,6 +58,37 @@ def test_commit_with_nothing_staged_is_a_noop(tmp_path: Path):
     assert not (tmp_path / STAGING_DIRNAME).exists()
 
 
+def test_commit_rolls_back_partial_promotion_on_error(tmp_path: Path, monkeypatch):
+    """Audit P3 — if a later file fails to promote (ENOSPC/EIO), the files
+    already moved must be rolled back so the output directory is never left
+    with a partial set (the documented all-or-nothing contract)."""
+    import os as _os
+
+    w = FilesystemOutputWriter(tmp_path)
+    w.write_corrected(source_stem="a", xml_bytes=b"<a/>")
+    w.write_corrected(source_stem="b", xml_bytes=b"<b/>")
+    w.write_trace(traces_payload="{}")
+
+    real_replace = _os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:  # let the first promote, blow up on the second
+            raise OSError("simulated ENOSPC")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr("app.storage.output_writer.os.replace", flaky_replace)
+
+    with pytest.raises(OSError):
+        w.commit()
+
+    # No partial set survives in the output directory: every promoted file
+    # was rolled back. (Anything left is inside the hidden staging dir.)
+    visible = [p for p in tmp_path.iterdir() if p.name != STAGING_DIRNAME]
+    assert visible == []
+
+
 def test_get_output_files_never_sees_staging(tmp_path: Path, monkeypatch):
     from app import storage as storage_module
 

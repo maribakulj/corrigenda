@@ -48,17 +48,38 @@ class FilesystemOutputWriter:
         (self._staging / "trace.json").write_text(traces_payload, encoding="utf-8")
 
     def commit(self) -> None:
-        """Atomically promote every staged file into the final directory.
+        """Promote every staged file into the final directory as a set.
 
         Called by the JobRunner ONLY after the pipeline returned
-        successfully. Same-filesystem ``os.replace`` per file: a reader
-        never observes a half-written file (it sees the old state or the
-        new one). No-op when nothing was staged (dry-run)."""
+        successfully. Each file lands via a same-filesystem ``os.replace``,
+        so a reader never observes a half-written file (it sees the old
+        state or the new one). POSIX has no true multi-file atomic rename,
+        so if a later file fails to promote (ENOSPC/EIO), the files already
+        moved are rolled back out of the output directory — the set is
+        all-or-nothing on any in-process error, never a partial promotion.
+        (A hard process kill *between* two ``os.replace`` calls is the only
+        residual window; the ``/download`` status guard, which refuses a
+        non-terminal-success job, is the backstop there.) No-op when
+        nothing was staged (dry-run)."""
         if not self._staging.is_dir():
             return
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        for staged in sorted(self._staging.iterdir()):
-            os.replace(staged, self.base_dir / staged.name)
+        promoted: list[Path] = []
+        try:
+            for staged in sorted(self._staging.iterdir()):
+                dest = self.base_dir / staged.name
+                os.replace(staged, dest)
+                promoted.append(dest)
+        except OSError:
+            # Roll back the already-promoted files so no partial set is left
+            # visible in the output directory. The run is failing regardless;
+            # discard() (failure path) then drops whatever remains in staging.
+            for dest in promoted:
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
+            raise
         self._staging.rmdir()
 
     def discard(self) -> None:

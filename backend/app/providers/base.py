@@ -13,6 +13,7 @@ concrete providers (or be replaced wholesale by XerLLM).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -95,22 +96,37 @@ def _wrap_if_transient(exc: BaseException) -> BaseException:
 # lifespan via aclose_shared_client() (harmless to skip in short-lived
 # scripts — the loop teardown closes sockets anyway).
 _shared_client: httpx.AsyncClient | None = None
+#: id() of the event loop the cached client was created on. An
+#: httpx.AsyncClient binds its connection pool to the loop alive at
+#: creation; reusing it from a DIFFERENT loop (a CLI list_models probe
+#: under one asyncio.run(), then a correction job under another) raises
+#: "Event loop is closed" on the first request. Tracking the loop lets
+#: get_shared_client recreate on mismatch instead of handing back a stale
+#: client. is_closed does NOT catch this — the client isn't closed, its
+#: loop is dead.
+_shared_client_loop_id: int | None = None
 
 
 def get_shared_client() -> httpx.AsyncClient:
-    global _shared_client
-    if _shared_client is None or _shared_client.is_closed:
+    global _shared_client, _shared_client_loop_id
+    loop_id = id(asyncio.get_running_loop())
+    if _shared_client is None or _shared_client.is_closed or _shared_client_loop_id != loop_id:
+        # The stale client (if any) is bound to a now-defunct loop, so it
+        # can't be awaited closed here; drop the reference and let GC reclaim
+        # its sockets. The single-loop FastAPI server never hits this path.
         _shared_client = httpx.AsyncClient(
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)
         )
+        _shared_client_loop_id = loop_id
     return _shared_client
 
 
 async def aclose_shared_client() -> None:
-    global _shared_client
+    global _shared_client, _shared_client_loop_id
     if _shared_client is not None and not _shared_client.is_closed:
         await _shared_client.aclose()
     _shared_client = None
+    _shared_client_loop_id = None
 
 
 async def call_llm(
