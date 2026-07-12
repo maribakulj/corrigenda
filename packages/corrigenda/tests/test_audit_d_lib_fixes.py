@@ -122,7 +122,9 @@ def test_lexicon_guard_matches_nfd_entry():
 
 def test_same_block_only_forbids_cross_page_even_with_reused_block_id():
     policy = PairingPolicy(same_block_only=True, geometric_checks=False)
-    part1 = _line("TL9", "mot-", page_id="pA", block_id="TextBlock1", role=HyphenRole.PART1)
+    part1 = _line(
+        "TL9", "mot-", page_id="pA", block_id="TextBlock1", role=HyphenRole.PART1
+    )
     # Cross-page candidate reusing the SAME block id (both pages export
     # "TextBlock1"). The documented guarantee: cross-page pairing forbidden.
     candidate = _line(
@@ -134,7 +136,9 @@ def test_same_block_only_forbids_cross_page_even_with_reused_block_id():
 def test_same_block_only_still_allows_intra_block_same_page():
     policy = PairingPolicy(same_block_only=True, geometric_checks=False)
     part1 = _line("TL1", "mot-", page_id="pA", block_id="TB1", role=HyphenRole.PART1)
-    candidate = _line("TL2", "suite", page_id="pA", block_id="TB1", role=HyphenRole.PART2)
+    candidate = _line(
+        "TL2", "suite", page_id="pA", block_id="TB1", role=HyphenRole.PART2
+    )
     assert policy.can_pair(part1, candidate) is True
 
 
@@ -187,11 +191,11 @@ def test_fusion_check_still_fires_for_a_target_pair():
 def test_explicit_subs_join_accepts_non_ascii_break_char():
     # Fraktur double-oblique hyphen U+2E17 ("⸗"). The corrected pair keeps it
     # and the subs join must still match "Aufmerksamkeit".
-    part1 = _line("p1", "Aufmerksam⸗", role=HyphenRole.PART1, subs="Aufmerksamkeit", explicit=True)
-    part2 = _line("p2", "keit", role=HyphenRole.PART2)
-    f1, f2, subs = reconcile_hyphen_pair(
-        part1, part2, "Aufmerksam⸗", "keit"
+    part1 = _line(
+        "p1", "Aufmerksam⸗", role=HyphenRole.PART1, subs="Aufmerksamkeit", explicit=True
     )
+    part2 = _line("p2", "keit", role=HyphenRole.PART2)
+    f1, f2, subs = reconcile_hyphen_pair(part1, part2, "Aufmerksam⸗", "keit")
     # Not a fallback: the corrected texts and subs survive.
     assert f1 == "Aufmerksam⸗"
     assert f2 == "keit"
@@ -204,7 +208,9 @@ def test_explicit_subs_join_accepts_non_ascii_break_char():
 
 
 def test_explicit_part2_absorption_falls_back():
-    part1 = _line("p1", "neces-", role=HyphenRole.PART1, subs="necessaires", explicit=True)
+    part1 = _line(
+        "p1", "neces-", role=HyphenRole.PART1, subs="necessaires", explicit=True
+    )
     part2 = _line("p2", "saires", role=HyphenRole.PART2)
     # PART2 absorbed "du roi" from the next line — boundary join still
     # matches subs, but the physical line grew.
@@ -213,7 +219,9 @@ def test_explicit_part2_absorption_falls_back():
 
 
 def test_explicit_part2_no_absorption_accepted():
-    part1 = _line("p1", "neces-", role=HyphenRole.PART1, subs="necessaires", explicit=True)
+    part1 = _line(
+        "p1", "neces-", role=HyphenRole.PART1, subs="necessaires", explicit=True
+    )
     part2 = _line("p2", "saires", role=HyphenRole.PART2)
     f1, f2, subs = reconcile_hyphen_pair(part1, part2, "neces-", "saires")
     assert (f1, f2, subs) == ("neces-", "saires", "necessaires")

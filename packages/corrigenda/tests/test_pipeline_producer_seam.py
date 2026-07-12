@@ -75,11 +75,11 @@ async def test_rules_producer_drives_full_pipeline_without_credentials():
     # own final per-line text for every op'd line.
     assert result.edit_script.ops
     assert any(isinstance(op, ReplaceSpan) for op in result.edit_script.ops)
-    ocr_by_line = {
-        lm.line_id: lm.ocr_text for page in doc.pages for lm in page.lines
-    }
+    ocr_by_line = {lm.line_id: lm.ocr_text for page in doc.pages for lm in page.lines}
     final_by_line = {
-        lm.line_id: (lm.corrected_text if lm.corrected_text is not None else lm.ocr_text)
+        lm.line_id: (
+            lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
+        )
         for page in doc.pages
         for lm in page.lines
     }

@@ -488,8 +488,7 @@ class PairingPolicy(FrozenPolicy):
         # guarantee. A cross-page candidate is by definition a different
         # block, mirroring the page-qualified max_vertical_gap veto below.
         if self.same_block_only and (
-            part1.page_id != candidate.page_id
-            or part1.block_id != candidate.block_id
+            part1.page_id != candidate.page_id or part1.block_id != candidate.block_id
         ):
             return False
         if (

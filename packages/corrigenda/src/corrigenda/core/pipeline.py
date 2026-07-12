@@ -869,9 +869,7 @@ class CorrectionPipeline:
                 else:
                     # A guard / the reconciler rewrote the final text; the
                     # original ops no longer describe it.
-                    ops.append(
-                        ReplaceLine(line_id=lm.line_id, text=lm.corrected_text)
-                    )
+                    ops.append(ReplaceLine(line_id=lm.line_id, text=lm.corrected_text))
         return EditScript(ops=ops)
 
     def run_sync(
@@ -1453,9 +1451,7 @@ class CorrectionPipeline:
                 # state, preserving the producer's op TYPE (e.g. a rules
                 # producer's replace_span) when its output survived unchanged.
                 target_ids = set(chunk.targets())
-                produced_by_line = {
-                    o.line_id: o.corrected_text for o in response.lines
-                }
+                produced_by_line = {o.line_id: o.corrected_text for o in response.lines}
                 ops_by_line: dict[str, list[EditOp]] = {}
                 for op in script.ops:
                     if op.line_id in target_ids and op.line_id in produced_by_line:
