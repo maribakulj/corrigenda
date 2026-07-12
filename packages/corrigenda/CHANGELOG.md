@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (exhaustive audit — library correctness cluster, 2026-07-12)
+
+- **Hyphen reconciliation.** The explicit-mode subs join stripped only
+  ASCII `-`, so an explicit pair whose break char is `¬`/`⸗`/soft-hyphen
+  (Fraktur/old print) never matched its `SUBS_CONTENT` and was
+  systematically reverted to OCR — the join now strips the full
+  `HYPHEN_CHARS` repertoire (matching the widened trailing-hyphen gate).
+  Separately, an explicit-mode PART2 that absorbed trailing words from the
+  next line (`"saires"` → `"saires du roi"`) could pass the boundary-word
+  join and survive as a merged line; PART2 word growth now forces a
+  fallback, preserving the "lines never merge" invariant.
+- **Edit protocol (E2).** A zero-length insertion co-located with a
+  replacement's start offset escaped the overlap check and, applied
+  right-to-left in an ambiguous order, could leave a character the
+  replacement was meant to remove — co-located span ops are now rejected as
+  overlaps.
+- **ALTO rewriter.** (a) A heuristically-detected PART1 (trailing dash, no
+  explicit markup) no longer gets a synthesised `<HYP>` or a phantom
+  trailing hyphen on the slow path — the conservative-heuristic invariant.
+  (b) A single-`String` `BOTH` line keeps its backward `HypPart2` marker
+  instead of the forward `HypPart1` write clobbering the same element.
+  (c) *(byte change)* the slow-path rebuild reserves the trailing HYP's
+  real width and repositions it flush at the line's right edge, so the
+  child widths sum exactly to the line `WIDTH` with no overlap (previously
+  the HYP kept its stale HPOS/WIDTH while the Strings were laid over a 4%
+  estimate). The scripted byte-parity goldens move accordingly; identity
+  goldens are unchanged.
+- **LLM-response validator.** The hyphen fusion check now honours
+  `target_line_ids`: in F8 window mode a hyphen pair sitting entirely in a
+  chunk's *context* region can no longer fail the whole chunk (which
+  discarded the chunk's valid *target* corrections on retry/fallback).
+- **`PairingPolicy.same_block_only`** is page-qualified, honouring its
+  documented cross-page guarantee when block ids repeat across pages (both
+  pages exporting `TextBlock1`).
+- **Adjacent-duplicate guard.** A run of three or more identical
+  corrections now reverts every member; the loop used to skip the third.
+- **PAGE `polygon_to_bbox`.** A half-malformed `x,y` pair (good `x`, bad
+  `y`) is skipped atomically instead of leaving a dangling `x` that
+  inflated the bbox.
+- **`RulesProducer` lexicon guard** normalises through `ncfold` (NFC +
+  casefold), so a decomposed (NFD) lexicon entry matches the parser's
+  NFC-normalised tokens (previously a silently missed guarded correction).
+- **Parsers refuse an id-less `TextLine`** (both ALTO and PAGE): a
+  fabricated manifest id cannot round-trip through the rewriter (it matches
+  on the real id attribute), so its correction would be silently dropped —
+  the file is now rejected with `ParseError` instead. An id-less region
+  under a `ReadingOrder` keeps document order (conservative bail).
+- **Pipeline.** The cross-page duplicate-revert now reaches a hyphen
+  partner living on another page, so a reconciled cross-page pair reverts
+  atomically (never half OCR / half corrected). The page-seam duplicate
+  pass compares a seam only within one source file. `CorrectionResult.
+  edit_script` is rebuilt from the final per-line state (after
+  reconciliation, acceptance and every revert), so a dry-run consumer
+  replaying it reproduces the pipeline's own output — it never carries a
+  stale op for a line reverted to OCR or reconciled to different text; an
+  accepted-unchanged line keeps the producer's original op type. The
+  producer-attempt error guard uses a denylist of genuine programming-error
+  types, so a real bug (KeyError/TypeError/…) fails the run instead of
+  silently degrading every chunk to OCR, while provider transport /
+  validation errors still degrade.
+
 ### Fixed
 
 - **P1-1 — recursive structure traversal.** Both parsers only visited
