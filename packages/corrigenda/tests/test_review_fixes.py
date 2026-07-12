@@ -38,6 +38,7 @@ from corrigenda.core.schemas import (
     Coords,
     HyphenRole,
     LineManifest,
+    LineStatus,
 )
 from corrigenda.errors import DuplicateIdError
 from corrigenda.formats.alto.parser import parse_alto_file
@@ -310,3 +311,52 @@ def test_duplicate_revert_extends_to_hyphen_partner():
     # Both sides reverted — no mixed pair survives.
     assert part2.corrected_text == part2.ocr_text
     assert part1.corrected_text == part1.ocr_text
+
+
+def test_duplicate_revert_extends_to_CROSS_PAGE_hyphen_partner():
+    """Audit P1 — a hyphen pair straddling a PAGE boundary must revert
+    atomically too. The flagged member's partner lives on another page,
+    absent from the page-local ``line_by_id``; the page-qualified
+    ``cross_page_partners`` index is the only way to reach it. Before the
+    fix the page-local ``pid in line_by_id`` guard silently skipped it,
+    leaving the reconciled cross-page pair half OCR / half corrected."""
+    from corrigenda.core.pipeline import CorrectionPipeline
+    from tests._pipeline_harness import DictProvider, RecordingObserver, _NoopWriter
+
+    pipeline = CorrectionPipeline.for_provider(
+        DictProvider({}),
+        api_key="k",
+        model="m",
+        observer=RecordingObserver(),
+        output_writer=_NoopWriter(),
+    )
+    part1 = _line(0, "mot coupe-")
+    part2 = _line(1, "suite du mot")
+    # PART1 on page A (last line), PART2 on page B (first line).
+    part1.page_id = "pA"
+    part2.page_id = "pB"
+    part1.hyphen_role = HyphenRole.PART1
+    part1.hyphen_pair_line_id = part2.line_id
+    part1.hyphen_pair_page_id = "pB"
+    part2.hyphen_role = HyphenRole.PART2
+    part2.hyphen_pair_line_id = part1.line_id
+    part2.hyphen_pair_page_id = "pA"
+    part1.corrected_text = "mot coupé-"
+    part2.corrected_text = "suite du mot"
+
+    # The page-local index the seam/page pass would hold contains only the
+    # flagged page's line; the partner is reachable solely via the
+    # page-qualified cross-page index.
+    line_by_id = {part1.line_id: part1}
+    cross_page_partners = {(part2.page_id, part2.line_id): part2}
+
+    pipeline._apply_duplicate_reverts(
+        reverts={part1.line_id: "adjacent_duplicate_detected"},
+        traces=None,
+        line_by_id=line_by_id,
+        cross_page_partners=cross_page_partners,
+    )
+    # Both members reverted despite the partner living on another page.
+    assert part1.corrected_text == part1.ocr_text
+    assert part2.corrected_text == part2.ocr_text
+    assert part2.status is LineStatus.FALLBACK

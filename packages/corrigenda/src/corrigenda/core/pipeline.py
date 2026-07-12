@@ -482,8 +482,12 @@ class CorrectionPipeline:
         self._fallback_count = 0
         self._reconcile_metrics = ReconcileMetrics()
         self._usage = Usage()
-        # §4 — EditScript ops accumulated during a run (reset in run()).
-        self._edit_ops: list[EditOp] = []
+        # §4 — per target line, the producer's ops (a line may carry
+        # several, e.g. one replace_span per occurrence) and the text those
+        # ops produced (pre-guard, pre-reconcile). Consumed by
+        # _build_final_edit_script to emit the ops the run ACTUALLY applied
+        # (reset in run()).
+        self._producer_ops: dict[str, tuple[list[EditOp], str]] = {}
         # §4.1 vision envelope — populated per-run from run(source_images=…).
         self._image_ref_by_page_id: dict[str, ImageRef] = {}
         self._page_dims: dict[str, tuple[int, int]] = {}
@@ -627,8 +631,7 @@ class CorrectionPipeline:
         self._fallback_count = 0
         self._reconcile_metrics = ReconcileMetrics()
         self._usage = Usage()
-        # §4 — accumulate the normalized EditScript ops the run applies.
-        self._edit_ops = []
+        self._producer_ops = {}
 
         # §5.1 — a vision producer without its images is a start-up error,
         # never a silent image-less call.
@@ -743,6 +746,13 @@ class CorrectionPipeline:
         ):
             if not prev_page.lines or not next_page.lines:
                 continue
+            # Audit P2 — only compare a seam WITHIN one source file. Pages
+            # of different files are concatenated in document_manifest,
+            # so without this guard the last physical line of file A was
+            # compared against the first line of file B as if adjacent,
+            # and could be spuriously reverted as a "duplicate".
+            if prev_page.source_file != next_page.source_file:
+                continue
             seam_map = {lm.line_id: lm for lm in (*prev_page.lines, *next_page.lines)}
             if len(seam_map) != len(prev_page.lines) + len(next_page.lines):
                 continue  # cross-file line_id reuse → ambiguous, skip
@@ -761,7 +771,14 @@ class CorrectionPipeline:
                 config=self.guard_config,
             )
             self._apply_duplicate_reverts(
-                reverts=seam_reverts, traces=traces, line_by_id=seam_map
+                reverts=seam_reverts,
+                traces=traces,
+                line_by_id=seam_map,
+                # A seam line's hyphen partner may live on a THIRD page
+                # (outside the two-page seam_map); the document-wide,
+                # page-qualified index reaches it so the pair reverts
+                # atomically.
+                cross_page_partners=all_lines_global,
             )
 
         self._write_outputs(
@@ -793,8 +810,52 @@ class CorrectionPipeline:
             reconcile_metrics=self._reconcile_metrics,
             usage=self._usage,
             report=report,
-            edit_script=EditScript(ops=list(self._edit_ops)),
+            edit_script=self._build_final_edit_script(document_manifest),
         )
+
+    def _build_final_edit_script(
+        self, document_manifest: DocumentManifest
+    ) -> EditScript:
+        """§4 — the EditScript the run *actually applied*, in document order.
+
+        Reconciles the captured producer ops against the FINAL per-line
+        state, after reconciliation, the acceptance guard, and every
+        duplicate/seam revert have run. It therefore never carries an op
+        for a line that was reverted to OCR or reconciled to different text
+        (Audit P2 — a dry-run consumer replaying it would otherwise diverge
+        from the pipeline's own corrected XML):
+
+        - line not ``CORRECTED`` (fallback / failed / pending) → no op;
+        - ``CORRECTED`` and the producer's op output survived unchanged →
+          the producer's original op, preserving its TYPE (e.g. a rules
+          producer's ``replace_span``);
+        - ``CORRECTED`` but the final text differs from the op output
+          (a reconciled hyphen member) → a ``replace_line`` carrying the
+          final ``corrected_text``, since the original span no longer
+          describes it.
+        """
+        ops: list[EditOp] = []
+        for page in document_manifest.pages:
+            for lm in page.lines:
+                if lm.status is not LineStatus.CORRECTED or lm.corrected_text is None:
+                    continue
+                captured = self._producer_ops.get(lm.line_id)
+                if captured is None:
+                    # An accepted line the producer left untouched (no op) —
+                    # e.g. a rules producer's uncovered line. Nothing applied.
+                    continue
+                line_ops, produced_text = captured
+                if produced_text == lm.corrected_text:
+                    # The producer's output survived every guard unchanged —
+                    # keep its original ops (and their TYPE, e.g. span).
+                    ops.extend(line_ops)
+                else:
+                    # A guard / the reconciler rewrote the final text; the
+                    # original ops no longer describe it.
+                    ops.append(
+                        ReplaceLine(line_id=lm.line_id, text=lm.corrected_text)
+                    )
+        return EditScript(ops=ops)
 
     def run_sync(
         self,
@@ -949,7 +1010,10 @@ class CorrectionPipeline:
                     check_adjacent_duplicates(pair, config=self.guard_config)
                 )
             self._apply_duplicate_reverts(
-                reverts=boundary_reverts, traces=traces, line_by_id=line_by_id
+                reverts=boundary_reverts,
+                traces=traces,
+                line_by_id=line_by_id,
+                cross_page_partners=cross_page_partners,
             )
 
         page_corrections = sum(
@@ -1167,6 +1231,7 @@ class CorrectionPipeline:
             chunk_lines=target_lines,
             traces=traces,
             line_by_id=line_by_id,
+            cross_page_partners=cross_page_partners,
         )
 
         self.observer.on_event(
@@ -1360,13 +1425,29 @@ class CorrectionPipeline:
                     # an adjacent chunk).
                     target_line_ids=chunk.target_line_ids,
                 )
-                # §4 — the successful attempt's producer ops, restricted to
-                # the chunk's TARGET lines (context ops belong to an adjacent
-                # chunk), feed CorrectionResult.edit_script.
+                # §4 — capture each TARGET line's producer op alongside the
+                # text that op produced (pre-guard, pre-reconcile). The final
+                # EditScript is NOT emitted from here: a line later reverted
+                # (duplicate / rejected by check_line) or reconciled to
+                # different text must not leave a stale op behind (Audit P2 —
+                # a dry-run consumer replaying it would diverge from the
+                # pipeline's own corrected XML). _build_final_edit_script
+                # reconciles these captured ops against the FINAL per-line
+                # state, preserving the producer's op TYPE (e.g. a rules
+                # producer's replace_span) when its output survived unchanged.
                 target_ids = set(chunk.targets())
-                self._edit_ops.extend(
-                    op for op in script.ops if op.line_id in target_ids
-                )
+                produced_by_line = {
+                    o.line_id: o.corrected_text for o in response.lines
+                }
+                ops_by_line: dict[str, list[EditOp]] = {}
+                for op in script.ops:
+                    if op.line_id in target_ids and op.line_id in produced_by_line:
+                        ops_by_line.setdefault(op.line_id, []).append(op)
+                for line_id, line_ops in ops_by_line.items():
+                    self._producer_ops[line_id] = (
+                        line_ops,
+                        produced_by_line[line_id],
+                    )
                 return response, attempts_used, False, "", chunk_usage
 
             except ProviderPermanentError:
@@ -1374,6 +1455,20 @@ class CorrectionPipeline:
                 # and falling back would fake success. Fatal for the run.
                 raise
             except Exception as exc:
+                # Audit P3 (same class as P0-2, on the attempt path): only
+                # EXPECTED producer-output / transport errors may degrade
+                # to retry-then-OCR-fallback. A genuine programming error
+                # (KeyError, AttributeError, TypeError, a broken invariant
+                # in _script_to_raw / validation) must FAIL the run, not be
+                # silently masked as uncorrected OCR text. The expected set
+                # is the documented taxonomy: ValueError (incl.
+                # ValidationError / ParseError / JSONDecodeError /
+                # HyphenIntegrityError), ProviderTransientError, and any
+                # other CorrectionError.
+                if not isinstance(
+                    exc, (ValueError, ProviderTransientError, CorrectionError)
+                ):
+                    raise
                 # §5.1 — the pipeline no longer holds credentials; the
                 # pattern-based redaction still masks secret-shaped
                 # substrings a producer may leak into the message, and the
@@ -1604,6 +1699,7 @@ class CorrectionPipeline:
         reverts: dict[str, str],
         traces: dict[str, LineTrace] | None,
         line_by_id: dict[str, LineManifest],
+        cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
     ) -> None:
         """Revert duplicate-flagged lines to OCR — atomically with their
         hyphen partner.
@@ -1615,21 +1711,42 @@ class CorrectionPipeline:
         OCR+corrected pair, the exact state ``reconcile_hyphen_pair``
         guarantees can never survive). A flagged line's partner is
         reverted too, with its own trace reason.
+
+        Audit P1 — partner extension resolves through ``_resolve_partner``
+        so a *cross-page* partner (living on another page, absent from the
+        page-local ``line_by_id``) is reverted too. The old page-local
+        ``pid in line_by_id`` guard silently skipped it, leaving the
+        reconciled cross-page pair half OCR / half corrected.
         """
         if not reverts:
             return
-        extended = dict(reverts)
+        # Collect the manifests to revert by object identity, keeping the
+        # first reason assigned to each. Originals are enrolled before the
+        # atomicity extension so an original revert reason always wins.
+        to_revert: dict[int, tuple[LineManifest, str]] = {}
+
+        def _enroll(lm: LineManifest, reason: str) -> None:
+            to_revert.setdefault(id(lm), (lm, reason))
+
+        for lid, reason in reverts.items():
+            lm = line_by_id.get(lid)
+            if lm is not None:
+                _enroll(lm, reason)
         for lid in list(reverts):
             lm = line_by_id.get(lid)
             if lm is None:
                 continue
-            for pid in (lm.hyphen_pair_line_id, lm.hyphen_forward_pair_id):
-                if pid and pid not in extended and pid in line_by_id:
-                    extended[pid] = "adjacent_duplicate_pair_atomicity"
-        for lid, reason in extended.items():
-            lm = line_by_id.get(lid)
-            if lm is None:
-                continue
+            for is_forward in (False, True):
+                partner = _resolve_partner(
+                    lm,
+                    is_forward=is_forward,
+                    line_by_id=line_by_id,
+                    cross_page_partners=cross_page_partners,
+                )
+                if partner is not None:
+                    _enroll(partner, "adjacent_duplicate_pair_atomicity")
+
+        for lm, reason in to_revert.values():
             lm.corrected_text = lm.ocr_text
             lm.status = LineStatus.FALLBACK
             _set_trace(
@@ -1651,6 +1768,7 @@ class CorrectionPipeline:
         chunk_lines: list[LineManifest],
         traces: dict[str, LineTrace] | None,
         line_by_id: dict[str, LineManifest],
+        cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
     ) -> None:
         """Adjacent-duplicate revert + projected_text/validation_status
         for every line trace.
@@ -1668,7 +1786,10 @@ class CorrectionPipeline:
             accepted_lines, config=self.guard_config
         )
         self._apply_duplicate_reverts(
-            reverts=dup_reverts, traces=traces, line_by_id=line_by_id
+            reverts=dup_reverts,
+            traces=traces,
+            line_by_id=line_by_id,
+            cross_page_partners=cross_page_partners,
         )
 
         for lm in chunk_lines:

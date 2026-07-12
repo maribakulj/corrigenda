@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from corrigenda import CorrectionPipeline, ValidationError
-from corrigenda.core.editing import EditScript, ReplaceSpan
+from corrigenda.core.editing import EditScript, ReplaceSpan, apply_edit_script
 from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
 from corrigenda.formats.alto.parser import build_document_manifest
 from corrigenda.producers.rules import RulesProducer, SubstitutionRule
@@ -66,9 +66,26 @@ async def test_rules_producer_drives_full_pipeline_without_credentials():
     for lm in changed:
         assert "3" in lm.corrected_text
 
-    # The run's edit_script carries the producer's actual ReplaceSpan ops.
+    # §4 (Audit P2) — the edit_script reflects what the run ACTUALLY applied.
+    # The producer's real replace_span ops survive for lines whose span
+    # output was accepted unchanged; a hyphen member the reconciler rewrote
+    # is surfaced as a replace_line carrying the FINAL text (never a stale
+    # span claiming text the rewriter never wrote). The binding invariant:
+    # replaying the edit_script over the OCR text reproduces the pipeline's
+    # own final per-line text for every op'd line.
     assert result.edit_script.ops
-    assert all(isinstance(op, ReplaceSpan) for op in result.edit_script.ops)
+    assert any(isinstance(op, ReplaceSpan) for op in result.edit_script.ops)
+    ocr_by_line = {
+        lm.line_id: lm.ocr_text for page in doc.pages for lm in page.lines
+    }
+    final_by_line = {
+        lm.line_id: (lm.corrected_text if lm.corrected_text is not None else lm.ocr_text)
+        for page in doc.pages
+        for lm in page.lines
+    }
+    replayed = apply_edit_script(result.edit_script, ocr_by_line)
+    for op in result.edit_script.ops:
+        assert replayed.text_by_id[op.line_id] == final_by_line[op.line_id]
 
 
 class _VisionProducer:

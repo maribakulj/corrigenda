@@ -291,6 +291,57 @@ def test_intra_chunk_duplicates_still_reverted(tmp_path: Path):
     assert lines["L2"].corrected_text == lines["L2"].ocr_text
 
 
+def _write_two_line_doc(tmp_path: Path, name: str, texts: list[str]) -> Path:
+    body = "".join(
+        f'<TextLine ID="{name}_L{i}" HPOS="10" VPOS="{30 * i + 10}" '
+        f'WIDTH="900" HEIGHT="20">'
+        f'<String CONTENT="{t}" HPOS="10" VPOS="{30 * i + 10}" '
+        f'WIDTH="900" HEIGHT="20"/></TextLine>'
+        for i, t in enumerate(texts)
+    )
+    p = tmp_path / f"{name}.xml"
+    p.write_text(textwrap.dedent(_ALTO_8_LINES).format(lines=body), encoding="utf-8")
+    return p
+
+
+def test_page_seam_duplicate_not_reverted_across_DIFFERENT_files(tmp_path: Path):
+    """Audit P2 — the page-seam duplicate pass must compare a seam ONLY
+    within one source file. Two files are concatenated in the document
+    manifest, so the last physical line of file A sits document-adjacent
+    to the first line of file B — but they are NOT visually adjacent, and
+    an identical correction across that seam is a genuine coincidence, not
+    a hallucinated duplication. Without the same-file guard the guard
+    spuriously reverted one of them."""
+    # Distinct line_ids across files (A_L*, B_L*) so the seam_map uniqueness
+    # guard does NOT fire — the ONLY thing that can prevent the false revert
+    # here is the source-file guard under test.
+    file_a = _write_two_line_doc(tmp_path, "A", ["alpha un", "source distincte A"])
+    file_b = _write_two_line_doc(tmp_path, "B", ["source distincte B", "beta deux"])
+    doc = build_document_manifest([(file_a, "A.xml"), (file_b, "B.xml")])
+
+    dup = "meme correction identique de part et dautre du joint"
+    # A_L1 is the LAST line of page A; B_L0 is the FIRST line of page B.
+    pipeline = CorrectionPipeline.for_provider(
+        DictProvider({"A_L1": dup, "B_L0": dup}),
+        api_key="k",
+        model="m",
+        observer=RecordingObserver(),
+        output_writer=_NoopWriter(),
+        guard_config=GuardConfig(min_source_similarity=0.0, neighbour_margin=1.0),
+    )
+    pipeline.run_sync(
+        document_manifest=doc,
+        source_files={"A.xml": file_a, "B.xml": file_b},
+        apply=False,
+    )
+    lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
+    # Neither seam line was reverted: the correction stands, status CORRECTED.
+    assert lines["A_L1"].corrected_text == dup
+    assert lines["B_L0"].corrected_text == dup
+    assert lines["A_L1"].status == LineStatus.CORRECTED
+    assert lines["B_L0"].status == LineStatus.CORRECTED
+
+
 # ---------------------------------------------------------------------------
 # Audit P0 — 3+ line hyphen chain must be targeted in ONE window
 # ---------------------------------------------------------------------------
