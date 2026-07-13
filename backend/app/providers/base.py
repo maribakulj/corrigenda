@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -135,7 +136,16 @@ async def aclose_shared_client() -> None:
 # capability tables omit them for KNOWN families; this generic fallback
 # covers FUTURE/unknown models: when a 400/422 error message cites one of
 # these parameters and the body carries it, strip it and retry once.
-_STRIPPABLE_PARAMS = ("temperature", "top_p", "top_k")
+#
+# Wave-2 review — each entry is an ALIAS GROUP: Gemini's request body is
+# camelCase (generationConfig.topK), so a snake_case-only list stripped
+# nothing there. A citation of ANY alias strips EVERY alias present in
+# the body, covering cross-notation citations both ways.
+_STRIPPABLE_PARAM_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("temperature",),
+    ("top_p", "topP"),
+    ("top_k", "topK"),
+)
 
 
 def _strip_param(body: dict[str, Any], name: str) -> dict[str, Any]:
@@ -154,7 +164,12 @@ def _strip_param(body: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def _cited_strippable_params(resp: httpx.Response, body: dict[str, Any]) -> list[str]:
-    """Strippable params present in ``body`` that the 4xx error cites."""
+    """Strippable params present in ``body`` that the 4xx error cites.
+
+    Matching is word-bounded (``topk`` must not fire on "stopped"-style
+    substrings) and alias-group based: an error citing ``top_k`` strips a
+    body's ``topK`` and vice versa.
+    """
 
     def _present(name: str) -> bool:
         return name in body or any(isinstance(v, dict) and name in v for v in body.values())
@@ -163,7 +178,18 @@ def _cited_strippable_params(resp: httpx.Response, body: dict[str, Any]) -> list
         message = resp.text.lower()
     except Exception:  # pragma: no cover — defensive: unreadable body
         return []
-    return [p for p in _STRIPPABLE_PARAMS if p in message and _present(p)]
+
+    def _cited(alias: str) -> bool:
+        return (
+            re.search(rf"(?<![a-z0-9_]){re.escape(alias.lower())}(?![a-z0-9_])", message)
+            is not None
+        )
+
+    names: list[str] = []
+    for group in _STRIPPABLE_PARAM_GROUPS:
+        if any(_cited(alias) for alias in group):
+            names.extend(alias for alias in group if _present(alias))
+    return names
 
 
 async def call_llm(

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from app.providers.base import call_llm, extract_usage, get_json
 from app.schemas import ModelInfo, Usage
+
+logger = logging.getLogger(__name__)
 
 _BASE = "https://generativelanguage.googleapis.com"
 _EXCLUDE_KEYWORDS = ("embed", "aqa", "attribute")
@@ -64,6 +67,14 @@ class GoogleProvider:
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
+        if page_token:
+            # Wave-2 review — hitting the safety bound with pages still
+            # pending must be LOUD: models past the bound simply never
+            # appear in the UI otherwise.
+            logger.warning(
+                "Gemini model list truncated at the 10-page safety bound "
+                "(nextPageToken still present) — some models are not shown"
+            )
         models.sort(key=lambda m: m.id)
         return models
 

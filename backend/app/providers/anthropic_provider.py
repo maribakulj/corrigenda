@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 from app.providers.base import call_llm, extract_usage, get_json
 from app.schemas import ModelInfo, Usage
+
+logger = logging.getLogger(__name__)
 
 _BASE = "https://api.anthropic.com"
 _VERSION = "2023-06-01"
@@ -33,6 +36,13 @@ def _model_output_cap(model: str) -> int:
     safe cap from the model id (conservative on anything unrecognised).
     """
     m = model.lower()
+    # Wave-2 review — the current flagship generations were absent and
+    # fell to the 8192 default: a dense PAGE chunk then truncated its
+    # forced tool_use JSON (the exact F14 retry-storm class) on the very
+    # models F13 targets. Per the models-overview table: Fable 5 /
+    # Mythos 5 / Sonnet 5 and Opus 4.7/4.8 → 128k.
+    if any(k in m for k in ("fable", "mythos", "sonnet-5", "opus-4-7", "opus-4-8")):
+        return 128_000
     # Claude 3.5 family — 8192 output tokens.
     if "claude-3-5" in m or "claude-3.5" in m:
         return 8192
@@ -45,7 +55,10 @@ def _model_output_cap(model: str) -> int:
     # Claude 3 family (haiku/sonnet/opus) — 4096.
     if "claude-3" in m:
         return 4096
-    # Claude 4.x (sonnet-4, opus-4, etc.) — 64k.
+    # First-generation Claude 4 Opus — 32k (a 64k request risks a 400).
+    if "opus-4-0" in m or "opus-4-1" in m:
+        return 32_000
+    # Remaining Claude 4.x (sonnet-4-x, haiku-4-5, opus-4-5/4-6…) — 64k.
     if "-4" in m or "claude-4" in m:
         return 64_000
     # Unknown / future model: the safe, universally-supported ceiling.
@@ -126,16 +139,37 @@ class AnthropicProvider:
         }
 
     async def list_models(self, api_key: str) -> list[ModelInfo]:
-        data = await get_json(
-            url=f"{_BASE}/v1/models",
-            headers=self._headers(api_key),
-        )
-
+        # Wave-2 review — /v1/models is PAGINATED (limit default 20, max
+        # 1000; after_id cursor, has_more/last_id in the response): the
+        # single unparameterised GET silently hid every model past page
+        # one — the same defect class Audit-F16 fixed on Gemini. Ask for
+        # the biggest pages, follow the cursor with the same safety
+        # bound, and make truncation loud instead of silent.
         models = []
-        for m in data.get("data", []):
-            mid = m.get("id", "")
-            label = m.get("display_name") or mid
-            models.append(ModelInfo(id=mid, label=label))
+        after_id: str | None = None
+        has_more = False
+        for _ in range(10):
+            params = {"limit": "1000"}
+            if after_id:
+                params["after_id"] = after_id
+            data = await get_json(
+                url=f"{_BASE}/v1/models",
+                headers=self._headers(api_key),
+                params=params,
+            )
+            for m in data.get("data", []):
+                mid = m.get("id", "")
+                label = m.get("display_name") or mid
+                models.append(ModelInfo(id=mid, label=label))
+            has_more = bool(data.get("has_more"))
+            after_id = data.get("last_id")
+            if not has_more or not after_id:
+                break
+        if has_more and after_id:
+            logger.warning(
+                "Anthropic model list truncated at the 10-page safety bound "
+                "(has_more still true) — some models are not shown"
+            )
         models.sort(key=lambda m: m.id)
         return models
 
@@ -181,6 +215,17 @@ class AnthropicProvider:
         # Audit-F13 — only send temperature to families that accept it.
         if _supports_temperature(model):
             body["temperature"] = temperature
+        elif temperature:
+            # Wave-2 review — the orchestrator's retry ramp (0.0/0.3/0.5)
+            # is a no-op here: every retry is byte-identical. Unavoidable
+            # at the API level, but it must be visible, not silent.
+            logger.info(
+                "temperature=%s requested but omitted for %s — the family "
+                "rejects sampling params, so the retry ramp does not "
+                "diversify attempts",
+                temperature,
+                model,
+            )
         # Fallback: keep the tool definition but drop the forced choice. The
         # model may still emit a tool_use voluntarily; otherwise it falls
         # back to free text that we'll attempt to JSON-parse.
