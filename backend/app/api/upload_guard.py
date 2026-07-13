@@ -1,0 +1,126 @@
+"""ASGI upload-size guard (Audit-F18).
+
+The in-handler byte caps in ``create_job`` run only AFTER Starlette has
+awaited ``request.form()`` — by which point the multipart parser has
+already spooled every file part to disk (a ``SpooledTemporaryFile`` with
+no total-size limit). An unauthenticated attacker could therefore write
+terabytes to the job filesystem before any guard fired — a disk-
+exhaustion DoS on the single-worker server whose ``/tmp/app-jobs`` shares
+the same volume.
+
+This pure-ASGI middleware runs BEFORE form parsing:
+
+1. **Content-Length fast path.** A missing or over-cap ``Content-Length``
+   on a guarded POST is rejected with a clean 413 before a byte of the
+   body is read. (File uploads from browsers and ``curl`` always send a
+   Content-Length; refusing its absence closes the streamed-body bypass.)
+2. **Streaming byte counter.** For a body whose Content-Length UNDER-
+   declares the payload, a running counter aborts the request once the
+   received bytes cross the cap — so a lying header can't slip past the
+   fast path.
+
+The in-handler caps stay as defence in depth.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from collections.abc import Awaitable, Callable
+
+_DEFAULT_MAX_REQUEST_BYTES = 256 * 1024 * 1024  # 256 MiB (200 MiB payload + overhead)
+
+#: Path prefixes whose POST bodies are size-guarded.
+_GUARDED_POST_PATHS: tuple[str, ...] = ("/api/jobs",)
+
+
+def _max_request_bytes() -> int:
+    """Resolve the cap dynamically so it can be overridden per-deployment
+    (``MAX_REQUEST_BYTES``) and monkeypatched in tests."""
+    raw = os.environ.get("MAX_REQUEST_BYTES")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return _DEFAULT_MAX_REQUEST_BYTES
+
+
+def _is_guarded(scope: dict) -> bool:
+    if scope.get("type") != "http" or scope.get("method") != "POST":
+        return False
+    path = (scope.get("path") or "").rstrip("/") or "/"
+    return any(path == p or path.startswith(p + "/") for p in _GUARDED_POST_PATHS)
+
+
+class UploadSizeLimitMiddleware:
+    """Reject over-cap uploads before Starlette spools the body to disk."""
+
+    def __init__(self, app: Callable) -> None:
+        self.app = app
+
+    async def __call__(
+        self,
+        scope: dict,
+        receive: Callable[[], Awaitable[dict]],
+        send: Callable[[dict], Awaitable[None]],
+    ) -> None:
+        if not _is_guarded(scope):
+            await self.app(scope, receive, send)
+            return
+
+        max_bytes = _max_request_bytes()
+        headers = {k.lower(): v for k, v in (scope.get("headers") or [])}
+        content_length = headers.get(b"content-length")
+
+        if content_length is None:
+            await _send_413(
+                send,
+                "Content-Length header is required for uploads.",
+            )
+            return
+        try:
+            declared = int(content_length)
+        except ValueError:
+            await _send_413(send, "Malformed Content-Length header.")
+            return
+        if declared > max_bytes:
+            await _send_413(
+                send,
+                f"Upload exceeds the maximum request size ({max_bytes} bytes).",
+            )
+            return
+
+        # Streaming guard: a lying Content-Length (declares small, sends
+        # large) is caught by counting received bytes and aborting.
+        received = 0
+
+        async def counting_receive() -> dict:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > max_bytes:
+                    # Truncate: hand the app an empty, final body so its
+                    # multipart parser fails cleanly instead of consuming
+                    # the oversized stream. Disk stays protected.
+                    return {"type": "http.request", "body": b"", "more_body": False}
+            return message
+
+        await self.app(scope, counting_receive, send)
+
+
+async def _send_413(send: Callable[[dict], Awaitable[None]], detail: str) -> None:
+    body = json.dumps({"detail": detail}).encode("utf-8")
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 413,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+                (b"cache-control", b"no-store"),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})

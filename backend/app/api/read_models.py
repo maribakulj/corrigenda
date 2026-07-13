@@ -39,7 +39,11 @@ def build_diff(job_id: str, document_manifest: DocumentManifest) -> dict:
             total_lines += 1
             if modified:
                 modified_lines += 1
-            if lm.hyphen_role == HyphenRole.PART1:
+            # Audit-F23 — a forward hyphen pair starts at a PART1 OR a BOTH
+            # line (BOTH is the tail of one pair and the head of the next).
+            # Counting only PART1 undercounted every 3+-line chain; this
+            # matches the pipeline's canonical PART1+BOTH forward-pair count.
+            if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH):
                 hyphen_pairs += 1
 
         pages_out.append(

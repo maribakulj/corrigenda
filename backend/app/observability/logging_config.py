@@ -135,8 +135,17 @@ class JsonFormatter(logging.Formatter):
                 continue
             try:
                 json.dumps(value)  # only include JSON-serialisable extras
-            except TypeError:
-                value = repr(value)
+            except Exception:
+                # Audit-F22 — a probe that raised only for TypeError let a
+                # circular reference (ValueError) or a deeply-nested value
+                # (RecursionError) escape and drop the whole record. A log
+                # must NEVER kill its own record: fall back to repr() for
+                # anything json.dumps refuses, and if repr() itself blows
+                # up, degrade to a placeholder rather than propagate.
+                try:
+                    value = repr(value)
+                except Exception:
+                    value = "<unrepresentable>"
             payload[key] = value
         return json.dumps(payload, ensure_ascii=False)
 
