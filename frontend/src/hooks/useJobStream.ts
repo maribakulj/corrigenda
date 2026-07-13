@@ -50,6 +50,14 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const retryCountRef = useRef(0)
   const statusRef = useRef<JobStatus | null>(null)
+  // Audit-F30 — set when the current stream closed on a
+  // subscriber_cap_reached; drives a progressive (2s→30s) reconnect
+  // backoff that never marks the job failed. capAttemptRef persists
+  // across cap cycles (onopen must NOT reset it — the cap stream opens
+  // 200 before erroring, which is exactly why a per-open reset churned
+  // at 2s forever).
+  const capBackoffRef = useRef(false)
+  const capAttemptRef = useRef(0)
 
   // Mirror status into a ref so the error handler can read the latest
   // value without triggering an effect re-run on every status change.
@@ -71,9 +79,12 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
     setProgress(INITIAL_PROGRESS)
     setStatus('queued')
     retryCountRef.current = 0
+    capBackoffRef.current = false
+    capAttemptRef.current = 0
 
     let cancelled = false
     const MAX_RETRIES = 3
+    const CAP_BACKOFF_MAX_MS = 30_000
     // Mirror of the backend's emit sites. Synchronisation is enforced
     // by backend/tests/test_sse_event_contract.py — any drift fails CI.
     const EVENTS = [
@@ -148,11 +159,19 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
           break
 
         case 'chunk_completed':
-          setProgress((p) => ({
-            ...p,
-            lines_done: p.lines_done + ev.line_count,
-            hyphen_pairs_reconciled: p.hyphen_pairs_reconciled + ev.hyphen_pairs_reconciled,
-          }))
+          setProgress((p) => {
+            // Audit-F25 — count only the lines this chunk OWNS
+            // (target_count), not line_count which includes overlapping
+            // WINDOW context lines; falling back to line_count for older
+            // backends. Clamp to lines_total so the bar never exceeds 100%.
+            const owned = ev.target_count ?? ev.line_count
+            const nextDone = p.lines_done + owned
+            return {
+              ...p,
+              lines_done: p.lines_total > 0 ? Math.min(nextDone, p.lines_total) : nextDone,
+              hyphen_pairs_reconciled: p.hyphen_pairs_reconciled + ev.hyphen_pairs_reconciled,
+            }
+          })
           setLogs((l) =>
             appendLog(
               l,
@@ -241,6 +260,35 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
         case 'keepalive':
           break
 
+        // Audit-F26 — these diagnostic events were subscribed (attach())
+        // but had no case, so they were silently swallowed. Surface them.
+        case 'chunk_error':
+          setLogs((l) =>
+            appendLog(l, makeLog('warning', `Chunk error: ${ev.message ?? ev.chunk_id ?? ''}`)),
+          )
+          break
+
+        case 'chunk_downgraded':
+          setLogs((l) =>
+            appendLog(
+              l,
+              makeLog('warning', `Chunk downgraded (${ev.granularity ?? 'finer granularity'})`),
+            ),
+          )
+          break
+
+        case 'hyphen_partner_missing':
+          setLogs((l) =>
+            appendLog(
+              l,
+              makeLog(
+                'warning',
+                `Hyphen partner missing for ${ev.line_id ?? 'a line'}${ev.message ? ` — ${ev.message}` : ''} (reverted to OCR)`,
+              ),
+            ),
+          )
+          break
+
         case 'error':
           // Audit P3 — server-sent SSE error events (job_not_found /
           // subscriber_cap_reached) used to fall through the switch
@@ -255,8 +303,21 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
             if (ev.reason === 'job_not_found') {
               setStatus('failed')
               esRef.current?.close()
+            } else if (ev.reason === 'subscriber_cap_reached') {
+              // Audit-F30 — the server yields this over a 200 OK stream
+              // then closes it. Auto-recovery is preserved (a slot may
+              // free), but reconnecting every 2 s forever is a churn
+              // storm. Flag it so onerror applies a progressive backoff.
+              capBackoffRef.current = true
             }
           }
+          break
+
+        default:
+          // Audit-F26 — any backend event the switch doesn't model is
+          // logged (visible) instead of vanishing; keepalives are the one
+          // high-frequency event we intentionally ignore above.
+          setLogs((l) => appendLog(l, makeLog('info', `Event: ${eventName}`)))
           break
       }
     }
@@ -277,6 +338,33 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
         if (cancelled) return
         const s = statusRef.current
         if (s === 'completed' || s === 'completed_with_fallbacks' || s === 'failed') return
+
+        // Audit-F30 — a subscriber-cap close: reconnect with a
+        // progressive backoff (2s → 30s), NEVER mark failed. Auto-
+        // recovery is preserved (a slot may free); the growing delay
+        // stops the 2s reconnect storm the old code produced.
+        if (capBackoffRef.current) {
+          capBackoffRef.current = false
+          capAttemptRef.current += 1
+          const delay = Math.min(2000 * 2 ** (capAttemptRef.current - 1), CAP_BACKOFF_MAX_MS)
+          setLogs((l) =>
+            appendLog(
+              l,
+              makeLog(
+                'warning',
+                `Viewer limit reached — retrying in ${delay / 1000}s (auto-recovers when a slot frees)`,
+              ),
+            ),
+          )
+          retryTimeoutRef.current = setTimeout(() => {
+            retryTimeoutRef.current = null
+            if (cancelled) return
+            const reconnect = new EventSource(withToken(`/api/jobs/${jobId}/events`))
+            esRef.current = reconnect
+            attach(reconnect)
+          }, delay)
+          return
+        }
 
         if (retryCountRef.current >= MAX_RETRIES) {
           setLogs((l) =>

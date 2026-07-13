@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createJob, fetchDiff, fetchLayout, fetchTrace } from './api/client'
+import { retryFetch } from './api/retry'
 import { ApiKeyInput } from './components/ApiKeyInput'
 import { DiffViewer } from './components/DiffViewer'
 import { DownloadButton } from './components/DownloadButton'
@@ -31,13 +32,16 @@ export default function App() {
   const [finalStats, setFinalStats] = useState<JobStats | null>(null)
   const [diffData, setDiffData] = useState<DiffData | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
+  const [diffError, setDiffError] = useState(false)
   const [layoutData, setLayoutData] = useState<LayoutData | null>(null)
   const [layoutLoading, setLayoutLoading] = useState(false)
+  const [layoutError, setLayoutError] = useState(false)
 
   // Debug / trace state
   const [debugMode, setDebugMode] = useState(false)
   const [traceData, setTraceData] = useState<TraceData | null>(null)
   const [traceLoading, setTraceLoading] = useState(false)
+  const [traceError, setTraceError] = useState(false)
   const [traceByLineId, setTraceByLineId] = useState<Map<string, LineTrace>>(new Map())
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null)
 
@@ -59,35 +63,44 @@ export default function App() {
   const isDone = status === 'completed' || status === 'completed_with_fallbacks'
   const isFailed = status === 'failed'
 
-  // Load diff + layout data in parallel once the job is completed
+  // Load diff + layout data in parallel once the job is completed.
+  // Audit-F27 — each fetch is BOUNDED (retryFetch, 3 attempts): on a
+  // persistently failing endpoint the loading true→false transition used
+  // to re-satisfy the effect guard and re-fetch forever. The error flags
+  // latch the guard so the effect settles after the bounded attempts.
   useEffect(() => {
     if (!isDone || !jobId) return
-    if (!diffData && !diffLoading) {
+    if (!diffData && !diffLoading && !diffError) {
       setDiffLoading(true)
-      fetchDiff(jobId)
-        .then(setDiffData)
-        .catch(() => {
-          /* non-critical */
+      retryFetch(() => fetchDiff(jobId))
+        .then((data) => {
+          if (data) setDiffData(data)
+          else setDiffError(true)
         })
         .finally(() => setDiffLoading(false))
     }
-    if (!layoutData && !layoutLoading) {
+    if (!layoutData && !layoutLoading && !layoutError) {
       setLayoutLoading(true)
-      fetchLayout(jobId)
-        .then(setLayoutData)
-        .catch(() => {
-          /* non-critical */
+      retryFetch(() => fetchLayout(jobId))
+        .then((data) => {
+          if (data) setLayoutData(data)
+          else setLayoutError(true)
         })
         .finally(() => setLayoutLoading(false))
     }
-  }, [isDone, jobId, diffData, diffLoading, layoutData, layoutLoading])
+  }, [isDone, jobId, diffData, diffLoading, diffError, layoutData, layoutLoading, layoutError])
 
-  // Load traces when debug mode is activated on a completed job
+  // Load traces when debug mode is activated on a completed job.
+  // Audit-F28 — same bounded-retry mechanism as F27 (shared helper).
   useEffect(() => {
-    if (!debugMode || !isDone || !jobId || traceData || traceLoading) return
+    if (!debugMode || !isDone || !jobId || traceData || traceLoading || traceError) return
     setTraceLoading(true)
-    fetchTrace(jobId)
+    retryFetch(() => fetchTrace(jobId))
       .then((data) => {
+        if (!data) {
+          setTraceError(true)
+          return
+        }
         setTraceData(data)
         const map = new Map<string, LineTrace>()
         for (const lt of data.lines) {
@@ -95,11 +108,8 @@ export default function App() {
         }
         setTraceByLineId(map)
       })
-      .catch(() => {
-        /* non-critical */
-      })
       .finally(() => setTraceLoading(false))
-  }, [debugMode, isDone, jobId, traceData, traceLoading])
+  }, [debugMode, isDone, jobId, traceData, traceLoading, traceError])
 
   // Capture stats when completed
   useEffect(() => {
@@ -142,10 +152,13 @@ export default function App() {
     setFinalStats(null)
     setDiffData(null)
     setDiffLoading(false)
+    setDiffError(false)
     setLayoutData(null)
     setLayoutLoading(false)
+    setLayoutError(false)
     setTraceData(null)
     setTraceLoading(false)
+    setTraceError(false)
     setTraceByLineId(new Map())
     setSelectedLineId(null)
     setDebugMode(false)
@@ -349,6 +362,11 @@ export default function App() {
                 Chargement du diff…
               </div>
             )}
+            {diffError && !diffData && (
+              <p className="font-mono text-xs text-red-400 bg-red-900/20 border border-red-800/40 rounded px-3 py-2">
+                Impossible de charger le diff (le serveur a échoué à plusieurs reprises).
+              </p>
+            )}
             {diffData && (
               <DiffViewer
                 data={diffData}
@@ -398,6 +416,11 @@ export default function App() {
               <span className="w-3 h-3 border border-slate-500 border-t-transparent rounded-full animate-spin" />
               Chargement de la mise en page…
             </div>
+          )}
+          {layoutError && !layoutData && (
+            <p className="font-mono text-xs text-red-400 bg-red-900/20 border border-red-800/40 rounded px-3 py-2">
+              Impossible de charger la mise en page (le serveur a échoué à plusieurs reprises).
+            </p>
           )}
           {layoutData && <LayoutViewer data={layoutData} />}
         </section>

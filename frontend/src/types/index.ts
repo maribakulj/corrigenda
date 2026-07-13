@@ -101,8 +101,28 @@ export interface SSEChunkCompleted {
   event: 'chunk_completed'
   chunk_id: string
   line_count: number
+  // Audit-F25 — the lines this chunk OWNS (excludes WINDOW context
+  // overlap). Present on current backends; absent on older ones.
+  target_count?: number
   hyphen_pairs_reconciled: number
   attempt: number
+}
+// Audit-F26 — diagnostic events the backend emits and the hook now
+// surfaces (previously subscribed but unmodelled → silently swallowed).
+export interface SSEChunkError {
+  event: 'chunk_error'
+  chunk_id?: string
+  message?: string
+}
+export interface SSEChunkDowngraded {
+  event: 'chunk_downgraded'
+  chunk_id?: string
+  granularity?: string
+}
+export interface SSEHyphenPartnerMissing {
+  event: 'hyphen_partner_missing'
+  line_id?: string
+  message?: string
 }
 export interface SSERetry {
   event: 'retry'
@@ -153,6 +173,9 @@ export type SSEEventData =
   | SSEChunkPlanned
   | SSEChunkStarted
   | SSEChunkCompleted
+  | SSEChunkError
+  | SSEChunkDowngraded
+  | SSEHyphenPartnerMissing
   | SSERetry
   | SSEWarning
   | SSEPageCompleted

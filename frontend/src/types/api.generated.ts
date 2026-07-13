@@ -4,592 +4,618 @@
  */
 
 export interface paths {
-  '/api/providers/models': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    get?: never
-    put?: never
-    /**
-     * List Models
-     * @description List available models for a given provider and API key.
-     */
-    post: operations['list_models_api_providers_models_post']
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
-  '/api/jobs': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    get?: never
-    put?: never
-    /**
-     * Create Job
-     * @description Upload ALTO files and start a correction job.
-     */
-    post: operations['create_job_api_jobs_post']
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
-  '/api/jobs/{job_id}': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    /**
-     * Get Job
-     * @description Poll the status of a correction job.
-     */
-    get: operations['get_job_api_jobs__job_id__get']
-    put?: never
-    post?: never
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
-  '/api/jobs/{job_id}/events': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    /**
-     * Job Events
-     * @description SSE stream of correction job events.
-     */
-    get: operations['job_events_api_jobs__job_id__events_get']
-    put?: never
-    post?: never
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
-  '/api/jobs/{job_id}/download': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    /**
-     * Download Job
-     * @description Download corrected XML file(s).
-     */
-    get: operations['download_job_api_jobs__job_id__download_get']
-    put?: never
-    post?: never
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
-  '/api/jobs/{job_id}/trace': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    /**
-     * Get Job Trace
-     * @description Return per-line text traces for a completed job.
-     */
-    get: operations['get_job_trace_api_jobs__job_id__trace_get']
-    put?: never
-    post?: never
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
-  '/api/jobs/{job_id}/diff': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    /**
-     * Get Job Diff
-     * @description Return per-line OCR vs corrected diff data for a completed job.
-     */
-    get: operations['get_job_diff_api_jobs__job_id__diff_get']
-    put?: never
-    post?: never
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
-  '/api/jobs/{job_id}/layout': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    /**
-     * Get Job Layout
-     * @description Return structural layout data (blocks + lines with ALTO coordinates).
-     */
-    get: operations['get_job_layout_api_jobs__job_id__layout_get']
-    put?: never
-    post?: never
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
-  '/api/jobs/{job_id}/images/{image_name}': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    /**
-     * Get Job Image
-     * @description Serve a source scan image for a job.
-     */
-    get: operations['get_job_image_api_jobs__job_id__images__image_name__get']
-    put?: never
-    post?: never
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
+    "/api/providers/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * List Models
+         * @description List available models for a given provider and API key.
+         */
+        post: operations["list_models_api_providers_models_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Job
+         * @description Upload ALTO files and start a correction job.
+         */
+        post: operations["create_job_api_jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job
+         * @description Poll the status of a correction job.
+         */
+        get: operations["get_job_api_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Job Events
+         * @description SSE stream of correction job events. P1-7 — EventSource cannot set
+         *     headers, so the capability token arrives as ``?token=``.
+         */
+        get: operations["job_events_api_jobs__job_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Job
+         * @description Download corrected XML file(s).
+         */
+        get: operations["download_job_api_jobs__job_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Trace
+         * @description Return the job's CorrectionReport (§9) — per-line text traces.
+         *
+         *     The response IS the versioned ``CorrectionReport`` JSON (the same
+         *     document persisted as ``trace.json``): ``report_version`` / ``run_id``
+         *     (== ``job_id``) / ``total_lines`` / ``lines``. The pre-unification
+         *     ``{job_id, total_lines, lines}`` JobTrace shape is gone.
+         */
+        get: operations["get_job_trace_api_jobs__job_id__trace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Diff
+         * @description Return per-line OCR vs corrected diff data for a completed job.
+         *
+         *     Thin adapter: the projection lives in ``app.api.read_models.build_diff``
+         *     (pure, unit-tested). ``get_completed_job`` already 404s on a missing
+         *     manifest, but an ``assert`` would disappear under ``python -O`` (bandit
+         *     B101), so keep a real runtime guard.
+         */
+        get: operations["get_job_diff_api_jobs__job_id__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/layout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Layout
+         * @description Return structural layout data (blocks + lines with ALTO coordinates).
+         *
+         *     Thin adapter over ``app.api.read_models.build_layout`` (pure, unit-tested).
+         */
+        get: operations["get_job_layout_api_jobs__job_id__layout_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/images/{image_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Image
+         * @description Serve a source scan image for a job. P1-7 — <img> tags cannot set
+         *     headers, so the capability token arrives as ``?token=``.
+         */
+        get: operations["get_job_image_api_jobs__job_id__images__image_name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
-export type webhooks = Record<string, never>
+export type webhooks = Record<string, never>;
 export interface components {
-  schemas: {
-    /** Body_create_job_api_jobs_post */
-    Body_create_job_api_jobs_post: {
-      /** Files */
-      files: string[]
-      /** Provider */
-      provider: string
-      /** Api Key */
-      api_key: string
-      /** Model */
-      model: string
-    }
-    /** CreateJobResponse */
-    CreateJobResponse: {
-      /** Job Id */
-      job_id: string
-    }
-    /** HTTPValidationError */
-    HTTPValidationError: {
-      /** Detail */
-      detail?: components['schemas']['ValidationError'][]
-    }
-    /**
-     * JobStatus
-     * @enum {string}
-     */
-    JobStatus: 'queued' | 'started' | 'running' | 'completed' | 'failed'
-    /** JobStatusResponse */
-    JobStatusResponse: {
-      /** Job Id */
-      job_id: string
-      status: components['schemas']['JobStatus']
-      /**
-       * Total Lines
-       * @default 0
-       */
-      total_lines: number
-      /**
-       * Lines Modified
-       * @default 0
-       */
-      lines_modified: number
-      /**
-       * Chunks Total
-       * @default 0
-       */
-      chunks_total: number
-      /**
-       * Retries
-       * @default 0
-       */
-      retries: number
-      /**
-       * Fallbacks
-       * @default 0
-       */
-      fallbacks: number
-      /** Duration Seconds */
-      duration_seconds?: number | null
-      /** Error */
-      error?: string | null
-    }
-    /** ListModelsRequest */
-    ListModelsRequest: {
-      provider: components['schemas']['Provider']
-      /** Api Key */
-      api_key: string
-    }
-    /** ListModelsResponse */
-    ListModelsResponse: {
-      provider: components['schemas']['Provider']
-      /** Models */
-      models: components['schemas']['ModelInfo'][]
-    }
-    /** ModelInfo */
-    ModelInfo: {
-      /** Id */
-      id: string
-      /** Label */
-      label: string
-      /**
-       * Supports Structured Output
-       * @default true
-       */
-      supports_structured_output: boolean
-      /** Context Window */
-      context_window?: number | null
-    }
-    /**
-     * Provider
-     * @enum {string}
-     */
-    Provider: 'openai' | 'anthropic' | 'mistral' | 'google'
-    /** ValidationError */
-    ValidationError: {
-      /** Location */
-      loc: (string | number)[]
-      /** Message */
-      msg: string
-      /** Error Type */
-      type: string
-      /** Input */
-      input?: unknown
-      /** Context */
-      ctx?: Record<string, never>
-    }
-  }
-  responses: never
-  parameters: never
-  requestBodies: never
-  headers: never
-  pathItems: never
+    schemas: {
+        /** Body_create_job_api_jobs_post */
+        Body_create_job_api_jobs_post: {
+            /** Files */
+            files: string[];
+            /** Provider */
+            provider: string;
+            /** Api Key */
+            api_key: string;
+            /** Model */
+            model: string;
+            /**
+             * Geometric Pairing
+             * @default true
+             */
+            geometric_pairing: boolean;
+        };
+        /** CreateJobResponse */
+        CreateJobResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Job Token */
+            job_token?: string | null;
+        };
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * JobStatus
+         * @description Lifecycle state of a correction job, surfaced to API clients.
+         * @enum {string}
+         */
+        JobStatus: "queued" | "started" | "running" | "completed" | "completed_with_fallbacks" | "failed";
+        /** JobStatusResponse */
+        JobStatusResponse: {
+            /** Job Id */
+            job_id: string;
+            status: components["schemas"]["JobStatus"];
+            /**
+             * Total Lines
+             * @default 0
+             */
+            total_lines: number;
+            /**
+             * Lines Modified
+             * @default 0
+             */
+            lines_modified: number;
+            /**
+             * Chunks Total
+             * @default 0
+             */
+            chunks_total: number;
+            /**
+             * Retries
+             * @default 0
+             */
+            retries: number;
+            /**
+             * Fallbacks
+             * @default 0
+             */
+            fallbacks: number;
+            /** Duration Seconds */
+            duration_seconds?: number | null;
+            /** Error */
+            error?: string | null;
+        };
+        /** ListModelsRequest */
+        ListModelsRequest: {
+            provider: components["schemas"]["Provider"];
+            /** Api Key */
+            api_key: string;
+        };
+        /** ListModelsResponse */
+        ListModelsResponse: {
+            provider: components["schemas"]["Provider"];
+            /** Models */
+            models: components["schemas"]["ModelInfo"][];
+        };
+        /**
+         * ModelInfo
+         * @description An LLM model description as returned by ``BaseProvider.list_models``.
+         */
+        ModelInfo: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Supports Structured Output
+             * @default true
+             */
+            supports_structured_output: boolean;
+            /** Context Window */
+            context_window?: number | null;
+        };
+        /**
+         * Provider
+         * @description Identifier for an LLM vendor. Each value maps to one ``BaseProvider``.
+         * @enum {string}
+         */
+        Provider: "openai" | "anthropic" | "mistral" | "google";
+        /** ValidationError */
+        ValidationError: {
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
+        };
+    };
+    responses: never;
+    parameters: never;
+    requestBodies: never;
+    headers: never;
+    pathItems: never;
 }
-export type $defs = Record<string, never>
+export type $defs = Record<string, never>;
 export interface operations {
-  list_models_api_providers_models_post: {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    requestBody: {
-      content: {
-        'application/json': components['schemas']['ListModelsRequest']
-      }
-    }
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['ListModelsResponse']
-        }
-      }
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-    }
-  }
-  create_job_api_jobs_post: {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    requestBody: {
-      content: {
-        'multipart/form-data': components['schemas']['Body_create_job_api_jobs_post']
-      }
-    }
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['CreateJobResponse']
-        }
-      }
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-    }
-  }
-  get_job_api_jobs__job_id__get: {
-    parameters: {
-      query?: never
-      header?: never
-      path: {
-        job_id: string
-      }
-      cookie?: never
-    }
-    requestBody?: never
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['JobStatusResponse']
-        }
-      }
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-    }
-  }
-  job_events_api_jobs__job_id__events_get: {
-    parameters: {
-      query?: never
-      header?: never
-      path: {
-        job_id: string
-      }
-      cookie?: never
-    }
-    requestBody?: never
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': unknown
-        }
-      }
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-    }
-  }
-  download_job_api_jobs__job_id__download_get: {
-    parameters: {
-      query?: never
-      header?: never
-      path: {
-        job_id: string
-      }
-      cookie?: never
-    }
-    requestBody?: never
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': unknown
-        }
-      }
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-    }
-  }
-  get_job_trace_api_jobs__job_id__trace_get: {
-    parameters: {
-      query?: never
-      header?: never
-      path: {
-        job_id: string
-      }
-      cookie?: never
-    }
-    requestBody?: never
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': {
-            [key: string]: unknown
-          }
-        }
-      }
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-    }
-  }
-  get_job_diff_api_jobs__job_id__diff_get: {
-    parameters: {
-      query?: never
-      header?: never
-      path: {
-        job_id: string
-      }
-      cookie?: never
-    }
-    requestBody?: never
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': {
-            [key: string]: unknown
-          }
-        }
-      }
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-    }
-  }
-  get_job_layout_api_jobs__job_id__layout_get: {
-    parameters: {
-      query?: never
-      header?: never
-      path: {
-        job_id: string
-      }
-      cookie?: never
-    }
-    requestBody?: never
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': {
-            [key: string]: unknown
-          }
-        }
-      }
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-    }
-  }
-  get_job_image_api_jobs__job_id__images__image_name__get: {
-    parameters: {
-      query?: never
-      header?: never
-      path: {
-        job_id: string
-        image_name: string
-      }
-      cookie?: never
-    }
-    requestBody?: never
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': unknown
-        }
-      }
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-    }
-  }
+    list_models_api_providers_models_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ListModelsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListModelsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_job_api_jobs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_create_job_api_jobs_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_api_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    job_events_api_jobs__job_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_job_api_jobs__job_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_trace_api_jobs__job_id__trace_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_diff_api_jobs__job_id__diff_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_layout_api_jobs__job_id__layout_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_image_api_jobs__job_id__images__image_name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                image_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
 }
