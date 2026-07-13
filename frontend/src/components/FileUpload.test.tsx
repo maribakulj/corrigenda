@@ -8,6 +8,7 @@
  *       (with a visible notice).
  */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { FileUpload } from './FileUpload'
@@ -77,6 +78,67 @@ describe('F31 — no render-phase parent update', () => {
     await waitFor(() => {
       const last = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as File[]
       expect(last.map((f) => f.name)).toEqual(['a.xml'])
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Wave-4 adversarial-review follow-ups.
+// ---------------------------------------------------------------------------
+
+describe('review follow-up — StrictMode double-mount', () => {
+  it('does not notify the parent on mount under StrictMode', () => {
+    // Wave-4 review — the firstRenderRef skip is defeated by StrictMode's
+    // setup→cleanup→setup effect replay (the ref persists), producing a
+    // spurious onFilesChange([]) on every mount. main.tsx enables
+    // StrictMode, so this is the app's real dev behaviour.
+    const onChange = vi.fn()
+    render(
+      <StrictMode>
+        <FileUpload onFilesChange={onChange} />
+      </StrictMode>,
+    )
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('still notifies real changes (add then remove back to empty)', async () => {
+    const onChange = vi.fn()
+    render(
+      <StrictMode>
+        <FileUpload onFilesChange={onChange} />
+      </StrictMode>,
+    )
+    drop(dropZone(), [xml('a.xml', '<a/>')])
+    await waitFor(() => {
+      const last = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as File[]
+      expect(last.map((f) => f.name)).toEqual(['a.xml'])
+    })
+    fireEvent.click(screen.getByTitle('Remove'))
+    await waitFor(() => {
+      const last = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as File[]
+      // Removing the last file IS a real change — the empty list must
+      // reach the parent (only the mount-time [] is suppressed).
+      expect(last).toHaveLength(0)
+    })
+  })
+})
+
+describe('review follow-up — synchronous double add', () => {
+  it('keeps both batches when two adds land before a re-render', async () => {
+    // Wave-4 review (PLAUSIBLE, confirmed here) — addFiles computed the
+    // merge from the render-closure `files`, so two change events firing
+    // before a re-render both saw the OLD list and the second overwrote
+    // the first batch.
+    const onChange = vi.fn()
+    render(<FileUpload onFilesChange={onChange} />)
+    const zone = dropZone()
+    // Two synchronous drops — no await between them.
+    drop(zone, [xml('a.xml', '<a/>')])
+    drop(zone, [xml('b.xml', '<b/>')])
+
+    await waitFor(() => {
+      const last = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as File[]
+      expect(last.map((f) => f.name).sort()).toEqual(['a.xml', 'b.xml'])
     })
   })
 })

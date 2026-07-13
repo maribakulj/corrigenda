@@ -269,24 +269,46 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
           break
 
         case 'chunk_downgraded':
-          setLogs((l) =>
-            appendLog(
-              l,
-              makeLog('warning', `Chunk downgraded (${ev.granularity ?? 'finer granularity'})`),
-            ),
-          )
-          break
-
-        case 'hyphen_partner_missing':
+          // Wave-4 review — the backend emits from_granularity /
+          // to_granularity (never `granularity`): the old read always
+          // printed the fallback and dropped the actual information.
           setLogs((l) =>
             appendLog(
               l,
               makeLog(
                 'warning',
-                `Hyphen partner missing for ${ev.line_id ?? 'a line'}${ev.message ? ` — ${ev.message}` : ''} (reverted to OCR)`,
+                `Chunk downgraded (${ev.from_granularity ?? '?'} → ${ev.to_granularity ?? 'finer granularity'})`,
               ),
             ),
           )
+          break
+
+        case 'hyphen_partner_missing':
+          // Wave-4 review — surface the fields the backend actually
+          // sends (missing_partner_id / direction), not a fictional
+          // `message`.
+          setLogs((l) =>
+            appendLog(
+              l,
+              makeLog(
+                'warning',
+                `Hyphen partner missing for ${ev.line_id ?? 'a line'}${
+                  ev.missing_partner_id ? ` (partner ${ev.missing_partner_id} not in chunk)` : ''
+                } — reverted to OCR`,
+              ),
+            ),
+          )
+          break
+
+        // Wave-4 review — known high-frequency diagnostics (per page /
+        // per chunk / per file): deliberately silent like keepalive,
+        // or they flood the 500-entry log with junk and evict real
+        // entries. The default arm below stays for genuinely NEW
+        // backend event names.
+        case 'chunk_planned':
+        case 'chunk_started':
+        case 'rewriter_stats':
+        case 'reconcile_stats':
           break
 
         case 'error':

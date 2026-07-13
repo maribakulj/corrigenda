@@ -281,6 +281,32 @@ describe('App — degraded and failure paths', () => {
     await screen.findByRole('button', { name: /download corrected alto/i })
   })
 
+  it('renders a visible trace error and retries after a debug toggle', async () => {
+    mocked.fetchTrace.mockRejectedValue(new Error('boom'))
+    const { container } = render(<App />)
+    const es = await startJob(container)
+    act(() => {
+      es.dispatch('completed', completePayload())
+    })
+    await screen.findByText('Résultats de correction')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Debug' }))
+
+    // Wave-4 review — traceError was latched but NEVER rendered: the
+    // spinner vanished and the debug feature died silently for the
+    // whole session. A bounded failure must be visible…
+    await screen.findByText(/impossible de charger les traces/i, {}, { timeout: 4000 })
+    expect(mocked.fetchTrace).toHaveBeenCalledTimes(3)
+
+    // …and toggling debug off/on is an explicit retry intent: the
+    // latch must clear so the fetch runs again.
+    fireEvent.click(screen.getByRole('button', { name: 'Debug' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Debug' }))
+    await waitFor(() => expect(mocked.fetchTrace).toHaveBeenCalledTimes(6), {
+      timeout: 4000,
+    })
+  })
+
   it('latches bounded diff/layout fetch failures into visible errors', async () => {
     mocked.fetchDiff.mockRejectedValue(new Error('boom'))
     mocked.fetchLayout.mockRejectedValue(new Error('boom'))

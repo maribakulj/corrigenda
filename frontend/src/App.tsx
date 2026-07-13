@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createJob, fetchDiff, fetchLayout, fetchTrace } from './api/client'
 import { retryFetch } from './api/retry'
 import { ApiKeyInput } from './components/ApiKeyInput'
@@ -63,6 +63,17 @@ export default function App() {
   const isDone = status === 'completed' || status === 'completed_with_fallbacks'
   const isFailed = status === 'failed'
 
+  // Wave-4 review — staleness guard for the three bounded fetches. A
+  // retryFetch in flight (its backoff spans seconds) survives a reset:
+  // without this check its late settlement latched the NEXT job's error
+  // flags (phantom error + blocked refetch) or leaked the PREVIOUS
+  // job's diff/layout/trace into the new session. Same class useModels
+  // fixed with F29's requestIdRef.
+  const jobIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    jobIdRef.current = jobId
+  }, [jobId])
+
   // Load diff + layout data in parallel once the job is completed.
   // Audit-F27 — each fetch is BOUNDED (retryFetch, 3 attempts): on a
   // persistently failing endpoint the loading true→false transition used
@@ -70,23 +81,31 @@ export default function App() {
   // latch the guard so the effect settles after the bounded attempts.
   useEffect(() => {
     if (!isDone || !jobId) return
+    const jobAtStart = jobId
+    const isCurrent = () => jobIdRef.current === jobAtStart
     if (!diffData && !diffLoading && !diffError) {
       setDiffLoading(true)
-      retryFetch(() => fetchDiff(jobId))
+      retryFetch(() => fetchDiff(jobAtStart))
         .then((data) => {
+          if (!isCurrent()) return
           if (data) setDiffData(data)
           else setDiffError(true)
         })
-        .finally(() => setDiffLoading(false))
+        .finally(() => {
+          if (isCurrent()) setDiffLoading(false)
+        })
     }
     if (!layoutData && !layoutLoading && !layoutError) {
       setLayoutLoading(true)
-      retryFetch(() => fetchLayout(jobId))
+      retryFetch(() => fetchLayout(jobAtStart))
         .then((data) => {
+          if (!isCurrent()) return
           if (data) setLayoutData(data)
           else setLayoutError(true)
         })
-        .finally(() => setLayoutLoading(false))
+        .finally(() => {
+          if (isCurrent()) setLayoutLoading(false)
+        })
     }
   }, [isDone, jobId, diffData, diffLoading, diffError, layoutData, layoutLoading, layoutError])
 
@@ -94,9 +113,12 @@ export default function App() {
   // Audit-F28 — same bounded-retry mechanism as F27 (shared helper).
   useEffect(() => {
     if (!debugMode || !isDone || !jobId || traceData || traceLoading || traceError) return
+    const jobAtStart = jobId
+    const isCurrent = () => jobIdRef.current === jobAtStart
     setTraceLoading(true)
-    retryFetch(() => fetchTrace(jobId))
+    retryFetch(() => fetchTrace(jobAtStart))
       .then((data) => {
+        if (!isCurrent()) return
         if (!data) {
           setTraceError(true)
           return
@@ -108,7 +130,9 @@ export default function App() {
         }
         setTraceByLineId(map)
       })
-      .finally(() => setTraceLoading(false))
+      .finally(() => {
+        if (isCurrent()) setTraceLoading(false)
+      })
   }, [debugMode, isDone, jobId, traceData, traceLoading, traceError])
 
   // Capture stats when completed
@@ -197,7 +221,15 @@ export default function App() {
           <div className="flex items-center gap-2">
             {isDone && (
               <button
-                onClick={() => setDebugMode((d) => !d)}
+                onClick={() => {
+                  const next = !debugMode
+                  setDebugMode(next)
+                  // Wave-4 review — toggling debug off is an explicit
+                  // retry intent: clear the trace latch so the next
+                  // activation re-attempts the bounded fetch instead of
+                  // staying dead for the whole session.
+                  if (!next) setTraceError(false)
+                }}
                 className={[
                   'font-mono text-xs border rounded px-3 py-1.5 transition-colors',
                   debugMode
@@ -373,6 +405,14 @@ export default function App() {
                 selectedLineId={debugMode ? selectedLineId : null}
                 onSelectLine={debugMode ? setSelectedLineId : undefined}
               />
+            )}
+            {/* Wave-4 review — traceError was latched but never rendered:
+                the debug feature failed silently and permanently. */}
+            {debugMode && traceError && !traceData && (
+              <p className="font-mono text-xs text-red-400 bg-red-900/20 border border-red-800/40 rounded px-3 py-2 mt-3">
+                Impossible de charger les traces (le serveur a échoué à plusieurs reprises).
+                Désactivez puis réactivez le mode debug pour réessayer.
+              </p>
             )}
             {debugMode && selectedLineId && (
               <div className="mt-4">

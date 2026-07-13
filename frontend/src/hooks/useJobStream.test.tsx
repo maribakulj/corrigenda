@@ -72,16 +72,23 @@ describe('F25 — progress uses target_count and clamps to total', () => {
 // ---------------------------------------------------------------------------
 
 describe('F26 — diagnostic events surface in the log', () => {
-  it('logs hyphen_partner_missing as a visible warning', () => {
+  it('logs hyphen_partner_missing with the REAL backend payload fields', () => {
     const { result } = renderHook(() => useJobStream('job-1'))
     act(() => {
+      // Wave-4 review — the backend emits {chunk_id, line_id,
+      // missing_partner_id, direction}; the original test pinned a
+      // fictional `message` field, hiding that the handler dropped the
+      // useful information.
       FakeEventSource.last().dispatch('hyphen_partner_missing', {
+        chunk_id: 'c1',
         line_id: 'L7',
-        message: 'partner not found',
+        missing_partner_id: 'L8',
+        direction: 'forward',
       })
     })
     const msgs = result.current.logs.map((l) => l.message).join('\n')
-    expect(msgs).toMatch(/hyphen|partner|L7/i)
+    expect(msgs).toMatch(/L7/)
+    expect(msgs).toMatch(/L8/)
     expect(result.current.logs.some((l) => l.type === 'warning')).toBe(true)
   })
 
@@ -221,13 +228,23 @@ describe('event lifecycle', () => {
     act(() => {
       FakeEventSource.last().dispatch('retry', { chunk_id: 'c1', attempt: 2, error: 'timeout' })
       FakeEventSource.last().dispatch('warning', { message: 'quota is low' })
-      FakeEventSource.last().dispatch('chunk_downgraded', { chunk_id: 'c1', granularity: 'LINE' })
+      // Wave-4 review — the REAL payload carries from/to_granularity
+      // (the old handler read a nonexistent `granularity` field and
+      // always printed the fallback).
+      FakeEventSource.last().dispatch('chunk_downgraded', {
+        chunk_id: 'c1',
+        from_granularity: 'PAGE',
+        to_granularity: 'BLOCK',
+        line_count: 30,
+        target_count: 30,
+        budget_remaining: 4,
+      })
     })
     const warnings = result.current.logs.filter((l) => l.type === 'warning')
     expect(warnings.map((w) => w.message)).toEqual([
       'Retry (attempt 2) — timeout',
       'quota is low',
-      'Chunk downgraded (LINE)',
+      'Chunk downgraded (PAGE → BLOCK)',
     ])
   })
 
@@ -297,20 +314,22 @@ describe('event lifecycle', () => {
     expect(result.current.logs).toHaveLength(0)
   })
 
-  it('logs unmodelled events through the default arm and skips keepalives', () => {
+  it('keeps known high-frequency diagnostics OUT of the visible log', () => {
+    // Wave-4 review — the default arm turned chunk_planned/chunk_started/
+    // rewriter_stats/reconcile_stats (per-page and per-chunk events)
+    // into hundreds of "Event: …" junk lines that competed with real
+    // entries for the MAX_LOGS budget. They are intentionally silent,
+    // like keepalive; the default arm stays for genuinely NEW backend
+    // event names (which arrive when EVENTS grows before the switch).
     const { result } = renderHook(() => useJobStream('job-1'))
     act(() => {
       FakeEventSource.last().dispatch('rewriter_stats', { fast: 10 })
+      FakeEventSource.last().dispatch('reconcile_stats', { pairs: 2 })
       FakeEventSource.last().dispatch('keepalive', {})
       FakeEventSource.last().dispatch('chunk_planned', { page_id: 'P1', chunk_count: 2 })
       FakeEventSource.last().dispatch('chunk_started', { chunk_id: 'c1', attempt: 1 })
     })
-    const msgs = result.current.logs.map((l) => l.message)
-    expect(msgs).toContain('Event: rewriter_stats')
-    expect(msgs).toContain('Event: chunk_planned')
-    expect(msgs).toContain('Event: chunk_started')
-    // keepalive is intentionally silent.
-    expect(msgs.some((m) => /keepalive/i.test(m))).toBe(false)
+    expect(result.current.logs).toHaveLength(0)
   })
 
   it('tolerates malformed JSON payloads', () => {
