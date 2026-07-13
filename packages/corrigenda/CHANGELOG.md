@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (audit F1-F12 + adversarial-review follow-ups, 2026-07-13)
+
+- **Lines-never-merge, heuristic mode (Audit-F1).** The PART2 word-growth
+  guard now protects EVERY reconcile accept path — explicit-with-subs,
+  explicit-without-subs and heuristic — so a short heuristic PART2 can no
+  longer absorb words from the following physical line.
+- **Hyphen-chain revert atomicity (Audit-F2).** The duplicate-revert
+  partner extension runs to fixpoint: whole 3+/4+-line chains
+  (PART1→BOTH→…→PART2) revert together instead of leaving a mixed
+  OCR+corrected pair.
+- **Duplicate guard across seams (Audit-F3 + review).** The cross-chunk
+  boundary pass and the page-seam pass compare PRE-revert accepted
+  corrections (run-level snapshot), and boundary owners are the chunks
+  that ACTUALLY finalized each line — granularity-descent sub-chunk
+  seams (including single-chunk plans) are now covered.
+- **Dry-run edit_script attribution (Audit-F4 + review).**
+  ``_producer_ops`` is keyed by ``(page_id, line_id)`` so files reusing
+  bare line ids no longer corrupt each other's ops; emitted ops carry an
+  optional ``page_id`` and ``apply_edit_script(page_id=…)`` scopes a
+  multi-file replay (additive — no report_version bump).
+- **ALTO rewriter (Audit-F5/F6 + review).** The single-String BOTH guard
+  is shared by ``_apply_subs`` and ``_subs_need_update`` (identity lines
+  classify UNTOUCHED again); the slow-path rebuild trims edge whitespace
+  before tokenizing (children tile the line exactly); the original HYP's
+  WIDTH is parsed via the shared tolerant policy (an ``1e999`` value
+  aborted the whole rewrite with an uncaught OverflowError).
+- **Numeric parsing policy (Audit-F7/F8/F9).** ``parse_int_tolerant``
+  treats inf/overflow-shaped values by contract — default in tolerant
+  mode, ``ValueError`` in strict — shared by the ALTO ``_int_attr`` and
+  the PAGE ``polygon_to_bbox`` (which skips non-finite pairs atomically).
+- **Single-line invariant (Audit-F10).** The validator and the edit
+  protocol reject the full ``str.splitlines`` separator repertoire
+  (U+2028/U+2029, ``\x0b``, ``\x0c``, ``\x85``, …), not just ``\n``/``\r``.
+- **Rules producer lexicon guard (Audit-F11).** Composed edits inside one
+  token are re-validated as a whole against the lexicon; a composition
+  that leaves it is rejected as a batch.
+- **PAGE custom attribute verbatim slices (Audit-F12).** Kept groups are
+  verbatim source slices (byte-identical round-trip for spacing).
+
+### Changed (wave-3 review, 2026-07-13)
+
+- ``CorrectionPipeline._write_outputs`` offloads ``rewrite_file`` /
+  ``write_corrected`` / ``extract_texts`` to worker threads: a large
+  rewrite no longer freezes the host's event loop (SSE keepalives,
+  health checks). Observer events remain on the loop. ``run()`` is
+  unchanged API-wise.
+
 ### Fixed (exhaustive audit — library correctness cluster, 2026-07-12)
 
 - **Hyphen reconciliation.** The explicit-mode subs join stripped only
