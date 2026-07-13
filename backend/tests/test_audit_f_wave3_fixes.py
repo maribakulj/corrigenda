@@ -307,3 +307,197 @@ def test_f19_honest_job_still_completes_after_offload(client):
     resp = client.get(f"/api/jobs/{job_id}/download", params={"token": token})
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/zip")
+
+
+# ---------------------------------------------------------------------------
+# Wave-3 adversarial-review follow-ups.
+# ---------------------------------------------------------------------------
+
+# Review finding 1 (MAJOR, security) — the F22 repr fallback stringified
+# extras with bare repr() AFTER the RedactionFilter ran, so a secret
+# inside a non-serialisable object's repr reached the JSON log verbatim;
+# dict-valued extras carried secrets through untouched too.
+
+
+def _formatted_record_with_extra(value: object) -> str:
+    import logging as _logging
+
+    from app.observability.logging_config import JsonFormatter, RedactionFilter
+
+    record = _logging.LogRecord(
+        name="test",
+        level=_logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="provider call failed",
+        args=None,
+        exc_info=None,
+    )
+    record.ctx = value
+    # Same order as the real handler: filter first, then formatter.
+    assert RedactionFilter().filter(record)
+    return JsonFormatter().format(record)
+
+
+def test_review_w3_repr_fallback_is_sanitized():
+    class _Ctx:
+        def __repr__(self) -> str:
+            return "<ProviderCtx api_key=sk-verysecret12345 retries=2>"
+
+        def __reduce__(self):  # make json.dumps fail for sure
+            raise TypeError
+
+    out = _formatted_record_with_extra(_Ctx())
+    assert "sk-verysecret12345" not in out, out
+    assert "ctx" in out  # the extra itself is still logged (masked)
+
+
+def test_review_w3_dict_extra_is_sanitized():
+    out = _formatted_record_with_extra({"api_key": "sk-verysecret12345", "n": 3})
+    assert "sk-verysecret12345" not in out, out
+    assert '"n": 3' in out  # non-secret leaves untouched
+
+
+def test_review_w3_nested_list_extra_is_sanitized():
+    out = _formatted_record_with_extra(["ok", {"auth": "Bearer sk-verysecret12345"}])
+    assert "sk-verysecret12345" not in out, out
+
+
+# Review finding 2 (MAJOR) — /api/providers/models takes a JSON body but
+# sat outside the F18 guard: a chunked-TE request streaming forever
+# accumulates in memory via await request.body() (single-worker OOM).
+
+
+def test_review_w3_models_endpoint_missing_content_length_rejected(client):
+    def _chunked():
+        yield b'{"provider": "openai", '
+        yield b'"api_key": "k"}'
+
+    resp = client.post(
+        "/api/providers/models",
+        content=_chunked(),
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 413, resp.text
+
+
+def test_review_w3_models_endpoint_oversized_body_rejected(client):
+    big = b'{"provider": "openai", "api_key": "' + b"k" * (2 * 1024 * 1024) + b'"}'
+    resp = client.post(
+        "/api/providers/models",
+        content=big,
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 413, resp.text
+
+
+def test_review_w3_models_endpoint_normal_body_still_reaches_handler(client):
+    # Small well-formed body: the guard must NOT 413 it (the handler then
+    # fails on the fake key upstream, which is fine — anything but 413).
+    resp = client.post(
+        "/api/providers/models",
+        json={"provider": "openai", "api_key": "k"},
+    )
+    assert resp.status_code != 413, resp.text
+
+
+# Review finding 3 — the create_job rollback ran store.delete_job (an
+# rmtree over a possibly multi-hundred-MB extraction) inline on the loop.
+# Review finding 5 — the AST helper counted ANY to_thread call, awaited
+# or not, anywhere: it is now awaited-only, and the ZIP test names the
+# helper instead of accepting any offload.
+
+
+def _awaited_to_thread_names(node: ast.AST) -> set[str]:
+    """Names of callables passed to an AWAITED asyncio.to_thread(...)."""
+    offloaded: set[str] = set()
+    for n in ast.walk(node):
+        if not isinstance(n, ast.Await):
+            continue
+        # Unwrap asyncio.shield(asyncio.to_thread(...)) — shielding a
+        # rollback offload is still an offload.
+        call = n.value
+        if (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "shield"
+            and call.args
+        ):
+            call = call.args[0]
+        if (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "to_thread"
+            and call.args
+        ):
+            first = call.args[0]
+            if isinstance(first, ast.Name):
+                offloaded.add(first.id)
+            elif isinstance(first, ast.Attribute):
+                offloaded.add(first.attr)
+    return offloaded
+
+
+def test_review_w3_rollback_delete_job_is_offloaded():
+    assert "delete_job" in _awaited_to_thread_names(_create_job_source())
+
+
+def test_review_w3_offloads_are_awaited_not_just_present():
+    offloaded = _awaited_to_thread_names(_create_job_source())
+    assert {"save_uploaded_files", "build_document_manifest", "create_job"} <= offloaded
+
+
+def test_review_w3_zip_build_offload_is_named():
+    assert "_build_zip_archive" in _awaited_to_thread_names(_download_source())
+
+
+# Review finding 6 — the /diff, /layout and /trace projections are
+# CPU-bound walks over full document manifests (up to a 200 MiB corpus),
+# left inline in async handlers.
+
+
+def _handler_source(name: str) -> ast.AST:
+    import inspect
+    import textwrap
+
+    from app.api import jobs as jobs_module
+
+    fn = getattr(jobs_module, name)
+    return ast.parse(textwrap.dedent(inspect.getsource(fn)))
+
+
+def test_review_w3_read_model_projections_are_offloaded():
+    assert "build_diff" in _awaited_to_thread_names(_handler_source("get_job_diff"))
+    assert "build_layout" in _awaited_to_thread_names(_handler_source("get_job_layout"))
+    assert "model_dump" in _awaited_to_thread_names(_handler_source("get_job_trace"))
+
+
+# Review finding 4 — a job EVICTED mid-stream fell through the keepalive
+# re-check (job None) and keepalived forever; an evicted job is terminal
+# by definition, so the stream must end with a job_not_found error.
+
+
+async def test_review_w3_evicted_job_stream_terminates(monkeypatch, tmp_path):
+    import asyncio
+
+    from app import storage as storage_module
+    from app.jobs.store import JobStore
+
+    monkeypatch.setattr(storage_module, "_BASE_DIR", tmp_path / "jobs")
+    store = JobStore()
+    monkeypatch.setattr(JobStore, "KEEPALIVE_TIMEOUT_SECONDS", 0.05)
+    job_id = store.create_job(Provider.OPENAI, "m")
+
+    received: list[str] = []
+
+    async def _consume():
+        async for ev in store.stream_events(job_id):
+            received.append(ev.event if isinstance(ev.event, str) else ev.event.value)
+
+    consumer = asyncio.create_task(_consume())
+    await asyncio.sleep(0.02)  # subscribed, inside the poll loop
+    store.delete_job(job_id)  # evicted mid-stream
+    await asyncio.wait_for(consumer, timeout=2.0)  # pre-fix: hangs forever
+
+    assert received, "stream ended with no events"
+    assert received[-1] == "error"

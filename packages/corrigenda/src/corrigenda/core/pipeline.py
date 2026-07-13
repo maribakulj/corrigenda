@@ -825,7 +825,7 @@ class CorrectionPipeline:
                 cross_page_partners=all_lines_global,
             )
 
-        self._write_outputs(
+        await self._write_outputs(
             document_manifest=document_manifest,
             source_files=source_files,
             traces=traces,
@@ -1899,7 +1899,7 @@ class CorrectionPipeline:
     # Output writing (rewriter + trace assembly)
     # ------------------------------------------------------------------
 
-    def _write_outputs(
+    async def _write_outputs(
         self,
         *,
         document_manifest: DocumentManifest,
@@ -1914,6 +1914,14 @@ class CorrectionPipeline:
         ``rewriter_path`` / ``output_alto_text`` are populated, but when
         ``apply`` is ``False`` the injected ``OutputWriter`` is never
         called: nothing is persisted.
+
+        Wave-3 review — the heavy calls (``rewrite_file``: a full lxml
+        parse/rewrite/serialize of the source file; ``write_corrected``:
+        disk IO; ``extract_texts``: another parse) run in worker threads
+        so a ~100 MiB rewrite no longer freezes the host's event loop
+        (SSE keepalives, /health). Observer events stay ON the loop —
+        emit sites must never run from a thread (the store's queues are
+        not thread-safe).
         """
         # §11 — provenance stamped into every corrected file's processingStep.
         from corrigenda import __version__ as _lib_version
@@ -1928,7 +1936,8 @@ class CorrectionPipeline:
             if not pages_for_file:
                 continue
 
-            xml_bytes, metrics, rewriter_paths = adapter.rewrite_file(
+            xml_bytes, metrics, rewriter_paths = await asyncio.to_thread(
+                adapter.rewrite_file,
                 xml_path,
                 pages_for_file,
                 # §11 provenance labels — constructor state since the §5.1
@@ -1939,7 +1948,8 @@ class CorrectionPipeline:
                 config_fingerprint=config_fingerprint,
             )
             if apply:
-                self.output_writer.write_corrected(
+                await asyncio.to_thread(
+                    self.output_writer.write_corrected,
                     source_stem=xml_path.stem,
                     xml_bytes=xml_bytes,
                 )
@@ -1970,7 +1980,9 @@ class CorrectionPipeline:
                         t.rewriter_path = rpath
 
             file_line_ids = {lm.line_id for p in pages_for_file for lm in p.lines}
-            output_texts = adapter.extract_texts(xml_bytes, file_line_ids)
+            output_texts = await asyncio.to_thread(
+                adapter.extract_texts, xml_bytes, file_line_ids
+            )
             for lid, otxt in output_texts.items():
                 tkey = lid_to_tkey.get(lid)
                 if tkey:

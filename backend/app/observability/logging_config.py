@@ -22,6 +22,7 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Callable
 from typing import Any
 
 # Standard LogRecord attributes — anything else on the record is treated
@@ -55,6 +56,28 @@ _RESERVED_ATTRS = frozenset(
         "taskName",
     }
 )
+
+
+def _sanitize_deep(value: Any, sanitize: Callable[[str], str], depth: int = 6) -> Any:
+    """Sanitise every string leaf of a (possibly nested) extra value.
+
+    Depth-bounded: past the bound the subtree is stringified through the
+    sanitiser rather than walked, so cycles/pathological nesting degrade
+    safely instead of recursing forever.
+    """
+    if isinstance(value, str):
+        return sanitize(value)
+    if depth <= 0:
+        try:
+            return sanitize(repr(value))
+        except Exception:
+            return "<unrepresentable>"
+    if isinstance(value, dict):
+        return {k: _sanitize_deep(v, sanitize, depth - 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        seq = [_sanitize_deep(v, sanitize, depth - 1) for v in value]
+        return seq if isinstance(value, list) else tuple(seq)
+    return value
 
 
 class RedactionFilter(logging.Filter):
@@ -95,13 +118,15 @@ class RedactionFilter(logging.Filter):
         # Audit P3 — the JSON formatter copies every non-reserved record
         # attribute (logger.X(..., extra={...})) into the payload
         # verbatim, so a string extra like {"raw": "Authorization: Bearer
-        # sk-…"} bypassed redaction entirely. Sanitise string-valued
-        # extras here too, closing the docstring's promise.
+        # sk-…"} bypassed redaction entirely. Wave-3 review — string-only
+        # sanitisation left CONTAINER extras ({"api_key": "sk-…"}, nested
+        # lists) carrying secrets straight through: sanitise every string
+        # leaf, bounded in depth so a pathological structure can't wedge
+        # the logger.
         for key, value in record.__dict__.items():
             if key in _RESERVED_ATTRS or key.startswith("_"):
                 continue
-            if isinstance(value, str):
-                setattr(record, key, sanitize_error(value))
+            setattr(record, key, _sanitize_deep(value, sanitize_error))
         return True
 
 
@@ -142,8 +167,13 @@ class JsonFormatter(logging.Formatter):
                 # must NEVER kill its own record: fall back to repr() for
                 # anything json.dumps refuses, and if repr() itself blows
                 # up, degrade to a placeholder rather than propagate.
+                # Wave-3 review — the repr materialises NEW text AFTER the
+                # RedactionFilter ran, so it must go through the sanitiser
+                # itself or it reintroduces the exact leak P1-6 closed.
                 try:
-                    value = repr(value)
+                    from corrigenda import sanitize_error
+
+                    value = sanitize_error(repr(value))
                 except Exception:
                     value = "<unrepresentable>"
             payload[key] = value

@@ -323,7 +323,12 @@ async def create_job(
     except BaseException:
         # P1-10 — rollback: no half-created QUEUED job may survive a
         # failed creation (they are never terminal, hence never evicted).
-        store.delete_job(job_id)
+        # Wave-3 review — the rmtree inside delete_job can span a
+        # multi-hundred-MB extraction: offloaded like every other heavy
+        # call in this handler, and SHIELDED so a client abort
+        # (CancelledError can land right here) can't skip the cleanup —
+        # the thread runs to completion even if the await is cancelled.
+        await asyncio.shield(asyncio.to_thread(store.delete_job, job_id))
         raise
 
     return CreateJobResponse(job_id=job_id, job_token=job_token)
@@ -474,7 +479,10 @@ async def get_job_trace(job: JobManifest = Depends(get_completed_job)) -> dict:
     if job.report is None or not job.report.lines:
         raise HTTPException(status_code=404, detail="No traces available for this job.")
 
-    return job.report.model_dump(exclude_none=True)
+    # Wave-3 review — serialising a full report (one entry per corpus
+    # line) is CPU-bound; keep it off the event loop like every other
+    # heavy call in this router.
+    return await asyncio.to_thread(job.report.model_dump, exclude_none=True)
 
 
 # ---------------------------------------------------------------------------
@@ -493,7 +501,8 @@ async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
     """
     if job.document_manifest is None:
         raise HTTPException(status_code=500, detail="Job has no document_manifest.")
-    return build_diff(job.job_id, job.document_manifest)
+    # Wave-3 review — a full-manifest projection is CPU-bound: offload.
+    return await asyncio.to_thread(build_diff, job.job_id, job.document_manifest)
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +518,8 @@ async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
     """
     if job.document_manifest is None:
         raise HTTPException(status_code=500, detail="Job has no document_manifest.")
-    return build_layout(job.job_id, job.document_manifest, job.images)
+    # Wave-3 review — same offload rationale as /diff.
+    return await asyncio.to_thread(build_layout, job.job_id, job.document_manifest, job.images)
 
 
 # ---------------------------------------------------------------------------

@@ -29,14 +29,17 @@ import os
 from collections.abc import Awaitable, Callable
 
 _DEFAULT_MAX_REQUEST_BYTES = 256 * 1024 * 1024  # 256 MiB (200 MiB payload + overhead)
-
-#: Path prefixes whose POST bodies are size-guarded.
-_GUARDED_POST_PATHS: tuple[str, ...] = ("/api/jobs",)
+# Wave-3 review — JSON-body endpoints need a cap too: FastAPI's
+# ``await request.body()`` accumulates the whole stream IN MEMORY, so a
+# chunked request with no Content-Length OOMed the single worker through
+# /api/providers/models even though /api/jobs was guarded. Their bodies
+# are tiny (a provider name + key), so the cap is far tighter.
+_DEFAULT_MAX_JSON_REQUEST_BYTES = 1024 * 1024  # 1 MiB
 
 
 def _max_request_bytes() -> int:
-    """Resolve the cap dynamically so it can be overridden per-deployment
-    (``MAX_REQUEST_BYTES``) and monkeypatched in tests."""
+    """Resolve the upload cap dynamically so it can be overridden
+    per-deployment (``MAX_REQUEST_BYTES``) and monkeypatched in tests."""
     raw = os.environ.get("MAX_REQUEST_BYTES")
     if raw:
         try:
@@ -46,11 +49,35 @@ def _max_request_bytes() -> int:
     return _DEFAULT_MAX_REQUEST_BYTES
 
 
-def _is_guarded(scope: dict) -> bool:
+def _max_json_request_bytes() -> int:
+    """Cap for guarded JSON-body routes (``MAX_JSON_REQUEST_BYTES``)."""
+    raw = os.environ.get("MAX_JSON_REQUEST_BYTES")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return _DEFAULT_MAX_JSON_REQUEST_BYTES
+
+
+#: Path prefixes whose POST bodies are size-guarded → cap resolver.
+#: Lambdas (not bare references) so tests monkeypatching the module
+#: functions are honoured — the name resolves at call time.
+_GUARDED_POST_PATHS: dict[str, Callable[[], int]] = {
+    "/api/jobs": lambda: _max_request_bytes(),
+    "/api/providers/models": lambda: _max_json_request_bytes(),
+}
+
+
+def _guarded_cap(scope: dict) -> Callable[[], int] | None:
+    """The cap resolver for a guarded scope, or ``None`` when unguarded."""
     if scope.get("type") != "http" or scope.get("method") != "POST":
-        return False
+        return None
     path = (scope.get("path") or "").rstrip("/") or "/"
-    return any(path == p or path.startswith(p + "/") for p in _GUARDED_POST_PATHS)
+    for prefix, resolver in _GUARDED_POST_PATHS.items():
+        if path == prefix or path.startswith(prefix + "/"):
+            return resolver
+    return None
 
 
 class UploadSizeLimitMiddleware:
@@ -65,11 +92,12 @@ class UploadSizeLimitMiddleware:
         receive: Callable[[], Awaitable[dict]],
         send: Callable[[dict], Awaitable[None]],
     ) -> None:
-        if not _is_guarded(scope):
+        cap_resolver = _guarded_cap(scope)
+        if cap_resolver is None:
             await self.app(scope, receive, send)
             return
 
-        max_bytes = _max_request_bytes()
+        max_bytes = cap_resolver()
         headers = {k.lower(): v for k, v in (scope.get("headers") or [])}
         content_length = headers.get(b"content-length")
 

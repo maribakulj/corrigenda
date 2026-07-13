@@ -337,7 +337,21 @@ class JobStore:
                     # and synthesise the terminal instead of streaming
                     # keepalives forever.
                     job = self._jobs.get(job_id)
-                    if job is not None and job.status in _TERMINAL_STATES:
+                    if job is None:
+                        # Wave-3 review — the job was EVICTED mid-stream:
+                        # terminal by definition, but this used to fall
+                        # through and keepalive forever. Tell the client
+                        # the job is gone (same shape as the subscribe-
+                        # time refusal) and end the stream.
+                        yield SSEEvent(
+                            event="error",
+                            data={
+                                "reason": "job_not_found",
+                                "message": "job evicted while streaming",
+                            },
+                        )
+                        return
+                    if job.status in _TERMINAL_STATES:
                         while not queue.empty():
                             buffered = queue.get_nowait()
                             yield buffered
