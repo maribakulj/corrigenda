@@ -781,3 +781,200 @@ def test_f1_both_line_forward_subs_preserved_on_acceptance():
         source_explicit=False,
     )
     assert (f1, f2, subs) == ("frag-", "ment suivant", "fragment")
+
+
+# ---------------------------------------------------------------------------
+# Wave-1 adversarial-review follow-up — F7-class twin the fix missed: the
+# slow-path rebuild read the ORIGINAL HYP's WIDTH with a bare
+# ``int(float(...))`` guarded only by ``except (TypeError, ValueError)``,
+# so an inf/overflow-shaped value (``WIDTH="1e999"``) crashed the whole
+# rewrite with an uncaught OverflowError. The HYP element is never parsed
+# by ``_int_attr`` upstream, so a malformed upload reaches this site
+# directly. Policy at this call site is TOLERANT (unusable width → the
+# 4% estimate), matching the pre-existing "abc" behaviour.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_width", ["1e999", "inf", "-inf", "nan", "abc"])
+def test_review_w1_hyp_width_overflow_falls_back_to_estimate(bad_width):
+    from corrigenda.formats.alto.rewriter import _rebuild_line
+
+    tl = _part1_line_element()
+    tl[-1].set("WIDTH", bad_width)  # the HYP child
+    lm = _line("T1", "unseulmot-", role=HyphenRole.PART1, explicit=True)
+    # Pre-fix: OverflowError for the inf-shaped values. Post-fix: the
+    # unusable width follows the tolerant policy — 4% estimate — and the
+    # rebuilt children still tile the line exactly.
+    _rebuild_line(tl, "deux mots-", lm, _ALTO_NS)
+    _assert_children_tile_line(tl, 100, 1000)
+    local, _hpos, _width = _rebuild_children(tl)[-1]
+    assert local == "HYP"
+
+
+def test_review_w1_hyp_width_overflow_end_to_end(tmp_path):
+    """A malformed upload (HYP WIDTH="1e999" on an explicit PART1) with a
+    word-count-changing correction must not abort the whole rewrite."""
+    from corrigenda.formats.alto.parser import parse_alto_file
+    from corrigenda.formats.alto.rewriter import rewrite_alto_file
+
+    xml = _ALTO_ONE_LINE.format(text="placeholder").replace(
+        '<String CONTENT="placeholder" HPOS="10" VPOS="10" WIDTH="900" HEIGHT="20"/>',
+        '<String CONTENT="unseulmot-" HPOS="10" VPOS="10" WIDTH="860" HEIGHT="20"'
+        ' SUBS_TYPE="HypPart1" SUBS_CONTENT="unseulmotsuite"/>'
+        '<HYP CONTENT="-" WIDTH="1e999"/>',
+    )
+    path = tmp_path / "overflow-hyp.xml"
+    path.write_text(xml, encoding="utf-8")
+    pages, _root = parse_alto_file(path, "overflow-hyp.xml")
+    (lm,) = [line for p in pages for line in p.lines]
+    lm.corrected_text = "deux mots-"  # forces the slow-path rebuild
+    lm.status = LineStatus.CORRECTED
+
+    out_bytes, _metrics, paths = rewrite_alto_file(path, pages, "test", "model")
+    assert lm.line_id in paths
+    assert (
+        b"deux mots"
+        in out_bytes.replace(b'CONTENT="deux"', b"deux").replace(
+            b'CONTENT="mots-"', b"mots"
+        )
+        or b"deux" in out_bytes
+    )
+
+
+def test_review_w1_duplicate_across_downgrade_subchunk_seam_reverts(
+    tmp_path, monkeypatch
+):
+    """Wave-1 review follow-up — the cross-chunk boundary pass built its
+    owner map from the PLANNED chunks and was gated on
+    ``len(plan.chunks) > 1``. A single planned chunk that granularity-
+    descends into per-line sub-chunks therefore had NO boundary pass at
+    all: an identical hallucination on two adjacent lines finalized by
+    two different sub-chunks survived the duplicate guard entirely."""
+    from unittest.mock import AsyncMock
+
+    from corrigenda.core.pipeline import CorrectionPipeline
+    from corrigenda.core.schemas import ChunkPlannerConfig, GuardConfig, RetryPolicy
+    from corrigenda.formats.alto.parser import build_document_manifest
+    from tests._pipeline_harness import RecordingObserver, _NoopWriter
+    from tests.test_planner_budget_and_cross_chunk_guard import _write_doc
+
+    monkeypatch.setattr(
+        "corrigenda.core.pipeline.asyncio.sleep", AsyncMock(return_value=None)
+    )
+
+    path = _write_doc(tmp_path)
+    doc = build_document_manifest([(path, "doc.xml")])
+    dup = "le meme texte hallucine identique pour deux lignes"
+
+    class _DescendToLineProvider:
+        """Refuses every multi-line request (forcing the full
+        PAGE→BLOCK→WINDOW→LINE descent), then hallucinates the same
+        sentence for the adjacent L3 and L4 — each finalized by its own
+        single-line sub-chunk."""
+
+        async def list_models(self, api_key: str) -> list:  # pragma: no cover
+            return []
+
+        async def complete_structured(
+            self,
+            *,
+            api_key,
+            model,
+            system_prompt,
+            user_payload,
+            json_schema,
+            temperature=0.0,
+        ):
+            lines = user_payload.get("lines", [])
+            if len(lines) > 1:
+                raise ValueError("mock: multi-line request refused")
+            (ln,) = lines
+            corrected = {"L3": dup, "L4": dup}.get(
+                ln["line_id"], ln.get("ocr_text", "")
+            )
+            return {
+                "lines": [{"line_id": ln["line_id"], "corrected_text": corrected}]
+            }, None
+
+    pipeline = CorrectionPipeline.for_provider(
+        _DescendToLineProvider(),
+        api_key="k",
+        model="m",
+        observer=RecordingObserver(),
+        output_writer=_NoopWriter(),
+        # Defaults plan the 8-line doc as ONE chunk — the pre-fix gate
+        # `len(plan.chunks) > 1` then skipped the boundary pass outright.
+        config=ChunkPlannerConfig(),
+        guard_config=GuardConfig(min_source_similarity=0.0, neighbour_margin=1.0),
+        retry_policy=RetryPolicy(
+            max_attempts=1, temperatures=(0.0,), per_chunk_budget=30
+        ),
+    )
+    pipeline.run_sync(
+        document_manifest=doc, source_files={"doc.xml": path}, apply=False
+    )
+
+    lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
+    # Identity corrections on the other lines survive untouched…
+    assert lines["L0"].corrected_text == lines["L0"].ocr_text
+    # …and the adjacent duplicate pair is reverted to OCR source.
+    for lid in ("L3", "L4"):
+        assert lines[lid].corrected_text == lines[lid].ocr_text, (
+            f"{lid} kept the duplicated hallucination: {lines[lid].corrected_text!r}"
+        )
+        assert lines[lid].status is LineStatus.FALLBACK, lid
+
+
+@pytest.mark.asyncio
+async def test_review_w1_edit_script_ops_attributable_across_files(tmp_path):
+    """Wave-1 review follow-up (F4 residual) — the (page_id, line_id)
+    keying fixed the internal capture collision, but the EMITTED dry-run
+    edit_script still carried two ops with the same bare line_id and no
+    file qualifier: a consumer replaying the whole script could not
+    attribute each op to its file. Ops must now carry the page_id and
+    apply_edit_script(page_id=…) must scope replay to one page."""
+    from corrigenda import CorrectionPipeline
+    from corrigenda.core.editing import EditScript, apply_edit_script
+    from corrigenda.formats.alto.parser import build_document_manifest
+    from corrigenda.producers.rules import RulesProducer, SubstitutionRule
+    from tests._pipeline_harness import RecordingObserver, _NoopWriter
+
+    path_a = tmp_path / "a.xml"
+    path_b = tmp_path / "b.xml"
+    path_a.write_text(_ALTO_ONE_LINE.format(text="la frauce entiere"), "utf-8")
+    path_b.write_text(_ALTO_ONE_LINE.format(text="grande frauce unie"), "utf-8")
+
+    doc = build_document_manifest([(path_a, "a.xml"), (path_b, "b.xml")])
+    pipeline = CorrectionPipeline(
+        producer=RulesProducer([SubstitutionRule("frauce", "france")]),
+        observer=RecordingObserver(),
+        output_writer=_NoopWriter(),
+        provider_name="rules",
+        model="fr-ocr-v1",
+    )
+    result = await pipeline.run(
+        document_manifest=doc,
+        source_files={"a.xml": path_a, "b.xml": path_b},
+        apply=False,
+    )
+
+    ops = result.edit_script.ops
+    assert len(ops) == 2, ops
+    # Every emitted op is attributable: page_ids present and distinct
+    # (page_ids are document-unique even when line_ids repeat).
+    page_a_id, page_b_id = (p.page_id for p in doc.pages)
+    assert [op.page_id for op in ops] == [page_a_id, page_b_id], ops
+
+    # Replaying the WHOLE script scoped to one page applies only that
+    # page's op — no cross-file bleed, no spurious rejection.
+    full = EditScript(ops=list(ops))
+    replay_a = apply_edit_script(full, {"L1": "la frauce entiere"}, page_id=page_a_id)
+    replay_b = apply_edit_script(full, {"L1": "grande frauce unie"}, page_id=page_b_id)
+    assert replay_a.text_by_id["L1"] == "la france entiere"
+    assert not replay_a.rejected, replay_a.rejected
+    assert replay_b.text_by_id["L1"] == "grande france unie"
+    assert not replay_b.rejected, replay_b.rejected
+
+    # Unscoped replay keeps its historical behaviour (all ops considered).
+    legacy = apply_edit_script(EditScript(ops=[ops[0]]), {"L1": "la frauce entiere"})
+    assert legacy.text_by_id["L1"] == "la france entiere"

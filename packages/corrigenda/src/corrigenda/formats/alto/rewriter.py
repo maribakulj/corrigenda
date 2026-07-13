@@ -8,6 +8,7 @@ from pathlib import Path
 from lxml import etree
 
 from corrigenda.core._norm import clean_content, nfc
+from corrigenda.core._parse import parse_int_tolerant
 from corrigenda.core.identity import ensure_unique_identities
 from corrigenda.errors import DuplicateIdError
 from corrigenda.formats.alto._ns import (
@@ -583,11 +584,12 @@ def _rebuild_line(
         # verbatim WIDTH made the children sum to width + original_hyp_width
         # and overlapped the last String. Fall back to the 4% estimate only
         # when synthesising a HYP (explicit line with no HYP element).
-        orig_hyp_w = 0
-        try:
-            orig_hyp_w = int(float(orig_hyp_attribs.get("WIDTH", "0")))
-        except (TypeError, ValueError):
-            orig_hyp_w = 0
+        # Wave-1 review — parse via the shared tolerant policy: a bare
+        # ``int(float(...))`` guarded by ``except (TypeError, ValueError)``
+        # let ``WIDTH="1e999"`` escape as an uncaught OverflowError and
+        # abort the whole rewrite (the F7 class; HYP attributes are never
+        # pre-parsed by ``_int_attr`` upstream). Unusable → 0 → 4% estimate.
+        orig_hyp_w = parse_int_tolerant(orig_hyp_attribs.get("WIDTH"), 0)
         hyp_width = orig_hyp_w if orig_hyp_w > 0 else max(1, round(width * 0.04))
         hyp_width = min(hyp_width, max(1, width - 1))  # keep room for text
         text_width = max(1, width - hyp_width)

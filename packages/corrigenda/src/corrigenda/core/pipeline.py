@@ -516,6 +516,12 @@ class CorrectionPipeline:
         # of an identical-correction run straddling a chunk/page seam
         # (reset in run()).
         self._accepted_snapshot: dict[str, str] = {}
+        # Wave-1 review — which finalization pass ACTUALLY owned each line
+        # (keyed by _trace_key). Granularity descent spawns sub-chunks the
+        # plan never listed, so the boundary pass must derive its seams
+        # from these owners, not from plan.chunks (reset in run()).
+        self._finalized_owner: dict[str, int] = {}
+        self._finalize_seq = 0
         # §4.1 vision envelope — populated per-run from run(source_images=…).
         self._image_ref_by_page_id: dict[str, ImageRef] = {}
         self._page_dims: dict[str, tuple[int, int]] = {}
@@ -661,6 +667,8 @@ class CorrectionPipeline:
         self._usage = Usage()
         self._producer_ops = {}
         self._accepted_snapshot = {}
+        self._finalized_owner = {}
+        self._finalize_seq = 0
 
         # §5.1 — a vision producer without its images is a start-up error,
         # never a silent image-less call.
@@ -883,12 +891,23 @@ class CorrectionPipeline:
                 line_ops, produced_text = captured
                 if produced_text == lm.corrected_text:
                     # The producer's output survived every guard unchanged —
-                    # keep its original ops (and their TYPE, e.g. span).
-                    ops.extend(line_ops)
+                    # keep its original ops (and their TYPE, e.g. span),
+                    # stamped with the page_id so a consumer can attribute
+                    # them per file (wave-1 review, F4 residual: bare
+                    # line_ids repeat across files).
+                    ops.extend(
+                        op.model_copy(update={"page_id": lm.page_id}) for op in line_ops
+                    )
                 else:
                     # A guard / the reconciler rewrote the final text; the
                     # original ops no longer describe it.
-                    ops.append(ReplaceLine(line_id=lm.line_id, text=lm.corrected_text))
+                    ops.append(
+                        ReplaceLine(
+                            line_id=lm.line_id,
+                            text=lm.corrected_text,
+                            page_id=lm.page_id,
+                        )
+                    )
         return EditScript(ops=ops)
 
     def run_sync(
@@ -1018,39 +1037,46 @@ class CorrectionPipeline:
         # straddling a chunk boundary escaped the guard entirely. Only
         # the boundary pairs are new — intra-chunk pairs were already
         # checked with the same function and config — so the pass is
-        # restricted to adjacent pairs whose target owners differ
-        # (review fix: re-checking whole pages re-ran SequenceMatcher
-        # over every already-checked pair for nothing).
-        if len(plan.chunks) > 1:
-            owner_by_line: dict[str, int] = {}
-            for ci, chunk in enumerate(plan.chunks):
-                for lid in chunk.targets():
-                    owner_by_line[lid] = ci
-            boundary_reverts: dict[str, str] = {}
-            for a, b in zip(page.lines, page.lines[1:]):
-                if owner_by_line.get(a.line_id) == owner_by_line.get(b.line_id):
-                    continue
-                # Audit-F3 — compare the PRE-REVERT accepted corrections
-                # (snapshotted in _finalize_chunk_traces), not the live
-                # corrected_text: an intra-chunk revert of the boundary
-                # line otherwise masked the third member of an
-                # identical-correction run straddling the boundary.
-                pair = [
-                    (
-                        lm.line_id,
-                        lm.ocr_text,
-                        self._accepted_snapshot.get(
-                            _trace_key(lm),
-                            lm.corrected_text
-                            if lm.corrected_text is not None
-                            else lm.ocr_text,
-                        ),
-                    )
-                    for lm in (a, b)
-                ]
-                boundary_reverts.update(
-                    check_adjacent_duplicates(pair, config=self.guard_config)
+        # restricted to adjacent pairs whose owners differ (review fix:
+        # re-checking whole pages re-ran SequenceMatcher over every
+        # already-checked pair for nothing).
+        #
+        # Wave-1 review — the owners are the finalization passes that
+        # ACTUALLY ran (self._finalized_owner), not the planned chunks:
+        # granularity descent finalizes a planned chunk as many
+        # sub-chunks, whose seams the plan-derived map could not see —
+        # and a single-chunk plan (`len(plan.chunks) > 1` gate) skipped
+        # the pass outright. Lines that never finalized (full-chunk OCR
+        # fallback) share owner None; such pairs sit at source text on
+        # both sides, where a revert would be a no-op anyway.
+        boundary_reverts: dict[str, str] = {}
+        for a, b in zip(page.lines, page.lines[1:]):
+            if self._finalized_owner.get(_trace_key(a)) == self._finalized_owner.get(
+                _trace_key(b)
+            ):
+                continue
+            # Audit-F3 — compare the PRE-REVERT accepted corrections
+            # (snapshotted in _finalize_chunk_traces), not the live
+            # corrected_text: an intra-chunk revert of the boundary
+            # line otherwise masked the third member of an
+            # identical-correction run straddling the boundary.
+            pair = [
+                (
+                    lm.line_id,
+                    lm.ocr_text,
+                    self._accepted_snapshot.get(
+                        _trace_key(lm),
+                        lm.corrected_text
+                        if lm.corrected_text is not None
+                        else lm.ocr_text,
+                    ),
                 )
+                for lm in (a, b)
+            ]
+            boundary_reverts.update(
+                check_adjacent_duplicates(pair, config=self.guard_config)
+            )
+        if boundary_reverts:
             self._apply_duplicate_reverts(
                 reverts=boundary_reverts,
                 traces=traces,
@@ -1838,11 +1864,15 @@ class CorrectionPipeline:
             for lm in chunk_lines
         ]
         # Audit-F3 — persist the pre-revert snapshot for the boundary and
-        # page-seam passes (same comparison basis as this pass).
+        # page-seam passes (same comparison basis as this pass). Wave-1
+        # review — also record the ACTUAL finalization owner: downgrade
+        # sub-chunks create seams the planned chunk list never had.
+        self._finalize_seq += 1
         for lm in chunk_lines:
             self._accepted_snapshot[_trace_key(lm)] = (
                 lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
             )
+            self._finalized_owner[_trace_key(lm)] = self._finalize_seq
         dup_reverts = check_adjacent_duplicates(
             accepted_lines, config=self.guard_config
         )
