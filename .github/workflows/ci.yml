@@ -321,9 +321,10 @@ jobs:
       - name: npm audit (high+)
         # Audit-F36 — the backend runs pip-audit; the frontend had no SCA.
         # Only react/react-dom ship to the bundle (everything else is a
-        # devDependency), so scope to production deps. Non-blocking for now
-        # (|| true) — flip to blocking after the first triage pass.
-        run: npm audit --omit=dev --audit-level=high || true
+        # devDependency), so scope to production deps. BLOCKING: the tree
+        # is clean today (0 vulnerabilities), so any future high+ finding
+        # must be triaged, not scrolled past.
+        run: npm audit --omit=dev --audit-level=high
       - name: Build
         run: npm run build
       - name: Bundle size budget

@@ -24,17 +24,15 @@ export default defineConfig({
         'src/types/api.generated.ts',
       ],
       // Audit-F37 — coverage was collected but NEVER gated (unlike the
-      // backend's fail_under=80). These thresholds GATE it now, set to
-      // the current measured floor so CI stays green while blocking any
-      // regression. NOTE: the audit's aspirational target is 70%; getting
-      // there needs more component/hook tests (App effects, the SSE
-      // reconnect ladder, viewers) — ratchet these up as they land rather
-      // than red-lining CI today.
+      // backend's fail_under=80). These thresholds GATE it at the audit's
+      // target of 70%. The suite currently measures well above (95/90/92/97
+      // stmts/branches/funcs/lines); the gap is headroom for legitimate
+      // churn, not tolerated debt — never lower these to make CI pass.
       thresholds: {
-        statements: 48,
-        branches: 32,
-        functions: 38,
-        lines: 50,
+        statements: 70,
+        branches: 70,
+        functions: 70,
+        lines: 70,
       },
     },
   },
