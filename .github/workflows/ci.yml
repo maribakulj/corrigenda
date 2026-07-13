@@ -314,8 +314,16 @@ jobs:
         run: npm run format:check
       - name: Type check
         run: npx tsc --noEmit
-      - name: Tests (Vitest)
-        run: npm run test
+      - name: Tests (Vitest) + coverage gate
+        # Audit-F37 — coverage is now GATED (thresholds in vitest.config.ts),
+        # not merely collected. Run the coverage variant in CI.
+        run: npm run test:coverage
+      - name: npm audit (high+)
+        # Audit-F36 — the backend runs pip-audit; the frontend had no SCA.
+        # Only react/react-dom ship to the bundle (everything else is a
+        # devDependency), so scope to production deps. Non-blocking for now
+        # (|| true) — flip to blocking after the first triage pass.
+        run: npm audit --omit=dev --audit-level=high || true
       - name: Build
         run: npm run build
       - name: Bundle size budget
@@ -359,3 +367,43 @@ jobs:
             echo "::error::Generated API types are stale — run scripts/generate-frontend-api-types.sh and commit."
             exit 1
           fi
+
+  docker-build:
+    # Audit-F34 — the three container images (root HF-Spaces image,
+    # backend, frontend) were NEVER built in CI: a broken COPY, an
+    # unresolvable pinned digest, or a dependency conflict only surfaced
+    # at HF Spaces build time (a class of failure that has shipped
+    # silently once — see the root Dockerfile comment). Build all three
+    # (no push), and smoke-test /health on the root image. Plain
+    # `docker build`/`run` (buildx is preinstalled on ubuntu-latest) so
+    # this job adds no third-party action to pin.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Build root (HF Spaces) image
+        run: docker build -f Dockerfile -t corrigenda-root:ci .
+      - name: Build backend image
+        run: docker build -f backend/Dockerfile -t corrigenda-backend:ci .
+      - name: Build frontend image
+        run: docker build -f frontend/Dockerfile -t corrigenda-frontend:ci ./frontend
+      - name: Smoke test /health on the root image
+        # Guards the regression class where the static-dir COPY is
+        # silently wrong yet /health still 200s: assert the container
+        # comes up AND serves /health on its documented port (7860).
+        run: |
+          docker run -d --name corrigenda-smoke -p 7860:7860 corrigenda-root:ci
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:7860/health >/dev/null 2>&1; then
+              echo "root image /health OK"
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::root image did not serve /health within 60s"
+            docker logs corrigenda-smoke || true
+          fi
+          docker rm -f corrigenda-smoke >/dev/null 2>&1 || true
+          [ "$ok" -eq 1 ]
