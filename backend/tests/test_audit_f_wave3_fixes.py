@@ -501,3 +501,107 @@ async def test_review_w3_evicted_job_stream_terminates(monkeypatch, tmp_path):
 
     assert received, "stream ended with no events"
     assert received[-1] == "error"
+
+
+# ---------------------------------------------------------------------------
+# Cumulative-review follow-ups (wave 6).
+# ---------------------------------------------------------------------------
+
+
+async def test_review_w6_evicted_stream_delivers_buffered_terminal(monkeypatch, tmp_path):
+    """Cumulative review finding 1 — the eviction branch yielded
+    job_not_found WITHOUT draining the subscriber's queue first, so a real
+    terminal event already buffered when the job is evicted (emit landed it,
+    then delete_job ran) would be silently replaced by a generic error.
+    The buffered terminal must be delivered; only an empty queue yields
+    job_not_found.
+
+    We reproduce the exact race deterministically: the keepalive timeout
+    fires, and at the branch's `self._jobs.get(job_id)` we inject a
+    terminal into this subscriber's queue AND report the job gone."""
+    import asyncio
+
+    from app import storage as storage_module
+    from app.jobs.store import JobStore, SSEEvent
+    from app.schemas import PipelineEventType
+
+    monkeypatch.setattr(storage_module, "_BASE_DIR", tmp_path / "jobs")
+    store = JobStore()
+    monkeypatch.setattr(JobStore, "KEEPALIVE_TIMEOUT_SECONDS", 0.05)
+    job_id = store.create_job(Provider.OPENAI, "m")
+
+    injected = {"done": False}
+
+    class _RacingJobs(dict):
+        def get(self, jid, default=None):
+            # First lookup inside the timeout branch: simulate
+            # emit(completed) landing in the queue AND delete_job evicting
+            # the job, exactly between the timeout and the branch's status
+            # check — the precise race the drain must survive.
+            if jid == job_id and not injected["done"]:
+                injected["done"] = True
+                queues = store._subscribers.get(job_id, [])
+                if queues:
+                    queues[0].put_nowait(
+                        SSEEvent(
+                            event=PipelineEventType.COMPLETED,
+                            data={"total_lines": 7},
+                        )
+                    )
+                return None  # job evicted
+            return super().get(jid, default)
+
+    received: list = []
+
+    async def _consume():
+        async for ev in store.stream_events(job_id):
+            received.append(ev)
+
+    consumer = asyncio.create_task(_consume())
+    await asyncio.sleep(0.02)  # subscribed, in the poll loop, queue empty
+    store._jobs = _RacingJobs(store._jobs)  # arm the race for the next lookup
+    await asyncio.wait_for(consumer, timeout=2.0)
+
+    names = [ev.event if isinstance(ev.event, str) else ev.event.value for ev in received]
+    # The buffered terminal is delivered; NO job_not_found error masks it.
+    assert "completed" in names, names
+    assert names[-1] == "completed", names
+    assert not any(
+        isinstance(ev.data, dict) and ev.data.get("reason") == "job_not_found" for ev in received
+    ), names
+
+
+def test_review_w6_sanitize_deep_covers_sets_and_objects():
+    """Cumulative review finding 2 — _sanitize_deep's isinstance ladder
+    handled str/dict/list/tuple only; set/frozenset and arbitrary objects
+    fell through UNSANITIZED on the record (redaction then depended on
+    JsonFormatter's json.dumps incidentally failing). The filter must
+    sanitise those leaves itself."""
+    from app.observability.logging_config import _sanitize_deep
+
+    def fake_sanitize(s: str) -> str:
+        return s.replace("sk-verysecret12345", "sk-****")
+
+    # A set leaf carrying a secret string.
+    out_set = _sanitize_deep({"toks": {"Bearer sk-verysecret12345"}}, fake_sanitize)
+    flat = repr(out_set)
+    assert "sk-verysecret12345" not in flat, flat
+
+    # A frozenset nested in a list.
+    out_fz = _sanitize_deep(["x", frozenset({"sk-verysecret12345"})], fake_sanitize)
+    assert "sk-verysecret12345" not in repr(out_fz), out_fz
+
+    # An arbitrary object whose repr carries a secret.
+    class _Ctx:
+        def __repr__(self) -> str:
+            return "<Ctx key=sk-verysecret12345>"
+
+    out_obj = _sanitize_deep({"ctx": _Ctx()}, fake_sanitize)
+    assert "sk-verysecret12345" not in repr(out_obj), out_obj
+
+    # Json-safe scalars pass through untouched (not repr-ified).
+    assert _sanitize_deep({"n": 3, "ok": True, "z": None}, fake_sanitize) == {
+        "n": 3,
+        "ok": True,
+        "z": None,
+    }

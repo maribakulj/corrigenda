@@ -67,6 +67,10 @@ def _sanitize_deep(value: Any, sanitize: Callable[[str], str], depth: int = 6) -
     """
     if isinstance(value, str):
         return sanitize(value)
+    # Json-safe scalars carry no redactable text and serialise as-is.
+    # (bool is checked implicitly — it is an int subclass, harmless here.)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
     if depth <= 0:
         try:
             return sanitize(repr(value))
@@ -77,7 +81,19 @@ def _sanitize_deep(value: Any, sanitize: Callable[[str], str], depth: int = 6) -
     if isinstance(value, (list, tuple)):
         seq = [_sanitize_deep(v, sanitize, depth - 1) for v in value]
         return seq if isinstance(value, list) else tuple(seq)
-    return value
+    # Wave-6 review — set/frozenset are NOT json-serialisable, so the
+    # JsonFormatter would repr the whole container; sanitise each element
+    # and hand back a list (json-safe, and its strings are individually
+    # redacted rather than relying on json.dumps incidentally failing).
+    if isinstance(value, (set, frozenset)):
+        return [_sanitize_deep(v, sanitize, depth - 1) for v in value]
+    # Any other object: repr-sanitise HERE rather than depend on the
+    # formatter's json.dumps failing (a future ``default=`` handler would
+    # silently reopen the leak). The value becomes a redacted string.
+    try:
+        return sanitize(repr(value))
+    except Exception:
+        return "<unrepresentable>"
 
 
 class RedactionFilter(logging.Filter):

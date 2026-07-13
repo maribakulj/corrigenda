@@ -343,6 +343,19 @@ class JobStore:
                         # through and keepalive forever. Tell the client
                         # the job is gone (same shape as the subscribe-
                         # time refusal) and end the stream.
+                        #
+                        # Wave-6 review — drain first, exactly like the
+                        # sibling terminal branch below: if a REAL terminal
+                        # (emit landed it right as delete_job evicted the
+                        # job) is buffered in this subscriber's queue, it
+                        # must be delivered, not masked by a generic
+                        # job_not_found. Only a truly empty queue yields the
+                        # eviction error.
+                        while not queue.empty():
+                            buffered = queue.get_nowait()
+                            yield buffered
+                            if buffered.event in self._TERMINAL_EVENTS:
+                                return
                         yield SSEEvent(
                             event="error",
                             data={
