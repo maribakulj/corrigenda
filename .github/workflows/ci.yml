@@ -222,7 +222,10 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: pytest + coverage gate (80%)
         working-directory: backend
-        run: pytest --cov=app --cov-report=term --cov-report=xml
+        # Wave 0 — the e2e scenarios run in their own backend-e2e job;
+        # deselecting them here keeps the unit run fast and the coverage
+        # baseline unchanged.
+        run: pytest -m "not e2e" --cov=app --cov-report=term --cov-report=xml
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
@@ -230,6 +233,31 @@ jobs:
           name: coverage-xml
           path: backend/coverage.xml
           if-no-files-found: ignore
+
+  backend-e2e:
+    # Wave 0 (docs/audit/PLAN-CORRECTIONS.md) — end-to-end gate: the REAL
+    # backend under uvicorn against a local mock vendor (honest +
+    # saboteur). Proves upload → pipeline → SSE → download across a
+    # genuine HTTP boundary, geometry/hyphenation invariants intact, and
+    # sabotaged corrections (hyphen fusion, line absorption, emptied
+    # line) all intercepted → OCR fallback + completed_with_fallbacks.
+    # Local mock only, no network, ~15 s.
+    needs: [corrigenda-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install corrigenda (editable, sibling package)
+        run: pip install -e packages/corrigenda
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: pytest E2E scenarios
+        working-directory: backend
+        run: pytest tests/e2e -q
 
   backend-security:
     runs-on: ubuntu-latest
