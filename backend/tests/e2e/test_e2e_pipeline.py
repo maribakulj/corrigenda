@@ -93,13 +93,21 @@ def test_honest_job_end_to_end(backend_server, use_honest_vendor):
 
     # Hyphenation invariant: the explicit TL4/TL5 pair is intact — the
     # PART1 fragment still ends with '-', PART2 still starts the line,
-    # and the SUBS_* markers survived the rewrite.
+    # and the SUBS_*/HYP markers survived the rewrite ON THIS PAIR
+    # (attribute-level check: a whole-document substring would be
+    # satisfied by the other explicit pair TL8/TL9).
     out_lines = _lines_by_id(output)
     tl4_text = _line_text(out_lines["TL4"])
     tl5_text = _line_text(out_lines["TL5"])
     assert tl4_text.endswith("dénon-"), tl4_text
     assert tl5_text.startswith("çait"), tl5_text
-    assert 'SUBS_TYPE="HypPart1"' in text and 'SUBS_TYPE="HypPart2"' in text
+    tl4_last_string = [el for el in out_lines["TL4"] if el.tag.endswith("}String")][-1]
+    assert tl4_last_string.get("SUBS_TYPE") == "HypPart1"
+    assert tl4_last_string.get("SUBS_CONTENT") == "dénonçait"
+    assert any(el.tag.endswith("}HYP") for el in out_lines["TL4"])
+    tl5_first_string = [el for el in out_lines["TL5"] if el.tag.endswith("}String")][0]
+    assert tl5_first_string.get("SUBS_TYPE") == "HypPart2"
+    assert tl5_first_string.get("SUBS_CONTENT") == "dénonçait"
 
 
 # ---------------------------------------------------------------------------
@@ -138,8 +146,46 @@ def test_sabotaged_job_falls_back_and_reports_it(backend_server, use_sabotage_ve
     assert _line_text(out_lines["TL10"]) == ("Ces priucipes allaient trausformer le moude eutier.")
 
 
+def test_absorption_only_is_refused_by_the_line_guard(backend_server, use_absorption_vendor):
+    """Isolated absorption on a NON-hyphenated line (TL2 absorbs TL3):
+    nothing else can fail the chunk first, so the revert must come from
+    the Stage-C absorption guard itself — a PER-LINE fallback (traced
+    ``absorbs_next_line``) while every other line's honest correction
+    survives. Note: per-line guard reverts do not bump the job-level
+    fallback counter (chunk-granular by design), so the terminal status
+    stays ``completed``."""
+    base_url = backend_server.base_url
+    created = submit_job(base_url, model=use_absorption_vendor)
+    job_id, token = created["job_id"], created["job_token"]
+
+    events = collect_sse_until_terminal(base_url, job_id, token, timeout=300.0)
+    terminal_name, terminal_data = events[-1]
+    assert terminal_name == "completed", events
+    assert terminal_data["status"] == "completed"
+
+    output = download_xml(base_url, job_id, token)
+    _assert_geometry_unchanged(SAMPLE_XML.read_bytes(), output)
+    out_lines = _lines_by_id(output)
+    # The absorbed payload was refused; TL2 reverted verbatim to OCR…
+    assert _line_text(out_lines["TL2"]) == "La Frauce traversa uue période tronblée."
+    # …TL3 still owns its words…
+    assert "citoyens" in _line_text(out_lines["TL3"])
+    # …and honest corrections elsewhere were APPLIED (per-line revert,
+    # not a whole-chunk collapse).
+    assert "principes" in _line_text(out_lines["TL10"])
+    assert "nationale" in _line_text(out_lines["TL8"])
+
+    # The trace pins WHICH guard fired.
+    trace = httpx.get(f"{base_url}/api/jobs/{job_id}/trace", params={"token": token}, timeout=30)
+    assert trace.status_code == 200
+    tl2 = next(ln for ln in trace.json()["lines"] if ln["line_id"] == "TL2")
+    assert tl2["fallback_reason"] == "absorbs_next_line", tl2
+
+
 # ---------------------------------------------------------------------------
-# Scenario 3 — capability token gates every job endpoint
+# Scenario 3 — capability token gates the job endpoints (status, SSE,
+# download — the remaining routes share the same require_job_access
+# dependency in app/api/jobs.py)
 # ---------------------------------------------------------------------------
 
 

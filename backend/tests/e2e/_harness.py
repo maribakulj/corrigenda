@@ -132,6 +132,31 @@ def build_sabotage_app() -> FastAPI:
     return _build_vendor_app("mock-sabotage", _sabotage)
 
 
+def _absorption_only(line_id: str, text: str) -> str:
+    """ONLY one absorption, on a NON-hyphenated line, no other corruption.
+
+    In the combined saboteur, TL4's hyphen fusion (a chunk-level
+    validation failure) makes the whole chunk fall back before TL7's
+    payload ever reaches any acceptance guard — the review showed TL7's
+    revert was collateral, not a guard proof. This vendor corrupts only
+    TL2 (no hyphen role, so the hyphen reconciler cannot mask the
+    verdict): the Stage-C absorption guard itself must revert it, as a
+    PER-LINE fallback, while every other line's honest correction
+    survives."""
+    if line_id == "TL2":
+        # TL2's (corrected) text + TL3's (corrected) text concatenated —
+        # the exact source+next shape Guard 3 exists to catch.
+        return (
+            "La France traversa une période troublée. "
+            "Les citoyens se soulevèrent contre l'oppression."
+        )
+    return _apply_fixes(text)
+
+
+def build_absorption_only_app() -> FastAPI:
+    return _build_vendor_app("mock-absorption", _absorption_only)
+
+
 # ---------------------------------------------------------------------------
 # uvicorn-in-a-thread helper (ephemeral port)
 # ---------------------------------------------------------------------------
@@ -184,17 +209,29 @@ def submit_job(base_url: str, model: str, xml_path: Path = SAMPLE_XML) -> dict:
 def collect_sse_until_terminal(
     base_url: str, job_id: str, token: str, timeout: float = 120.0
 ) -> list[tuple[str, dict]]:
-    """Consume the SSE stream until a terminal event; return all events."""
+    """Consume the SSE stream until a terminal event; return all events.
+
+    ``timeout`` is a WALL-CLOCK deadline, enforced explicitly: the
+    server emits a keepalive every 30 s while a job is non-terminal, so
+    a per-read httpx timeout alone would never fire and a job that
+    fails to terminate (the exact regression class this gate exists to
+    catch) would hang the test forever.
+    """
+    deadline = time.monotonic() + timeout
     events: list[tuple[str, dict]] = []
     current_event: str | None = None
     with httpx.stream(
         "GET",
         f"{base_url}/api/jobs/{job_id}/events",
         params={"token": token},
-        timeout=timeout,
+        # Per-read gap bound: keepalives arrive every 30 s, so 60 s of
+        # silence means the stream itself is dead.
+        timeout=60.0,
     ) as resp:
         assert resp.status_code == 200, resp.read()
         for line in resp.iter_lines():
+            if time.monotonic() > deadline:
+                raise AssertionError(f"no terminal SSE event within {timeout}s: {events}")
             if line.startswith("event:"):
                 current_event = line.split(":", 1)[1].strip()
             elif line.startswith("data:") and current_event is not None:
