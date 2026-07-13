@@ -240,6 +240,37 @@ def _subs_target(
     return None
 
 
+def _forward_subs_target(
+    el: etree._Element,
+    manifest: LineManifest,
+    ns: str,
+) -> etree._Element | None:
+    """Return the String that carries a BOTH line's forward (HypPart1)
+    subs, or None when no distinct element exists for them.
+
+    Audit-F5 — shared by ``_apply_subs`` AND ``_subs_need_update`` so the
+    writer and the change-detection predicate agree. When the line has a
+    single String, ``strings[-1]`` IS the element carrying the BACKWARD
+    (HypPart2) subs. Writing the forward HypPart1 onto it would clobber
+    the continuation marker, flipping HypPart2→HypPart1 and destroying
+    the "continues from the previous line" signal (and breaking
+    byte-parity on an identity correction). The trailing HYP element
+    already marks the forward hyphen, so forward SUBS only live on a
+    DISTINCT last String — and the predicate must not demand them
+    elsewhere (pre-fix it did, so a byte-correct single-String BOTH line
+    was misrouted to SUBS-ONLY on every run, never UNTOUCHED).
+    """
+    if manifest.hyphen_role != HyphenRole.BOTH:
+        return None
+    strings = _get_string_children(el, ns)
+    if not strings:
+        return None
+    last = strings[-1]
+    if last is _subs_target(el, manifest, ns):
+        return None
+    return last
+
+
 def _subs_need_update(
     el: etree._Element,
     manifest: LineManifest,
@@ -261,17 +292,14 @@ def _subs_need_update(
     ):
         return True
 
-    # Check forward subs for BOTH lines
-    if manifest.hyphen_role == HyphenRole.BOTH:
+    # Check forward subs for BOTH lines — only on the distinct last
+    # String _apply_subs would actually write (Audit-F5, see
+    # _forward_subs_target).
+    last = _forward_subs_target(el, manifest, ns)
+    if last is not None:
         fw_type, fw_content = _desired_forward_subs(manifest)
-        strings = _get_string_children(el, ns)
-        if strings:
-            last = strings[-1]
-            if (
-                last.get("SUBS_TYPE") != fw_type
-                or last.get("SUBS_CONTENT") != fw_content
-            ):
-                return True
+        if last.get("SUBS_TYPE") != fw_type or last.get("SUBS_CONTENT") != fw_content:
+            return True
 
     return False
 
@@ -303,22 +331,13 @@ def _apply_subs(
         want_type, want_content = _desired_subs(manifest)
         _set_subs_on_element(target, want_type, want_content)
 
-    # Forward subs for BOTH lines (on last String)
-    if manifest.hyphen_role == HyphenRole.BOTH:
-        strings = _get_string_children(el, ns)
-        if strings:
-            last = strings[-1]
-            # When the line has a single String, strings[-1] IS the element
-            # that just received the BACKWARD (HypPart2) subs. Writing the
-            # forward HypPart1 onto it would clobber the continuation marker,
-            # flipping HypPart2→HypPart1 and destroying the "continues from
-            # the previous line" signal (and breaking byte-parity on an
-            # identity correction). The trailing HYP element already marks
-            # the forward hyphen, so only emit forward SUBS on a DISTINCT
-            # last String.
-            if last is not target:
-                fw_type, fw_content = _desired_forward_subs(manifest)
-                _set_subs_on_element(last, fw_type, fw_content)
+    # Forward subs for BOTH lines — only on a DISTINCT last String
+    # (Audit-F5: guard shared with _subs_need_update, see
+    # _forward_subs_target for the single-String rationale).
+    last = _forward_subs_target(el, manifest, ns)
+    if last is not None:
+        fw_type, fw_content = _desired_forward_subs(manifest)
+        _set_subs_on_element(last, fw_type, fw_content)
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +527,15 @@ def _rebuild_line(
         deep-copied and restored verbatim after the rebuild (defensive —
         production ALTO rarely has HYPs on non-hyphenated lines).
     """
+    # Audit-F6 — trim leading/trailing whitespace before tokenizing: the
+    # validator accepts corrected text with edge whitespace, and a
+    # trailing SP token used to be emitted while last_word_hpos/width
+    # tracked only String tokens, so the trailing HYP landed ON TOP of
+    # the SP's HPOS range (overlap, children no longer tiling the line).
+    # Trimming matches the fast path, where split() drops edge
+    # whitespace implicitly.
+    corrected = corrected.strip()
+
     # Only an EXPLICITLY hyphenated PART1/BOTH line carries a HYP element.
     # A heuristically-detected PART1 (trailing dash in CONTENT, no HYP /
     # SUBS_TYPE markup) must NOT get a synthesised <HYP CONTENT="-">: that

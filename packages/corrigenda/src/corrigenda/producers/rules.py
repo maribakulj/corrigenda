@@ -98,9 +98,9 @@ class RulesProducer:
 
     # -- pure core -------------------------------------------------------
 
-    def _candidates(self, text: str) -> list[tuple[int, int, str]]:
-        """All (start, end, replacement) matches from every rule, guarded."""
-        out: list[tuple[int, int, str]] = []
+    def _candidates(self, text: str) -> list[tuple[int, int, str, bool]]:
+        """All (start, end, replacement, guarded) matches from every rule."""
+        out: list[tuple[int, int, str, bool]] = []
         for rule in self._rules:
             for m in rule.compiled().finditer(text):
                 start, end = m.start(), m.end()
@@ -115,7 +115,7 @@ class RulesProducer:
                     continue
                 if text[start:end] == replacement:
                     continue  # no-op substitution
-                out.append((start, end, replacement))
+                out.append((start, end, replacement, rule.lexicon_guarded))
         return out
 
     def _word_ok(self, text: str, start: int, end: int, replacement: str) -> bool:
@@ -126,14 +126,55 @@ class RulesProducer:
     def _spans_for_line(self, text: str) -> list[tuple[int, int, str]]:
         """Greedy non-overlapping selection: earliest start, longest at a tie."""
         cands = sorted(self._candidates(text), key=lambda c: (c[0], -(c[1] - c[0])))
-        chosen: list[tuple[int, int, str]] = []
+        chosen: list[tuple[int, int, str, bool]] = []
         cursor = 0
-        for start, end, repl in cands:
+        for start, end, repl, guarded in cands:
             if start < cursor:
                 continue  # overlaps an already-chosen span
-            chosen.append((start, end, repl))
+            chosen.append((start, end, repl, guarded))
             cursor = end
-        return chosen
+        return self._validate_composed_tokens(text, chosen)
+
+    def _validate_composed_tokens(
+        self,
+        text: str,
+        chosen: list[tuple[int, int, str, bool]],
+    ) -> list[tuple[int, int, str]]:
+        """Audit-F11 — re-validate tokens carrying SEVERAL composed edits.
+
+        ``_word_ok`` vets each guarded edit against the ORIGINAL token in
+        isolation, so two individually-valid edits composing inside one
+        whitespace-delimited token can produce a word NOT in the lexicon
+        (e.g. 'cornae' + rn→m + ae→a: 'comae' and 'corna' both pass, the
+        composed 'coma' does not). When a multi-edit token contains at
+        least one guarded edit, the token with ALL its edits applied is
+        re-checked against the lexicon; on failure the whole batch for
+        that token is rejected (conservative-on-ambiguity — emitting a
+        subset would silently change which correction wins).
+        """
+        by_token: dict[tuple[int, int], list[tuple[int, int, str, bool]]] = {}
+        for span in chosen:
+            bounds = _token_bounds(text, span[0], span[1])
+            by_token.setdefault(bounds, []).append(span)
+
+        rejected: set[tuple[int, int]] = set()
+        for (ts, te), spans in by_token.items():
+            if len(spans) < 2 or not any(guarded for *_x, guarded in spans):
+                continue  # single edits keep their historical validation
+            composed = ""
+            cursor = ts
+            for start, end, repl, _guarded in spans:  # already start-ordered
+                composed += text[cursor:start] + repl
+                cursor = end
+            composed += text[cursor:te]
+            if ncfold(composed.strip(_STRIP)) not in self._lexicon:
+                rejected.add((ts, te))
+
+        return [
+            (start, end, repl)
+            for start, end, repl, _guarded in chosen
+            if _token_bounds(text, start, end) not in rejected
+        ]
 
     def build_edit_script(
         self,

@@ -36,6 +36,7 @@ from typing import Literal, Union
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Annotated
 
+from corrigenda.core._norm import has_line_separator
 from corrigenda.core.pairing import HYPHEN_CHARS
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
@@ -192,7 +193,10 @@ def normalize_anchor(
 
 
 def _has_newline(text: str) -> bool:
-    return "\n" in text or "\r" in text
+    # Audit-F10 — twin of the validator's single-line gate: every
+    # str.splitlines boundary counts, not just \n/\r (the shared
+    # predicate keeps the two enforcement points from drifting).
+    return has_line_separator(text)
 
 
 def _changed_chars(original: str, replacement: str) -> int:

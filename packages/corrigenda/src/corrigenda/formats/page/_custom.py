@@ -38,20 +38,39 @@ def _body_has_offset(body: str) -> bool:
 def strip_offset_groups(custom: str) -> tuple[str, int]:
     """Return ``(new_custom, removed_count)`` with offset-anchored groups gone.
 
-    Structural groups are re-emitted verbatim (their captured ``name {body}``
-    span, single-space joined). When every group is offset-anchored the
-    result is the empty string — the caller then removes the attribute
-    entirely rather than leaving ``custom=""``.
+    Structural groups are preserved VERBATIM (Audit-F12): each kept group
+    is the exact source slice (``match.group(0)``), and the original text
+    BETWEEN two kept groups survives untouched when no removed group sat
+    there (non-Transkribus exporters legitimately write
+    ``readingOrder{index:0;}`` with no space — reconstruction from the
+    captured name/body silently normalised it). Where a removed group
+    separated two kept ones, a single space joins them. When nothing is
+    removed the input is returned byte-identical. When every group is
+    offset-anchored the result is the empty string — the caller then
+    removes the attribute entirely rather than leaving ``custom=""``.
     """
-    kept: list[str] = []
+    kept_spans: list[tuple[int, int]] = []
     removed = 0
     for match in _GROUP_RE.finditer(custom):
-        name, body = match.group(1), match.group(2)
-        if _body_has_offset(body):
+        if _body_has_offset(match.group(2)):
             removed += 1
         else:
-            kept.append(f"{name} {{{body}}}")
-    return " ".join(kept), removed
+            kept_spans.append(match.span())
+
+    if removed == 0:
+        return custom, 0
+
+    parts: list[str] = []
+    prev_end: int | None = None
+    for start, end in kept_spans:
+        if prev_end is not None:
+            between = custom[prev_end:start]
+            # Verbatim separator only if no removed group sat in it —
+            # a group brace in the gap means something was cut out.
+            parts.append(between if "{" not in between else " ")
+        parts.append(custom[start:end])
+        prev_end = end
+    return "".join(parts), removed
 
 
 __all__ = ["strip_offset_groups"]

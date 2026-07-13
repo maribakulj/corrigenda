@@ -333,6 +333,21 @@ def reconcile_hyphen_pair(
     if not tokens1 or not tokens2:
         return _fallback
 
+    # --- PART2 absorption guard (Audit-F1) ---
+    # PART2 can absorb trailing words from the NEXT physical line (e.g.
+    # "saires" → "saires du roi") while every downstream check passes:
+    # the explicit-mode boundary join only inspects the first fragment,
+    # the heuristic boundary-word guard only inspects the first word,
+    # and the floor-3 expansion allowance in _part2_text_migrated is too
+    # permissive for a short PART2. The physical line's word count must
+    # not grow — otherwise a merged line survives, violating the "lines
+    # never merge" invariant (the Stage-C absorption guard never re-runs
+    # on a reconciled member). Hoisted here so ALL accept paths share it
+    # (explicit-with-subs, explicit-without-subs, heuristic) — the fix
+    # that preceded Audit-F1 guarded only the explicit-with-subs branch.
+    if len(tokens2) > len(part2.ocr_text.split()):
+        return _fallback
+
     # =================================================================
     # Explicit mode: subs_content is the authority for coherence
     # =================================================================
@@ -348,17 +363,6 @@ def reconcile_hyphen_pair(
             joined = left_bare + right_fragment
 
             if ncfold(joined) == ncfold(effective_subs):
-                # The boundary join can match while PART2 has absorbed
-                # trailing words from the NEXT line (e.g. "saires" →
-                # "saires du roi"): the join only inspects the first
-                # fragment, and the floor-3 expansion allowance in
-                # _part2_text_migrated is too permissive for a short PART2.
-                # In explicit mode the physical line's word count must not
-                # grow — otherwise a merged line survives, violating the
-                # "lines never merge" invariant (the Stage-C absorption
-                # guard never re-runs on a reconciled member).
-                if len(tokens2) > len(part2.ocr_text.split()):
-                    return _fallback
                 return corrected_part1, corrected_part2, effective_subs
             else:
                 return _fallback
