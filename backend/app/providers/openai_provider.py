@@ -32,6 +32,18 @@ def _keep_model(model_id: str) -> bool:
     return True
 
 
+# Audit-F15 — OpenAI's o-series reasoning models only accept the DEFAULT
+# temperature (1) and return a hard 400 for any explicit value (our ramp
+# is 0.0/0.3/0.5). The allowlist advertises them, so omit the parameter
+# for the family; unknown future families are covered by the generic
+# strip-param-on-400 fallback in base.call_llm.
+_NO_TEMPERATURE_PREFIXES = ("o1", "o3", "o4")
+
+
+def _supports_temperature(model: str) -> bool:
+    return not model.lower().startswith(_NO_TEMPERATURE_PREFIXES)
+
+
 class OpenAIProvider:
     async def list_models(self, api_key: str) -> list[ModelInfo]:
         data = await get_json(
@@ -60,9 +72,8 @@ class OpenAIProvider:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        body = {
+        body: dict[str, Any] = {
             "model": model,
-            "temperature": temperature,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
@@ -72,6 +83,9 @@ class OpenAIProvider:
                 "json_schema": json_schema,
             },
         }
+        # Audit-F15 — only send temperature to families that accept it.
+        if _supports_temperature(model):
+            body["temperature"] = temperature
         # Audit P2 — the allowlist admits gpt-4-0613 / gpt-3.5-turbo, which
         # do NOT support response_format:{type:'json_schema'} and return a
         # hard 400. Every other provider passes a fallback_body so a

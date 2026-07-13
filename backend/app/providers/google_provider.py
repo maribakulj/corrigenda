@@ -41,19 +41,29 @@ def _keep_model(model: dict[str, Any]) -> bool:
 
 class GoogleProvider:
     async def list_models(self, api_key: str) -> list[ModelInfo]:
-        data = await get_json(
-            url=f"{_BASE}/v1beta/models",
-            headers=_auth_headers(api_key),
-        )
-
+        # Audit-F16 — the ListModels endpoint is PAGINATED (default page
+        # size 50 + nextPageToken); reading only the first response
+        # silently hid every model past page one. Follow the token with
+        # a safety bound so a misbehaving vendor can't loop us forever.
         models = []
-        for m in data.get("models", []):
-            if not _keep_model(m):
-                continue
-            name: str = m.get("name", "")
-            mid = name.split("/")[-1] if "/" in name else name
-            label = m.get("displayName") or mid
-            models.append(ModelInfo(id=mid, label=label))
+        page_token: str | None = None
+        for _ in range(10):
+            params = {"pageToken": page_token} if page_token else None
+            data = await get_json(
+                url=f"{_BASE}/v1beta/models",
+                headers=_auth_headers(api_key),
+                params=params,
+            )
+            for m in data.get("models", []):
+                if not _keep_model(m):
+                    continue
+                name: str = m.get("name", "")
+                mid = name.split("/")[-1] if "/" in name else name
+                label = m.get("displayName") or mid
+                models.append(ModelInfo(id=mid, label=label))
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
         models.sort(key=lambda m: m.id)
         return models
 

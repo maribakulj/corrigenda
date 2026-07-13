@@ -36,14 +36,38 @@ def _model_output_cap(model: str) -> int:
     # Claude 3.5 family — 8192 output tokens.
     if "claude-3-5" in m or "claude-3.5" in m:
         return 8192
+    # Claude 3.7 — 64k. Audit-F14: this branch MUST precede the generic
+    # 'claude-3' one ("claude-3-7-…" contains the substring "claude-3"),
+    # otherwise 3.7 is silently capped at 4096 and long chunks truncate
+    # into a retry storm.
+    if "claude-3-7" in m or "claude-3.7" in m:
+        return 64_000
     # Claude 3 family (haiku/sonnet/opus) — 4096.
     if "claude-3" in m:
         return 4096
-    # Claude 3.7 / 4.x (sonnet-4, opus-4, etc.) — 64k.
-    if "claude-3-7" in m or "claude-3.7" in m or "-4" in m or "claude-4" in m:
+    # Claude 4.x (sonnet-4, opus-4, etc.) — 64k.
+    if "-4" in m or "claude-4" in m:
         return 64_000
     # Unknown / future model: the safe, universally-supported ceiling.
     return 8192
+
+
+# Audit-F13 — model families that REJECT the `temperature` parameter
+# with a hard 400: Anthropic removed sampling params on Opus 4.7/4.8 and
+# Fable 5/Mythos 5, and Sonnet 5 rejects any NON-default value (our
+# retry ramp 0.0/0.3/0.5 is always non-default, so omit for the family).
+# `list_models` returns the catalog unfiltered, so these are fully
+# selectable; sending temperature failed the whole run (the schema
+# fallback only dropped tool_choice, and the second 400 was permanent).
+# Substring notes: "sonnet-5" does not occur in "claude-3-5-sonnet-…"
+# or "claude-sonnet-4-5". Unknown FUTURE families are covered by the
+# generic strip-param-on-400 fallback in base.call_llm.
+_NO_TEMPERATURE_MARKERS = ("fable", "mythos", "opus-4-7", "opus-4-8", "sonnet-5")
+
+
+def _supports_temperature(model: str) -> bool:
+    m = model.lower()
+    return not any(marker in m for marker in _NO_TEMPERATURE_MARKERS)
 
 
 def _compute_max_tokens(user_payload: dict[str, Any], model: str) -> int:
@@ -138,7 +162,6 @@ class AnthropicProvider:
         body: dict[str, Any] = {
             "model": model,
             "max_tokens": _compute_max_tokens(user_payload, model),
-            "temperature": temperature,
             "system": system_prompt,
             "messages": [
                 {
@@ -155,6 +178,9 @@ class AnthropicProvider:
             ],
             "tool_choice": {"type": "tool", "name": tool_name},
         }
+        # Audit-F13 — only send temperature to families that accept it.
+        if _supports_temperature(model):
+            body["temperature"] = temperature
         # Fallback: keep the tool definition but drop the forced choice. The
         # model may still emit a tool_use voluntarily; otherwise it falls
         # back to free text that we'll attempt to JSON-parse.
