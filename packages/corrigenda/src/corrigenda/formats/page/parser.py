@@ -17,6 +17,11 @@ from pathlib import Path
 from lxml import etree
 
 from corrigenda.core._parse import parse_int_tolerant
+from corrigenda.core.identity import (
+    ensure_element_ids_present,
+    ensure_unique_element_ids,
+    ensure_unique_identities,
+)
 from corrigenda.core.pairing import (
     HYPHEN_CHARS,
     disambiguate_page_ids,
@@ -78,6 +83,87 @@ def _assign_hyphen_roles(lines: list[LineManifest]) -> None:
         # Heuristic mode throughout — no explicit flags, no subs content.
 
 
+def _reading_order_refs(page_el: etree._Element, ns: str) -> list[str]:
+    """Region ids in the page's declared ``ReadingOrder``, flattened.
+
+    P1-1 — ``OrderedGroup`` children are visited by ascending ``@index``
+    (document order breaks ties / missing indexes), ``UnorderedGroup``
+    children in document order; groups nest arbitrarily. Returns ``[]``
+    when the page declares no reading order. Unknown children are skipped.
+    """
+    ro = page_el.find(_tag("ReadingOrder", ns))
+    if ro is None:
+        return []
+
+    _BIG = 10**9
+
+    def group_refs(group: etree._Element) -> list[str]:
+        entries: list[tuple[int, int, list[str]]] = []
+        for seq, child in enumerate(c for c in group if isinstance(c.tag, str)):
+            local = etree.QName(child.tag).localname
+            if local in ("RegionRefIndexed", "RegionRef"):
+                ref = child.get("regionRef")
+                refs = [ref] if ref else []
+            elif local in (
+                "OrderedGroup",
+                "OrderedGroupIndexed",
+                "UnorderedGroup",
+                "UnorderedGroupIndexed",
+            ):
+                refs = group_refs(child)
+            else:
+                continue
+            raw_index = child.get("index")
+            key = parse_int_tolerant(raw_index, _BIG) if raw_index is not None else _BIG
+            entries.append((key, seq, refs))
+        entries.sort(key=lambda t: (t[0], t[1]))
+        return [r for _, _, refs in entries for r in refs]
+
+    return group_refs(ro)
+
+
+def _regions_in_reading_order(page_el: etree._Element, ns: str) -> list[etree._Element]:
+    """Every ``TextRegion`` under the page, in reading order.
+
+    P1-1 — the historical ``findall`` only saw *direct* children of
+    ``Page``, silently dropping regions nested inside another region
+    (PAGE's region hierarchy). ``iter`` collects the whole subtree in
+    document order; each region later contributes only its *direct*
+    ``TextLine`` children, so nested regions' lines are attributed to
+    their own block, never double-counted.
+
+    When the page declares a ``ReadingOrder`` that covers EVERY region
+    carrying an id, regions are reordered to the declared sequence (first
+    occurrence of an id wins). A *partial* declaration — common in tools
+    that only group some articles/tables — is ignored entirely and
+    document order is kept: yanking the referenced regions ahead of every
+    unreferenced one would reorder text the declaration said nothing
+    about (review fix; conservative, mirrors the ALTO IDNEXT fallback
+    rule: never guess on an incomplete declaration).
+    """
+    regions = list(page_el.iter(_tag("TextRegion", ns)))
+    refs = _reading_order_refs(page_el, ns)
+    if not refs or len(regions) < 2:
+        return regions
+    pos: dict[str, int] = {}
+    for i, rid in enumerate(refs):
+        pos.setdefault(rid, i)
+    for region in regions:
+        region_id = region.get("id")
+        if not region_id:
+            # An id-less region can't be placed by the declaration; sorting
+            # would silently yank it to the end (key == len(refs)),
+            # reordering text the declaration said nothing about. Treat it
+            # like a partial declaration and keep document order.
+            return regions
+        if region_id not in pos:
+            return regions  # partial/dangling declaration → document order
+    return sorted(
+        regions,
+        key=lambda r: pos[r.get("id") or ""],
+    )
+
+
 def parse_page_file(
     xml_path: Path,
     source_name: str,
@@ -104,7 +190,7 @@ def parse_page_file(
         lines: list[LineManifest] = []
 
         block_order = 0
-        for region in page_el.findall(_tag("TextRegion", ns)):
+        for region in _regions_in_reading_order(page_el, ns):
             block_id = region.get("id", f"TR_{page_id}_{block_order}")
             block_coords = _coords_of(region, ns)
             line_ids: list[str] = []
@@ -162,6 +248,27 @@ def parse_page_file(
                 lines=lines,
             )
         )
+
+    # P0-5 — duplicate IDs within one file make every downstream
+    # correction-to-line association ambiguous. Refuse explicitly.
+    ensure_unique_identities(pages, source_name)
+    # Review fix — the rewriter matches TextLine ids over the WHOLE
+    # document tree; the parse-time gate must scan the same scope so a
+    # duplicate never surfaces only at rewrite time (after the full
+    # producer spend).
+    ensure_unique_element_ids(
+        (tl.get("id") for tl in root.iter(_tag("TextLine", ns))),
+        source_name,
+        kind="TextLine id(s)",
+    )
+    # An id-less TextLine gets a fabricated manifest id the rewriter can
+    # never match (it keys off the real ``id`` attribute), so its
+    # correction would be silently dropped — refuse it instead.
+    ensure_element_ids_present(
+        (tl.get("id") for tl in root.iter(_tag("TextLine", ns))),
+        source_name,
+        kind="TextLine element(s)",
+    )
 
     return pages, root
 

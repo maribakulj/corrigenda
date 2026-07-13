@@ -25,10 +25,15 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           fetch-depth: 0
 
+      # NOTE (audit): the generic Dockerfile now defaults
+      # TRUSTED_PROXIES=127.0.0.1. The HF Space must set
+      # TRUSTED_PROXIES=* in its Settings -> Variables (the HF edge
+      # proxy sanitises X-Forwarded-For, so the wildcard is safe THERE
+      # and required for per-IP rate limiting to see real client IPs).
       - name: Push to HF Spaces
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}

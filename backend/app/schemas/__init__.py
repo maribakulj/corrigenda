@@ -40,9 +40,15 @@ from app.schemas.http import (
 )
 
 # Server-side job enums + record — moved out of corrigenda by spec F12.
-from app.schemas.job import JobManifest, JobStatus, Provider
+from app.schemas.job import (
+    TERMINAL_SUCCESS_STATES,
+    JobManifest,
+    JobStatus,
+    Provider,
+)
 
 __all__ = [
+    "TERMINAL_SUCCESS_STATES",
     # Domain (corrigenda)
     "BlockManifest",
     "ChunkGranularity",

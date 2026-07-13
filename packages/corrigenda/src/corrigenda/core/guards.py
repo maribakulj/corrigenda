@@ -30,8 +30,14 @@ The thresholds intentionally differ and tune TOGETHER (all read from
 ``GuardConfig``, F13): tightening one stage without the others can leak
 migrations through the gap.
 
-  - Stage A is the *strictest* — a hyphen drift is suspicious enough to
-    retry the whole chunk before any fallback.
+  - Stage A carries the *most aggressive remedy* — a hyphen drift is
+    suspicious enough to retry the whole chunk before any fallback. Its
+    numeric thresholds are deliberately MORE permissive than Stage B's
+    (PART1 growth: 2 words at A vs 1 at B — see ``GuardConfig``): a cheap
+    retry only fires on gross drift, then the strict Stage B bound decides
+    what actually survives reconciliation. (P2-7 — this line used to call
+    Stage A "the strictest", contradicting the config's documented
+    values; "strict" here always meant the remedy, not the thresholds.)
   - Stage B catches drift the LLM produced despite the retry; the fallback
     preserves the OCR pair atomically. Its predicates live in
     ``hyphenation.py`` beside their sole caller (``reconcile_hyphen_pair``).
@@ -193,8 +199,13 @@ def check_adjacent_duplicates(
         id_a, src_a, cor_a = lines[i]
         id_b, src_b, cor_b = lines[i + 1]
 
-        # Skip if either is already flagged
-        if id_a in revert or id_b in revert:
+        # Skip only if the RIGHT line is already flagged (nothing new to
+        # decide). When only the left line is already flagged we must still
+        # evaluate the right one against it — otherwise a run of three or
+        # more identical corrections leaves its third line unreverted
+        # (i=0 flags lines 0,1; i=1 would `continue` on the flagged line 1
+        # and never test line 2).
+        if id_b in revert:
             continue
 
         # Corrections must be very similar

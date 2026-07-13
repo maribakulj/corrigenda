@@ -163,17 +163,21 @@ def _upload_sample(
     )
 
 
-def _poll_completed(client: TestClient, job_id: str, tries: int = 80) -> str:
+def _poll_completed(
+    client: TestClient, job_id: str, token: str | None = None, tries: int = 80
+) -> str:
     """
     Poll GET /api/jobs/{id} until terminal state.
 
     The background asyncio.create_task runs in TestClient's portal thread;
     time.sleep releases the GIL and lets that thread advance the event loop.
+    P1-7 — API-created jobs require their capability token.
     """
+    headers = {"X-Job-Token": token} if token else {}
     for _ in range(tries):
         time.sleep(0.1)
-        status = client.get(f"/api/jobs/{job_id}").json()["status"]
-        if status in ("completed", "failed"):
+        status = client.get(f"/api/jobs/{job_id}", headers=headers).json()["status"]
+        if status in ("completed", "completed_with_fallbacks", "failed"):
             return status
     return "timeout"
 
@@ -192,7 +196,7 @@ def test_upload_single_xml():
         body = resp.json()
         assert "job_id" in body
 
-        status = _poll_completed(client, body["job_id"])
+        status = _poll_completed(client, body["job_id"], body.get("job_token"))
         assert status == "completed"
     finally:
         _restore(client)
@@ -220,8 +224,9 @@ def test_upload_zip():
         )
         assert resp.status_code == 200
         job_id = resp.json()["job_id"]
+        token = resp.json()["job_token"]
 
-        status = _poll_completed(client, job_id)
+        status = _poll_completed(client, job_id, token)
         assert status == "completed"
 
         assert len(get_output_files(job_id)) == 2
@@ -389,7 +394,7 @@ def test_fallback_on_invalid_json():
 
     job = store.get_job(job_id)
     assert job is not None
-    assert job.status.value == "completed"
+    assert job.status.value == "completed_with_fallbacks"
     assert job.fallbacks > 0, "Expected at least one fallback to OCR source"
 
     # Output must still be valid ALTO XML
@@ -547,17 +552,19 @@ def test_zip_with_images():
         )
         assert resp.status_code == 200
         job_id = resp.json()["job_id"]
+        token = resp.json()["job_token"]
 
-        status = _poll_completed(client, job_id)
+        status = _poll_completed(client, job_id, token)
         assert status == "completed"
 
         # Layout should reference the image
-        layout = client.get(f"/api/jobs/{job_id}/layout").json()
+        layout = client.get(f"/api/jobs/{job_id}/layout", headers={"X-Job-Token": token}).json()
         image_url = layout["pages"][0].get("image_url")
         assert image_url is not None, "image_url should be set when image matches ALTO stem"
 
-        # Image endpoint should return the PNG bytes
-        img_resp = client.get(image_url)
+        # Image endpoint should return the PNG bytes. P1-7 — <img> URLs
+        # carry the token as a query param (no headers on <img> tags).
+        img_resp = client.get(f"{image_url}?token={token}")
         assert img_resp.status_code == 200
         assert img_resp.headers["content-type"] == "image/png"
         assert img_resp.content[:8] == b"\x89PNG\r\n\x1a\n"

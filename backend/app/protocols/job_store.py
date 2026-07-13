@@ -43,7 +43,10 @@ class JobStore(Protocol):
         error: str | None = None,
         images: dict[str, str] | None = None,
         report: Any | None = None,
+        token_hash: str | None = None,
     ) -> None: ...
+
+    def delete_job(self, job_id: str) -> None: ...
 
     def emit(self, job_id: str, event: str, data: dict[str, Any]) -> None: ...
 

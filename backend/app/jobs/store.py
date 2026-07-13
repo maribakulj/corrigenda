@@ -33,9 +33,14 @@ from app.schemas import (
 
 logger = logging.getLogger(__name__)
 
-# Completed/failed jobs are evicted after this many seconds.
+# Terminal jobs are evicted after this many seconds.
 _DEFAULT_TTL_SECONDS = 3600  # 1 hour
 _MAX_COMPLETED_JOBS = 200
+
+#: Every state after which a job never changes again (eviction-eligible).
+_TERMINAL_STATES = frozenset(
+    {JobStatus.COMPLETED, JobStatus.COMPLETED_WITH_FALLBACKS, JobStatus.FAILED}
+)
 
 
 class JobStore:
@@ -63,8 +68,11 @@ class JobStore:
     # ------------------------------------------------------------------
 
     def create_job(self, provider: Provider, model: str) -> str:
+        # Opportunistic eviction (kept for burst hygiene); the periodic
+        # sweep() is the guaranteed path. _evict_stale manages the lock
+        # itself and does its disk I/O outside it (P1-4).
+        self._evict_stale()
         with self._lock:
-            self._evict_stale()
             job_id = str(uuid.uuid4())
             self._jobs[job_id] = JobManifest(
                 job_id=job_id,
@@ -75,15 +83,27 @@ class JobStore:
             return job_id
 
     def get_job(self, job_id: str) -> JobManifest | None:
-        # L10/F7 — return a SNAPSHOT (model_copy) under the lock so the
-        # caller sees a consistent view across multiple attribute reads.
-        # Pre-fix this returned the live `_jobs[job_id]` reference, so an
-        # HTTP handler doing `job.status; job.total_lines; job.retries;
-        # job.error` (eight reads in JobStatusResponse) could observe an
-        # `update_job` in flight and emit a torn payload (e.g. status =
-        # COMPLETED but counters from the pre-completion update).
-        # Snapshot cost: ~1 dict-copy + recursive submodel copies; cheap
-        # given the read frequency.
+        """Return a SHALLOW snapshot of the job (P1-3, honest contract).
+
+        The top-level field dict is copied under the lock, so the eight
+        scalar reads of a JobStatusResponse always see one consistent
+        update (no torn payload). Sub-objects (``document_manifest``,
+        ``report``) are SHARED with the live job, NOT deep-copied — a
+        deep copy costs ~17 ms per 800 lines (measured) and would be
+        paid on every status poll of a large corpus.
+
+        Reader contract that makes the shallow copy safe:
+        - while a job is non-terminal, only scalar fields may be read
+          (the status endpoint does exactly that); the live manifest is
+          being mutated by the pipeline during the run;
+        - the heavy sub-objects are only consumed through
+          ``get_completed_job`` (trace/diff/layout), which requires a
+          TERMINAL state — after which nothing mutates them, and
+          ``update_job`` REPLACES sub-objects instead of mutating them
+          in place, so a reader holding the old one sees a coherent
+          value. A future shared (multi-worker) store returns
+          deserialized copies by construction.
+        """
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
@@ -105,6 +125,7 @@ class JobStore:
         error: str | None = None,
         images: dict[str, str] | None = None,
         report: CorrectionReport | None = None,
+        token_hash: str | None = None,
     ) -> None:
         """Update mutable fields on the job manifest. None means "do not touch".
 
@@ -139,8 +160,13 @@ class JobStore:
                 job.images = images
             if report is not None:
                 job.report = report
-            # Track when a job reaches terminal state for eviction
-            if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+            if token_hash is not None:
+                job.token_hash = token_hash
+            # Track when a job reaches terminal state for eviction.
+            # Uses the full terminal set — COMPLETED_WITH_FALLBACKS (P0-1)
+            # included; forgetting a terminal state here means the job is
+            # NEVER TTL-evicted.
+            if job.status in _TERMINAL_STATES:
                 self._completed_at.setdefault(job_id, time.monotonic())
 
     # ------------------------------------------------------------------
@@ -249,7 +275,11 @@ class JobStore:
             #     queue → drain and yield it.
             #   - Job is still running → drop to the normal poll loop.
             job = self._jobs.get(job_id)
-            if job is not None and job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+            # Audit P1 — must include COMPLETED_WITH_FALLBACKS: a degraded
+            # success that finished before the client subscribed would
+            # otherwise drop to the poll loop and hang forever (its real
+            # terminal event already fired and will never come again).
+            if job is not None and job.status in _TERMINAL_STATES:
                 # Drain anything already buffered (events that arrived
                 # between subscribe and this re-check) before falling
                 # back to a synthetic terminal event. `get_nowait` is
@@ -260,7 +290,32 @@ class JobStore:
                     yield buffered
                     if buffered.event in ("completed", "failed"):
                         return
-                yield SSEEvent(event=job.status.value, data={"job_id": job_id})
+                # Synthetic terminal. The event NAME must be one the
+                # client listens for ("completed"/"failed"), NOT the raw
+                # status value ("completed_with_fallbacks" is not a
+                # listener) — and it must carry the full payload the live
+                # 'completed' event does, so the client doesn't read
+                # undefined fields. hyphen_pairs_total isn't stored on the
+                # manifest; 0 is a safe default the client tolerates.
+                if job.status == JobStatus.FAILED:
+                    yield SSEEvent(
+                        event="failed",
+                        data={"job_id": job_id, "error": job.error or "job failed"},
+                    )
+                else:
+                    yield SSEEvent(
+                        event="completed",
+                        data={
+                            "job_id": job_id,
+                            "total_lines": job.total_lines,
+                            "lines_modified": job.lines_modified,
+                            "hyphen_pairs_total": 0,
+                            "chunks_total": job.chunks_total,
+                            "duration_seconds": job.duration_seconds or 0.0,
+                            "status": job.status.value,
+                            "fallbacks": job.fallbacks,
+                        },
+                    )
                 return
 
             while True:
@@ -278,41 +333,75 @@ class JobStore:
     # Eviction
     # ------------------------------------------------------------------
 
-    def _evict_stale(self) -> None:
-        """Remove completed/failed jobs older than TTL or exceeding cap.
+    def _collect_stale_locked(self) -> list[str]:
+        """Pop stale terminal jobs from the in-memory structures and return
+        their ids for OUT-OF-LOCK disk cleanup.
 
-        Caller must hold ``self._lock`` — currently invoked only from
-        ``create_job`` which acquires it. The RLock is re-entrant so the
-        nested ``_remove_job`` calls below don't deadlock.
+        Caller must hold ``self._lock``. P1-4 — the historical version
+        ran ``shutil.rmtree`` (hundreds of MB, seconds of I/O) while
+        still holding the global lock, stalling every create/update/SSE
+        emit — and the event loop itself — for the duration.
         """
         now = time.monotonic()
-        expired = [jid for jid, ts in self._completed_at.items() if now - ts > self._ttl_seconds]
-        for jid in expired:
-            self._remove_job(jid)
-
+        stale = [jid for jid, ts in self._completed_at.items() if now - ts > self._ttl_seconds]
         # Hard cap: if too many completed jobs, evict oldest first
         if len(self._completed_at) > _MAX_COMPLETED_JOBS:
             by_age = sorted(self._completed_at, key=self._completed_at.get)  # type: ignore[arg-type]
             excess = len(self._completed_at) - _MAX_COMPLETED_JOBS
             for jid in by_age[:excess]:
-                self._remove_job(jid)
+                if jid not in stale:
+                    stale.append(jid)
+        for jid in stale:
+            self._pop_job_locked(jid)
+        return stale
 
-    def _remove_job(self, job_id: str) -> None:
-        """Pop a job + its subscribers + its completion timestamp.
+    def _evict_stale(self) -> None:
+        """Evict stale jobs. Takes the lock itself; disk cleanup happens
+        AFTER the lock is released (P1-4)."""
+        with self._lock:
+            stale = self._collect_stale_locked()
+        for jid in stale:
+            self._cleanup_disk(jid)
 
-        Caller MUST hold ``self._lock`` — currently invoked only from
-        ``_evict_stale``, which is itself called from ``create_job``
-        under the lock. We don't re-acquire it here even though RLock
-        would tolerate it: doing so would (a) violate the documented
-        contract and (b) confuse future maintainers about the
-        ownership model. The filesystem cleanup below intentionally
-        runs OUTSIDE the lock since it touches disk and never re-enters
-        the store.
+    def sweep(self) -> int:
+        """Public periodic-eviction entry point (P1-4).
+
+        Historically eviction only ran inside ``create_job``: a server
+        that stopped receiving new jobs kept every expired job's files
+        on disk forever. The lifespan task calls this on an interval.
+        Returns the number of jobs evicted (for the sweep log line).
         """
+        with self._lock:
+            stale = self._collect_stale_locked()
+        for jid in stale:
+            self._cleanup_disk(jid)
+        return len(stale)
+
+    def delete_job(self, job_id: str) -> None:
+        """Remove a job's record, subscribers and disk artefacts.
+
+        P1-10 — public rollback seam: ``create_job``'s HTTP handler
+        registers the job before extraction/parsing/validation, so any
+        failure in that window must delete the half-created job instead
+        of leaving it QUEUED forever (a never-terminal job is never
+        TTL-evicted). Also usable by an explicit user-facing delete.
+        Disk cleanup runs after the lock is released (P1-4).
+        """
+        with self._lock:
+            self._pop_job_locked(job_id)
+        self._cleanup_disk(job_id)
+
+    def _pop_job_locked(self, job_id: str) -> None:
+        """Pop a job + its subscribers + its completion timestamp from the
+        in-memory structures ONLY. Caller must hold ``self._lock``; disk
+        cleanup is the caller's responsibility, outside the lock."""
         self._jobs.pop(job_id, None)
         self._subscribers.pop(job_id, None)
         self._completed_at.pop(job_id, None)
-        # Clean up disk storage for evicted jobs (best-effort, no lock).
+
+    @staticmethod
+    def _cleanup_disk(job_id: str) -> None:
+        """Best-effort disk cleanup — must NEVER be called under the lock."""
         try:
             from app.storage import cleanup_job
 

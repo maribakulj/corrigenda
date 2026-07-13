@@ -57,6 +57,54 @@ _RESERVED_ATTRS = frozenset(
 )
 
 
+class RedactionFilter(logging.Filter):
+    """P1-6 — central secret redaction, applied to EVERY record before any
+    handler formats it.
+
+    HTTP responses were already sanitised, but the runner logged the raw
+    exception (``logger.exception`` BEFORE computing the safe message),
+    the task registry logged raw tracebacks, and the formatters
+    serialised both verbatim — so an API key embedded in a provider
+    error message could reach the logs unmasked. Redacting in a root
+    filter closes every path at once (message, formatted traceback,
+    JSON extras), whatever the call site does.
+
+    Uses the library's pattern-based ``sanitize_error`` (Bearer/Basic
+    tokens, ``sk-``/``key-`` shapes, ``api_key=`` fragments, …); the
+    exact-key replacement can't run here (the filter doesn't know the
+    key), which is precisely why the patterns must be format-level.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        from corrigenda import sanitize_error
+
+        try:
+            message = record.getMessage()
+        except Exception:
+            message = str(record.msg)
+        redacted = sanitize_error(message)
+        if redacted != message or record.args:
+            record.msg = redacted
+            record.args = None
+        if record.exc_info and record.exc_info != (None, None, None):
+            # Format the traceback ONCE here, redact it, and stash it in
+            # exc_text — logging.Formatter.format() reuses exc_text when
+            # present instead of re-formatting exc_info.
+            record.exc_text = sanitize_error(logging.Formatter().formatException(record.exc_info))
+            record.exc_info = None
+        # Audit P3 — the JSON formatter copies every non-reserved record
+        # attribute (logger.X(..., extra={...})) into the payload
+        # verbatim, so a string extra like {"raw": "Authorization: Bearer
+        # sk-…"} bypassed redaction entirely. Sanitise string-valued
+        # extras here too, closing the docstring's promise.
+        for key, value in record.__dict__.items():
+            if key in _RESERVED_ATTRS or key.startswith("_"):
+                continue
+            if isinstance(value, str):
+                setattr(record, key, sanitize_error(value))
+        return True
+
+
 class JsonFormatter(logging.Formatter):
     """Render every log record as a single-line JSON object.
 
@@ -75,7 +123,11 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        if record.exc_info:
+        if record.exc_text:
+            # P1-6 — the RedactionFilter pre-formats and redacts the
+            # traceback into exc_text.
+            payload["exception"] = record.exc_text
+        elif record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
         # Propagate `extra={...}` fields the caller attached to the record.
         for key, value in record.__dict__.items():
@@ -102,6 +154,9 @@ def setup_json_logging(*, level: str | None = None) -> None:
     use_json = os.environ.get("LOG_FORMAT", "json").lower() != "plain"
 
     handler = logging.StreamHandler(sys.stdout)
+    # P1-6 — every record is redacted before ANY formatter sees it,
+    # in the JSON shape and the plain dev shape alike.
+    handler.addFilter(RedactionFilter())
     if use_json:
         handler.setFormatter(JsonFormatter())
     else:

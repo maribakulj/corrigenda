@@ -65,6 +65,7 @@ from corrigenda.core.schemas import (
 from corrigenda.errors import (
     CorrectionAborted,
     CorrectionError,
+    DuplicateIdError,
     ParseError,
     ValidationError,
 )
@@ -182,6 +183,7 @@ __all__ = [
     # Errors (§8.4)
     "CorrectionError",
     "ParseError",
+    "DuplicateIdError",
     "ValidationError",
     "CorrectionAborted",
     # Ports

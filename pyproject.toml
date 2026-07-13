@@ -7,7 +7,7 @@
 # backend declares its dependency on corrigenda via a relative path.
 
 [project]
-name = "alto-llm-corrector-workspace"
+name = "corrigenda-workspace"
 version = "0.0.0"
 description = "Workspace root — not published"
 requires-python = ">=3.11"

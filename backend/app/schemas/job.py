@@ -22,7 +22,18 @@ class JobStatus(str, Enum):
     STARTED = "started"
     RUNNING = "running"
     COMPLETED = "completed"
+    #: P0-1 — terminal success where one or more lines fell back to their
+    #: OCR source text (rejected LLM output, repeated per-chunk failures).
+    #: The corrected files are valid and downloadable, but the run is
+    #: explicitly DEGRADED: consumers must be able to distinguish "every
+    #: line went through the provider" from "some lines silently kept
+    #: their OCR text". COMPLETED now strictly means zero fallbacks.
+    COMPLETED_WITH_FALLBACKS = "completed_with_fallbacks"
     FAILED = "failed"
+
+
+#: The two terminal states whose outputs are valid and downloadable.
+TERMINAL_SUCCESS_STATES = frozenset({JobStatus.COMPLETED, JobStatus.COMPLETED_WITH_FALLBACKS})
 
 
 class Provider(str, Enum):
@@ -49,6 +60,10 @@ class JobManifest(BaseModel):
     job_id: str
     provider: Provider
     model: str
+    # P1-7 — SHA-256 hex of the capability token required to access this
+    # job's endpoints. None = legacy/direct-store job (no enforcement) —
+    # every job created through the public API carries one.
+    token_hash: str | None = None
     status: JobStatus = JobStatus.QUEUED
     document_manifest: DocumentManifest | None = None
     total_lines: int = 0
@@ -67,4 +82,4 @@ class JobManifest(BaseModel):
     report: CorrectionReport | None = None
 
 
-__all__ = ["JobManifest", "JobStatus", "Provider"]
+__all__ = ["TERMINAL_SUCCESS_STATES", "JobManifest", "JobStatus", "Provider"]

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
 import tempfile
 import zipfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+from corrigenda.core.schemas import PairingPolicy
 from corrigenda.formats.alto.parser import build_document_manifest
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -22,9 +25,9 @@ from app.jobs import runner as _runner_module
 from app.jobs.runner import JobRunner
 from app.protocols import JobStore
 from app.schemas import (
+    TERMINAL_SUCCESS_STATES,
     CreateJobResponse,
     JobManifest,
-    JobStatus,
     JobStatusResponse,
     Provider,
 )
@@ -51,21 +54,73 @@ _ALLOWED_UPLOAD_EXTENSIONS = {".xml", ".alto", ".zip"}
 # the constant without re-importing the module.
 _MAX_UPLOAD_FILE_BYTES = 100 * 1024 * 1024  # 100 MiB
 
+# P0-3 — the per-file cap alone was bypassable by cardinality: 30 files
+# of 100 MiB each stayed under it while pinning ~3 GiB in the process.
+# Both the file count and the WHOLE request's cumulative bytes are now
+# bounded (checked incrementally, so an oversized request 413s as soon
+# as the running total crosses the cap — not after buffering it all).
+_MAX_UPLOAD_FILES = 100
+_MAX_TOTAL_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MiB per request
+
+# P1-5 — admission control. The 20/min rate limit throttles REQUESTS,
+# not concurrency: with jobs allowed to run up to 1800 s, unbounded
+# admissions stack dozens of concurrent pipelines (and their provider
+# spend). active_count existed but gated nothing. Refusals are explicit
+# 503s with Retry-After — an overload policy, not a silent queue.
+_MAX_ACTIVE_JOBS = int(os.environ.get("MAX_ACTIVE_JOBS", "4"))
+
 
 # ---------------------------------------------------------------------------
-# Shared dependency for endpoints that require a completed job with a manifest
+# Shared dependencies: capability-token access + completed-job resolution
 # ---------------------------------------------------------------------------
 
 
-def get_completed_job(
+def _token_matches(job: JobManifest, presented: str | None) -> bool:
+    if not presented:
+        return False
+    digest = hashlib.sha256(presented.encode("utf-8")).hexdigest()
+    return secrets.compare_digest(digest, job.token_hash or "")
+
+
+def require_job_access(
     job_id: str,
+    request: Request,
     store: JobStore = Depends(get_job_store),
 ) -> JobManifest:
-    """FastAPI dependency: resolve job_id → JobManifest or raise 4xx."""
+    """P1-7 — capability-token gate on every job endpoint.
+
+    The job_id used to be the ONLY secret — a UUID that leaks into
+    operator logs, browser history and referrers gave full read access
+    to a stranger's OCR text, corrections and images. Every job created
+    through the public API now carries a token (only its SHA-256 hash is
+    stored); callers present it via the ``X-Job-Token`` header, or via
+    ``?token=`` for the surfaces that cannot set headers (EventSource,
+    <img>, download links). Jobs created OUTSIDE the HTTP layer (direct
+    store access — tests, embedding consumers) have no hash and are not
+    gated. Missing/wrong token → 404, not 403: an unauthenticated caller
+    must not be able to distinguish "job exists" from "job doesn't".
+
+    Deployment model (decided): the app runs behind the institution's
+    SSO/reverse-proxy for authentication; this token provides per-job
+    isolation BETWEEN authenticated users, not user authentication.
+    """
     job = store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
-    if job.status != JobStatus.COMPLETED:
+    if job.token_hash is not None:
+        presented = request.headers.get("x-job-token") or request.query_params.get("token")
+        if not _token_matches(job, presented):
+            raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+    return job
+
+
+def get_completed_job(
+    job: JobManifest = Depends(require_job_access),
+) -> JobManifest:
+    """FastAPI dependency: access-checked job in a terminal-success state."""
+    # P0-1 — both terminal success states expose their (valid) outputs;
+    # COMPLETED_WITH_FALLBACKS is degraded but downloadable by design.
+    if job.status not in TERMINAL_SUCCESS_STATES:
         raise HTTPException(
             status_code=400,
             detail=f"Job is not completed yet (status: {job.status.value})",
@@ -90,9 +145,30 @@ async def create_job(
     provider: str = Form(...),
     api_key: str = Form(...),
     model: str = Form(...),
+    # P1-2 opt-out — the default PairingPolicy vets heuristic hyphen
+    # pairs geometrically; exotic layouts can restore the historical
+    # purely-sequential pairing without forking the deployment.
+    geometric_pairing: bool = Form(True),
     store: JobStore = Depends(get_job_store),
 ) -> CreateJobResponse:
     """Upload ALTO files and start a correction job."""
+    # P1-5 — admission control before reading a single byte: the task
+    # registry's live count is the source of truth for running pipelines.
+    if request.app.state.tasks.active_count >= _MAX_ACTIVE_JOBS:
+        raise HTTPException(
+            status_code=503,
+            detail=(f"Server is at capacity ({_MAX_ACTIVE_JOBS} concurrent jobs). Retry shortly."),
+            headers={"Retry-After": "30"},
+        )
+    # P0-3 — cardinality bound before reading a single byte.
+    if len(files) > _MAX_UPLOAD_FILES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Too many files ({len(files)}, max {_MAX_UPLOAD_FILES}). "
+                "Group them into a ZIP archive or split the job."
+            ),
+        )
     # Validate upload extensions
     for f in files:
         suffix = Path(f.filename or "").suffix.lower()
@@ -114,6 +190,8 @@ async def create_job(
     # process. We read `cap + 1` bytes and reject if the result is
     # longer than `cap` (i.e. there was at least one more byte to read).
     cap = _MAX_UPLOAD_FILE_BYTES
+    total_cap = _MAX_TOTAL_UPLOAD_BYTES
+    total_bytes = 0
     file_tuples: list[tuple[str, bytes]] = []
     for f in files:
         content = await f.read(cap + 1)
@@ -125,71 +203,118 @@ async def create_job(
                     f"limit ({cap} bytes). Split the upload or reduce its size."
                 ),
             )
+        # P0-3 — cumulative bound: reject as soon as the running total
+        # crosses the request cap, before buffering the remaining files.
+        total_bytes += len(content)
+        if total_bytes > total_cap:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Upload exceeds the total request limit "
+                    f"({total_cap} bytes). Split the job into smaller batches."
+                ),
+            )
         file_tuples.append((f.filename or "upload.xml", content))
 
-    # Create job and dirs
+    # Create job and dirs. P1-10 — everything from here to the spawn is
+    # TRANSACTIONAL: the job record and its directories exist before
+    # extraction/parsing/validation, so any failure in that window must
+    # roll both back. Historically a parse failure left a QUEUED job with
+    # files on disk forever (never terminal -> never TTL-evicted).
     job_id = store.create_job(provider_enum, model)
-    init_job_dirs(job_id)
-
-    # Save and extract files (also extracts images from ZIPs)
-    saved, image_files = save_uploaded_files(job_id, file_tuples)
-
-    if not saved:
-        raise HTTPException(
-            status_code=400,
-            detail="No ALTO/XML files found after extraction.",
-        )
-
-    # Build document manifest
-    file_pairs = [(path, name) for name, path in saved.items()]
+    # P1-7 — capability token: shown once in the response; only its hash
+    # is stored. Every job endpoint requires it from now on.
+    job_token = secrets.token_urlsafe(32)
+    store.update_job(job_id, token_hash=hashlib.sha256(job_token.encode("utf-8")).hexdigest())
     try:
-        doc_manifest = build_document_manifest(file_pairs)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to parse files: {exc}") from exc
+        init_job_dirs(job_id)
 
-    if doc_manifest.total_lines == 0:
-        raise HTTPException(
-            status_code=400,
-            detail="No text lines found in the uploaded ALTO files.",
+        # Save and extract files (also extracts images from ZIPs).
+        # ValueError = bounded/refused input (zip bomb, name collision,
+        # too many members) — a client error, not a server fault (P1-9).
+        try:
+            saved, image_files = save_uploaded_files(job_id, file_tuples)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if not saved:
+            raise HTTPException(
+                status_code=400,
+                detail="No ALTO/XML files found after extraction.",
+            )
+
+        # Build document manifest
+        pairing_policy = PairingPolicy(geometric_checks=geometric_pairing)
+        file_pairs = [(path, name) for name, path in saved.items()]
+        try:
+            doc_manifest = build_document_manifest(file_pairs, pairing_policy=pairing_policy)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to parse files: {exc}") from exc
+
+        if doc_manifest.total_lines == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No text lines found in the uploaded ALTO files.",
+            )
+
+        pages_info = [(p.page_id, p.source_file) for p in doc_manifest.pages]
+        images_map = link_alto_to_images(pages_info, saved, image_files)
+        store.update_job(job_id, document_manifest=doc_manifest, images=images_map)
+
+        # Resolve provider instance
+        from app.providers import get_provider as _get_provider
+
+        provider_instance = _get_provider(provider_enum)
+
+        out_dir = output_dir(job_id)
+
+        runner = JobRunner(job_store=store)
+        output_writer_instance = FilesystemOutputWriter(out_dir)
+
+        # Audit P2 — the early admission check (before reading uploads) is
+        # only fail-fast: the handler awaits file reads afterwards, so N
+        # concurrent uploads could all pass it while active_count was
+        # still low, then all spawn. This AUTHORITATIVE re-check sits
+        # immediately before the synchronous spawn() with NO await
+        # between them, so in single-worker asyncio the check-and-spawn is
+        # atomic (no yield point) and the cap is never exceeded.
+        if request.app.state.tasks.active_count >= _MAX_ACTIVE_JOBS:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Server is at capacity ({_MAX_ACTIVE_JOBS} concurrent jobs). Retry shortly."
+                ),
+                headers={"Retry-After": "30"},
+            )
+
+        # Spawn correction through the per-app registry so the task is
+        # strongly referenced (prevents GC mid-run) AND so the lifespan
+        # handler can drain it on SIGTERM. Crash logging is centralised
+        # in BackgroundTaskRegistry._on_done.
+        request.app.state.tasks.spawn(
+            runner.run(
+                job_id=job_id,
+                document_manifest=doc_manifest,
+                provider_name=provider,
+                api_key=api_key,
+                model=model,
+                output_writer=output_writer_instance,
+                source_files={name: path for name, path in saved.items()},
+                provider=provider_instance,
+                # Lookup is dynamic (not a snapshot) so tests that
+                # `monkeypatch.setattr("app.jobs.runner.DEFAULT_JOB_TIMEOUT_SECONDS", N)`
+                # actually see the override at spawn time.
+                timeout_seconds=_runner_module.DEFAULT_JOB_TIMEOUT_SECONDS,
+            ),
+            name=f"run_job:{job_id}",
         )
+    except BaseException:
+        # P1-10 — rollback: no half-created QUEUED job may survive a
+        # failed creation (they are never terminal, hence never evicted).
+        store.delete_job(job_id)
+        raise
 
-    pages_info = [(p.page_id, p.source_file) for p in doc_manifest.pages]
-    images_map = link_alto_to_images(pages_info, saved, image_files)
-    store.update_job(job_id, document_manifest=doc_manifest, images=images_map)
-
-    # Resolve provider instance
-    from app.providers import get_provider as _get_provider
-
-    provider_instance = _get_provider(provider_enum)
-
-    out_dir = output_dir(job_id)
-
-    runner = JobRunner(job_store=store)
-    output_writer_instance = FilesystemOutputWriter(out_dir)
-
-    # Spawn correction through the per-app registry so the task is
-    # strongly referenced (prevents GC mid-run) AND so the lifespan
-    # handler can drain it on SIGTERM. Crash logging is centralised
-    # in BackgroundTaskRegistry._on_done.
-    request.app.state.tasks.spawn(
-        runner.run(
-            job_id=job_id,
-            document_manifest=doc_manifest,
-            provider_name=provider,
-            api_key=api_key,
-            model=model,
-            output_writer=output_writer_instance,
-            source_files={name: path for name, path in saved.items()},
-            provider=provider_instance,
-            # Lookup is dynamic (not a snapshot) so tests that
-            # `monkeypatch.setattr("app.jobs.runner.DEFAULT_JOB_TIMEOUT_SECONDS", N)`
-            # actually see the override at spawn time.
-            timeout_seconds=_runner_module.DEFAULT_JOB_TIMEOUT_SECONDS,
-        ),
-        name=f"run_job:{job_id}",
-    )
-
-    return CreateJobResponse(job_id=job_id)
+    return CreateJobResponse(job_id=job_id, job_token=job_token)
 
 
 # ---------------------------------------------------------------------------
@@ -199,14 +324,9 @@ async def create_job(
 
 @router.get("/{job_id}", response_model=JobStatusResponse)
 async def get_job(
-    job_id: str,
-    store: JobStore = Depends(get_job_store),
+    job: JobManifest = Depends(require_job_access),
 ) -> JobStatusResponse:
     """Poll the status of a correction job."""
-    job = store.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
-
     return JobStatusResponse(
         job_id=job.job_id,
         status=job.status,
@@ -229,10 +349,10 @@ async def get_job(
 async def job_events(
     job_id: str,
     store: JobStore = Depends(get_job_store),
+    _job: JobManifest = Depends(require_job_access),
 ) -> EventSourceResponse:
-    """SSE stream of correction job events."""
-    if store.get_job(job_id) is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+    """SSE stream of correction job events. P1-7 — EventSource cannot set
+    headers, so the capability token arrives as ``?token=``."""
 
     async def generator() -> AsyncGenerator[dict, None]:
         async for sse_event in store.stream_events(job_id):
@@ -252,11 +372,18 @@ async def job_events(
 @router.get("/{job_id}/download")
 async def download_job(
     job_id: str,
-    store: JobStore = Depends(get_job_store),
+    job: JobManifest = Depends(require_job_access),
 ) -> Response:
     """Download corrected XML file(s)."""
-    if store.get_job(job_id) is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+    # P0-4 — outputs are only served for a terminal-success job. The
+    # writer stages files and only commits on success, but this guard is
+    # the contract: a FAILED/RUNNING job's /download can never return a
+    # partial or stale set, whatever is on disk.
+    if job.status not in TERMINAL_SUCCESS_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Job is not in a downloadable state (status: {job.status.value})."),
+        )
 
     out_files = get_output_files(job_id)
     if not out_files:
@@ -377,22 +504,30 @@ _IMAGE_MIME: dict[str, str] = {
 async def get_job_image(
     job_id: str,
     image_name: str,
-    store: JobStore = Depends(get_job_store),
+    _job: JobManifest = Depends(require_job_access),
 ) -> Response:
-    """Serve a source scan image for a job."""
-    if store.get_job(job_id) is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+    """Serve a source scan image for a job. P1-7 — <img> tags cannot set
+    headers, so the capability token arrives as ``?token=``."""
 
     # Sanitise: only allow plain filenames (no path traversal)
     if "/" in image_name or "\\" in image_name or image_name.startswith("."):
         raise HTTPException(status_code=400, detail="Invalid image name.")
 
-    img_path = (images_dir(job_id) / image_name).resolve()
+    # Audit P3 — check is_symlink on the UNRESOLVED path: resolve()
+    # follows symlinks, so the resolved path is never itself a symlink,
+    # making the old post-resolve is_symlink() check dead code. Reject a
+    # symlinked member up front (defence in depth) before resolving.
+    raw_path = images_dir(job_id) / image_name
+    if raw_path.is_symlink():
+        raise HTTPException(status_code=404, detail=f"Image not found: {image_name!r}")
+    img_path = raw_path.resolve()
     allowed_dir = images_dir(job_id).resolve()
     if not img_path.is_relative_to(allowed_dir):
         raise HTTPException(status_code=400, detail="Invalid image name.")
-    if not img_path.is_file() or img_path.is_symlink():
+    if not img_path.is_file():
         raise HTTPException(status_code=404, detail=f"Image not found: {image_name!r}")
 
     mime = _IMAGE_MIME.get(img_path.suffix.lower(), "application/octet-stream")
-    return Response(content=img_path.read_bytes(), media_type=mime)
+    # P2-12 — stream in chunks like the XML download does; read_bytes()
+    # buffered whole scans (tens of MB) per request in memory.
+    return FileResponse(img_path, media_type=mime)

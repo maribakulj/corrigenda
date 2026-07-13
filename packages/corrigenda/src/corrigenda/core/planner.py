@@ -1,4 +1,19 @@
-"""Chunk planner: splits a page's lines into LLM-sized chunks."""
+"""Chunk planner: splits a page's lines into LLM-sized chunks.
+
+Budget semantics (P1-8): ``max_input_chars_per_request`` bounds the sum of
+the chunk lines' RAW OCR text — it deliberately excludes the JSON
+envelope, system prompt, neighbour context and optional geometry the
+enrichment step adds (all of which grow roughly linearly with the same
+line count). Consumers sizing the budget against a provider's token limit
+should keep generous headroom (the 12 000 default assumes ~3-4× overhead
+against 128k-class context windows). Two documented exceptions may
+overshoot the budget, both bounded by ``max_lines_per_request``:
+
+  * a hyphen CHAIN is atomic — splitting a hyphenated word across chunks
+    corrupts reconciliation, so chain extension outranks the char budget;
+  * a single line longer than the whole budget still ships alone (a line
+    is the smallest unit the pipeline corrects).
+"""
 
 from __future__ import annotations
 
@@ -97,19 +112,56 @@ def _assign_window_targets(
 
     target_win: dict[str, int] = {lid: idxs[-1] for lid, idxs in membership.items()}
 
-    # Hyphen atomicity: pin both members of a pair to the last window that
-    # contains both.
+    # Hyphen atomicity (audit P0): a chain of 3+ lines (PART1→BOTH→…→PART2)
+    # must be targeted in ONE window. The previous pairwise pin used
+    # last-write-wins, so on a 3-line chain the middle line got re-pinned
+    # by its forward partner AFTER its backward partner, splitting the pair
+    # across two chunks. Pin whole transitively-connected COMPONENTS
+    # instead (union-find over every hyphen link, the pattern _try_block
+    # already uses), assigning each component the LAST window common to
+    # ALL its members — order-independent by construction.
+    parent: dict[str, str] = {lid: lid for lid in membership}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        parent[find(a)] = find(b)
+
     for lid in list(membership):
         lm = line_by_id.get(lid)
         if lm is None:
             continue
-        partner = _hyphen_partner_id(lm)
-        if not partner or partner not in membership:
+        for partner in (
+            getattr(lm, "hyphen_pair_line_id", None),
+            getattr(lm, "hyphen_forward_pair_id", None),
+        ):
+            if partner and partner in membership:
+                union(lid, partner)
+
+    components: dict[str, list[str]] = {}
+    for lid in membership:
+        components.setdefault(find(lid), []).append(lid)
+
+    for members in components.values():
+        if len(members) < 2:
             continue
-        common = sorted(set(membership[lid]) & set(membership[partner]))
+        # Intersection of every member's membership set = windows that
+        # contain the WHOLE component. Target the last such window.
+        common: set[int] = set(membership[members[0]])
+        for m in members[1:]:
+            common &= set(membership[m])
         if common:
-            target_win[lid] = common[-1]
-            target_win[partner] = common[-1]
+            win = max(common)
+            for m in members:
+                target_win[m] = win
+        # If no single window holds the whole component (a chain longer
+        # than any window — the planner caps chains to a window, so this
+        # is the pathological over-cap case), leave the per-line last-window
+        # assignment: the LINE-granularity downgrade + unlink handles it.
 
     return [
         [lid for lid in w if target_win.get(lid) == i] for i, w in enumerate(windows)
@@ -251,16 +303,32 @@ def _try_window(
 
     window_size = config.line_window_size
     overlap = config.line_window_overlap
-    step = window_size - overlap
 
     window_line_ids: list[list[str]] = []
     start = 0
 
     while start < n:
-        end = min(start + window_size, n)  # exclusive
+        # P1-8 — a window is bounded by BOTH the line count and the char
+        # budget (historically only PAGE/BLOCK honoured the char budget;
+        # a window of pathologically long lines blew straight past
+        # max_input_chars_per_request). At least one line always enters,
+        # even over budget — a single line is atomic.
+        end = start + 1
+        chars = len(lines[start].ocr_text)
+        while end < min(start + window_size, n):
+            c = len(lines[end].ocr_text)
+            if chars + c > config.max_input_chars_per_request:
+                break
+            chars += c
+            end += 1
+        core_end = end  # budget/size-limited end, drives the overlap step
 
         # Extend to keep hyphen chains intact at window boundary,
-        # but cap to avoid unbounded growth beyond the token budget.
+        # but cap to avoid unbounded growth beyond the line budget.
+        # Chain atomicity deliberately outranks the char budget: splitting
+        # a hyphenated word across chunks corrupts reconciliation, while
+        # a temporarily oversized request only risks a producer error
+        # (retried / downgraded). The extension stays line-capped.
         extension_limit = max(config.max_lines_per_request, end - start + 10)
         max_end = min(n, start + extension_limit)
         while end < max_end:
@@ -273,7 +341,20 @@ def _try_window(
 
         window_line_ids.append([lines[i].line_id for i in range(start, end)])
 
-        next_start = start + step
+        # Step relative to the ACTUAL core window when the char budget
+        # shortened it, so nothing is skipped (a fixed step would jump
+        # past unvisited lines). When the budget did not bind, keep the
+        # historical fixed step exactly (byte-parity with the pre-P1-8
+        # planner, including its tail-window behaviour near page end).
+        budget_bound = core_end < min(start + window_size, n)
+        if budget_bound:
+            next_start = max(start + 1, core_end - overlap)
+        else:
+            next_start = start + (window_size - overlap)
+        # Defensive progress guard: the P2-5 validator forbids
+        # overlap >= window_size, but pydantic's model_copy(update=...)
+        # BYPASSES validation — without this clamp such a config spins
+        # this loop forever (review finding, reproduced).
         if next_start <= start:
             next_start = start + 1
         start = next_start
@@ -320,7 +401,10 @@ def _plan_line(
         # All lines linked by forward hyphen pairs must stay together.
         chain_ids = [lm.line_id]
         j = i
-        while j < len(lines):
+        # P1-8 — the chain follow is capped: an adversarial page where
+        # every line ends in a dash would otherwise produce one unbounded
+        # request.
+        while j < len(lines) and len(chain_ids) < config.max_lines_per_request:
             cur = lines[j]
             forward_pair = forward_partner_id(cur)
             if (
@@ -332,6 +416,47 @@ def _plan_line(
                 j += 1
             else:
                 break
+
+        # Review fix (pair atomicity, CLAUDE.md): if the cap cut the chain
+        # BETWEEN a forward line and its partner, the two halves would sit
+        # in different chunks as a still-linked pair — the validator skips
+        # such pairs (both members must be in-chunk) and the reconciler
+        # could write across the boundary. UNLINK the cut pair explicitly:
+        # both sides degrade to independent lines (their OCR text,
+        # including the trailing dash, is preserved verbatim — the
+        # conservative fallback), so every remaining pair is fully
+        # contained in one chunk and atomicity stays true by construction.
+        if len(chain_ids) >= config.max_lines_per_request and j + 1 < len(lines):
+            tail = lines[j]
+            head = lines[j + 1]
+            if forward_partner_id(tail) == head.line_id:
+                if tail.hyphen_role == HyphenRole.BOTH:
+                    tail.hyphen_role = HyphenRole.PART2  # keeps backward link
+                    tail.hyphen_forward_pair_id = None
+                    tail.hyphen_forward_pair_page_id = None
+                    tail.hyphen_forward_subs_content = None
+                else:  # PART1
+                    tail.hyphen_role = HyphenRole.NONE
+                    tail.hyphen_pair_line_id = None
+                    tail.hyphen_pair_page_id = None
+                    tail.hyphen_subs_content = None
+                if head.hyphen_role == HyphenRole.BOTH:
+                    # Keeps its own forward pair; loses the backward link.
+                    # PART1 carries its forward link/subs in the plain pair
+                    # fields, so migrate them from the BOTH forward fields.
+                    head.hyphen_role = HyphenRole.PART1
+                    head.hyphen_pair_line_id = head.hyphen_forward_pair_id
+                    head.hyphen_pair_page_id = head.hyphen_forward_pair_page_id
+                    head.hyphen_subs_content = head.hyphen_forward_subs_content
+                    head.hyphen_source_explicit = head.hyphen_forward_explicit
+                    head.hyphen_forward_pair_id = None
+                    head.hyphen_forward_pair_page_id = None
+                    head.hyphen_forward_subs_content = None
+                else:  # PART2
+                    head.hyphen_role = HyphenRole.NONE
+                    head.hyphen_pair_line_id = None
+                    head.hyphen_pair_page_id = None
+                    head.hyphen_subs_content = None
 
         chunks.append(
             _make_chunk(

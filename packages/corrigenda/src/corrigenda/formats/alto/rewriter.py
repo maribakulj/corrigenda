@@ -8,6 +8,8 @@ from pathlib import Path
 from lxml import etree
 
 from corrigenda.core._norm import clean_content, nfc
+from corrigenda.core.identity import ensure_unique_identities
+from corrigenda.errors import DuplicateIdError
 from corrigenda.formats.alto._ns import (
     _detect_namespace,
     _int_attr,
@@ -306,8 +308,17 @@ def _apply_subs(
         strings = _get_string_children(el, ns)
         if strings:
             last = strings[-1]
-            fw_type, fw_content = _desired_forward_subs(manifest)
-            _set_subs_on_element(last, fw_type, fw_content)
+            # When the line has a single String, strings[-1] IS the element
+            # that just received the BACKWARD (HypPart2) subs. Writing the
+            # forward HypPart1 onto it would clobber the continuation marker,
+            # flipping HypPart2→HypPart1 and destroying the "continues from
+            # the previous line" signal (and breaking byte-parity on an
+            # identity correction). The trailing HYP element already marks
+            # the forward hyphen, so only emit forward SUBS on a DISTINCT
+            # last String.
+            if last is not target:
+                fw_type, fw_content = _desired_forward_subs(manifest)
+                _set_subs_on_element(last, fw_type, fw_content)
 
 
 # ---------------------------------------------------------------------------
@@ -443,31 +454,41 @@ def _emit_string(
     s.set("HEIGHT", str(height))
 
 
+_HYP_GEOM_ATTRS = frozenset({"HPOS", "VPOS", "WIDTH", "HEIGHT"})
+
+
 def _append_trailing_hyp(
     el: etree._Element,
     ns: str,
     orig_hyp_attribs: dict[str, str],
-    default_hpos: int,
-    default_vpos: int,
-    default_width: int,
-    default_height: int,
+    hpos: int,
+    vpos: int,
+    width: int,
+    height: int,
 ) -> None:
-    """Append a HYP child to a PART1-like TextLine.
+    """Append a HYP child to an explicit PART1-like TextLine.
 
-    Preserves all original HYP attributes when one was present before
-    the rebuild; otherwise synthesises one with the supplied geometry
-    and a default ``-`` content.
+    Non-geometry attributes (CONTENT, ID, STYLEREFS, …) carry over from an
+    original HYP when present; a synthesised HYP defaults to ``-`` content.
+    Geometry is ALWAYS the reserved end-of-line slot supplied by the
+    caller — the original HYP's stale HPOS/WIDTH must NOT be copied
+    verbatim, or the rebuilt children would sum past the line WIDTH and the
+    HYP would overlap the last String.
     """
     hyp = etree.SubElement(el, _tag("HYP", ns))
-    if orig_hyp_attribs:
-        for k, v in orig_hyp_attribs.items():
-            hyp.set(k, v)
-    else:
+    content_set = False
+    for k, v in orig_hyp_attribs.items():
+        if k in _HYP_GEOM_ATTRS:
+            continue
+        hyp.set(k, v)
+        if k == "CONTENT":
+            content_set = True
+    if not content_set:
         hyp.set("CONTENT", "-")
-        hyp.set("HPOS", str(default_hpos))
-        hyp.set("VPOS", str(default_vpos))
-        hyp.set("WIDTH", str(default_width))
-        hyp.set("HEIGHT", str(default_height))
+    hyp.set("HPOS", str(hpos))
+    hyp.set("VPOS", str(vpos))
+    hyp.set("WIDTH", str(width))
+    hyp.set("HEIGHT", str(height))
 
 
 def _rebuild_line(
@@ -487,8 +508,22 @@ def _rebuild_line(
         deep-copied and restored verbatim after the rebuild (defensive —
         production ALTO rarely has HYPs on non-hyphenated lines).
     """
-    is_part1_like = manifest.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
-    is_normal = manifest.hyphen_role == HyphenRole.NONE
+    # Only an EXPLICITLY hyphenated PART1/BOTH line carries a HYP element.
+    # A heuristically-detected PART1 (trailing dash in CONTENT, no HYP /
+    # SUBS_TYPE markup) must NOT get a synthesised <HYP CONTENT="-">: that
+    # would invent explicit markup the source never had (conservative-
+    # heuristic violation) and append a phantom trailing hyphen to the
+    # output text. Such a line is rebuilt like a plain line — its trailing
+    # dash stays inside the String CONTENT.
+    is_part1_like = (
+        manifest.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
+        and manifest.hyphen_source_explicit
+    )
+    is_normal = not is_part1_like and manifest.hyphen_role in (
+        HyphenRole.NONE,
+        HyphenRole.PART1,
+        HyphenRole.BOTH,
+    )
 
     orig_string_attribs = [_attrib_dict(s) for s in _get_string_children(el, ns)]
     orig_sp_attribs = [_attrib_dict(s) for s in _get_sp_children(el, ns)]
@@ -514,7 +549,19 @@ def _rebuild_line(
     height = _int_attr(el, "HEIGHT")
 
     if is_part1_like:
-        hyp_width = max(1, round(width * 0.04))
+        # Reserve the ORIGINAL HYP's real width when one was present, so the
+        # rebuilt String/SP widths plus the HYP width sum EXACTLY to the line
+        # WIDTH. The old 4% estimate combined with copying the original HYP's
+        # verbatim WIDTH made the children sum to width + original_hyp_width
+        # and overlapped the last String. Fall back to the 4% estimate only
+        # when synthesising a HYP (explicit line with no HYP element).
+        orig_hyp_w = 0
+        try:
+            orig_hyp_w = int(float(orig_hyp_attribs.get("WIDTH", "0")))
+        except (TypeError, ValueError):
+            orig_hyp_w = 0
+        hyp_width = orig_hyp_w if orig_hyp_w > 0 else max(1, round(width * 0.04))
+        hyp_width = min(hyp_width, max(1, width - 1))  # keep room for text
         text_width = max(1, width - hyp_width)
     else:
         hyp_width = 0
@@ -527,10 +574,10 @@ def _rebuild_line(
                 el,
                 ns,
                 orig_hyp_attribs,
-                default_hpos=hpos + text_width,
-                default_vpos=vpos,
-                default_width=hyp_width,
-                default_height=height,
+                hpos=hpos + text_width,
+                vpos=vpos,
+                width=hyp_width,
+                height=height,
             )
         else:
             for h in saved_hyp:
@@ -568,10 +615,10 @@ def _rebuild_line(
             el,
             ns,
             orig_hyp_attribs,
-            default_hpos=last_word_hpos + last_word_width,
-            default_vpos=vpos,
-            default_width=hyp_width,
-            default_height=height,
+            hpos=last_word_hpos + last_word_width,
+            vpos=vpos,
+            width=hyp_width,
+            height=height,
         )
     else:
         for h in saved_hyp:
@@ -613,16 +660,29 @@ def rewrite_alto_file(
     metrics = RewriterMetrics()
     line_paths: dict[str, str] = {}
 
-    line_by_id: dict[str, LineManifest] = {}
-    for page in page_manifests:
-        for lm in page.lines:
-            line_by_id[lm.line_id] = lm
+    # P0-5 — a bare line_id keys every correction-to-element association
+    # below. A duplicate (in the manifests OR on the XML elements) would
+    # silently apply one line's correction to another physical line, so
+    # both sides fail loudly instead. Parsers enforce the same invariant
+    # up front; this guards direct calls with hand-built manifests via
+    # the canonical shared check (review fix: no third hand-rolled copy).
+    ensure_unique_identities(page_manifests, xml_path.name)
+    line_by_id: dict[str, LineManifest] = {
+        lm.line_id: lm for page in page_manifests for lm in page.lines
+    }
 
+    seen_element_ids: set[str] = set()
     textline_tag = _tag("TextLine", ns)
     for tl_el in root.iter(textline_tag):
         line_id = tl_el.get("ID")
         if line_id not in line_by_id:
             continue
+        if line_id in seen_element_ids:
+            raise DuplicateIdError(
+                f"duplicate TextLine ID {line_id!r} in {xml_path.name!r} — "
+                "two physical lines would receive the same correction (P0-5)."
+            )
+        seen_element_ids.add(line_id)
         lm = line_by_id[line_id]
 
         corrected = lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
@@ -684,6 +744,13 @@ def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]
     for tl_el in root.iter(textline_tag):
         line_id = tl_el.get("ID")
         if line_id in line_ids:
+            if line_id in result:
+                # P0-5 — a repeated ID would silently collapse two physical
+                # lines into one trace entry.
+                raise DuplicateIdError(
+                    f"duplicate TextLine ID {line_id!r} in rewritten ALTO — "
+                    "output-text extraction would be ambiguous (P0-5)."
+                )
             result[line_id] = reconstruct_textline(tl_el, ns)
     return result
 

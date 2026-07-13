@@ -37,12 +37,16 @@ ReplaceSpan(line_id="tl_2", anchor=MatchAnchor(match="ſ"), text="s")
 - **`RangeAnchor(start, end)`** — offsets into the line's *canonical* text
   (the parser's `ocr_text`, format-independent). Deterministic producers
   compute these exactly.
-- **`MatchAnchor(match, occurrence=0)`** — an exact substring. LLMs are
+- **`MatchAnchor(match, occurrence=None)`** — an exact substring. LLMs are
   reliable at "replace *this* substring" and unreliable at numeric offsets,
   so this is the LLM-facing form. It **normalises** to a `RangeAnchor`
   against the canonical text; an unfound match, an out-of-range
-  `occurrence`, or an ambiguous default (`occurrence=0` matching more than
-  once) **rejects the op** — the line keeps its prior text (I2 fallback).
+  `occurrence`, or an ambiguous default (`occurrence=None` — i.e. the
+  producer said nothing — matching more than once) **rejects the op** —
+  the line keeps its prior text (I2 fallback). An **explicit** integer,
+  including `0` for "the first occurrence", always selects that
+  occurrence (P2-8: `0` used to double as the unspecified default, making
+  the first of several repeats inexpressible).
 
 ```python
 from corrigenda import normalize_anchor

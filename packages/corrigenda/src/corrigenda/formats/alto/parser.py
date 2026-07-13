@@ -11,6 +11,11 @@ from corrigenda.formats.alto._ns import (
     make_safe_parser,
 )
 from corrigenda.formats.alto._text import reconstruct_textline
+from corrigenda.core.identity import (
+    ensure_element_ids_present,
+    ensure_unique_element_ids,
+    ensure_unique_identities,
+)
 from corrigenda.core.pairing import (
     disambiguate_page_ids as _disambiguate_page_ids,
     link_cross_page_hyphens as _link_cross_page_hyphens,
@@ -142,6 +147,135 @@ def _parse_textline_hyphen_info(
 
 
 # ---------------------------------------------------------------------------
+# Block discovery + reading order (P1-1)
+# ---------------------------------------------------------------------------
+
+
+_MARGIN_LOCALNAMES = ("TopMargin", "BottomMargin", "LeftMargin", "RightMargin")
+
+
+def _collect_blocks_skipping_margins(
+    container: etree._Element, ns: str
+) -> list[etree._Element]:
+    """Every ``TextBlock`` under ``container`` in document order, never
+    descending into the four margin containers.
+
+    Review fix — when a page has no ``PrintSpace`` the container is the
+    ``Page`` itself; a naive ``iter`` would sweep margin-nested blocks
+    (running headers, page numbers) into correction scope, which the
+    historical direct-children lookup implicitly excluded. An explicit
+    walk keeps the margin rule true in both container shapes. Descent
+    stops at a ``TextBlock`` (ALTO forbids nested TextBlocks).
+    """
+    margin_tags = {_tag(t, ns) for t in _MARGIN_LOCALNAMES}
+    tb_tag = _tag("TextBlock", ns)
+    out: list[etree._Element] = []
+
+    def walk(el: etree._Element) -> None:
+        for child in el:
+            if not isinstance(child.tag, str) or child.tag in margin_tags:
+                continue
+            if child.tag == tb_tag:
+                out.append(child)
+                continue
+            walk(child)
+
+    walk(container)
+    return out
+
+
+def _blocks_in_reading_order(
+    container: etree._Element, ns: str
+) -> list[etree._Element]:
+    """Every ``TextBlock`` under ``container``, in reading order.
+
+    P1-1 — the historical ``findall`` only saw *direct* children, so any
+    ``TextBlock`` nested inside a ``ComposedBlock`` group (articles,
+    figures-with-caption, …) was silently dropped from the manifest.
+    ``iter`` walks the whole subtree in document order instead (ALTO does
+    not allow a TextBlock inside a TextBlock, so no double-visit).
+
+    When blocks carry the optional ``IDNEXT`` attribute (ALTO's explicit
+    next-block-in-reading-sequence chain), the chains override document
+    order: heads are visited in document order and each chain is followed
+    to its end. The reorder is strictly validated — a self-reference, two
+    blocks naming the same successor, or a cycle falls back to plain
+    document order (never guess on inconsistent declarations). An IDNEXT
+    pointing OUTSIDE this container (a cross-page article continuation —
+    a legitimate, common METS/ALTO pattern — or a margin block) is
+    treated as end-of-chain for this page, NOT as an inconsistency: only
+    that link is ignored, the rest of the declared order is kept.
+
+    Container rule: ``PrintSpace`` when present, else the whole ``Page``
+    minus the four margin containers — margins stay out of correction
+    scope in both shapes (the historical direct-children lookup excluded
+    margin-nested blocks implicitly; the recursive walk must exclude
+    them explicitly).
+    """
+    blocks = _collect_blocks_skipping_margins(container, ns)
+    if len(blocks) < 2:
+        return blocks
+
+    # Blocks lacking a usable ID never participate in IDNEXT chains —
+    # they keep their document-order slot (an empty-string ID used to
+    # slip past the `is None` checks below and KeyError the chain walk).
+    def _bid(b: etree._Element) -> str | None:
+        raw = b.get("ID")
+        return raw if raw else None
+
+    by_id: dict[str, etree._Element] = {}
+    for b in blocks:
+        bid = _bid(b)
+        if bid is not None:
+            if bid in by_id:
+                # Duplicate block IDs — the manifest-level P0-5 check will
+                # refuse the file; don't attempt any reordering here.
+                return blocks
+            by_id[bid] = b
+
+    succ: dict[str, str] = {}
+    referenced: set[str] = set()
+    for b in blocks:
+        nxt = b.get("IDNEXT")
+        if nxt is None or not nxt.strip():
+            continue
+        nxt = nxt.strip()
+        bid = _bid(b)
+        if bid is None or nxt not in by_id:
+            # Unusable head, or a target outside this container (next
+            # page / margin): end of chain here — skip just this link.
+            continue
+        if nxt == bid or nxt in referenced:
+            # Self-reference / converging chains → inconsistent.
+            return blocks
+        succ[bid] = nxt
+        referenced.add(nxt)
+
+    if not succ:
+        return blocks
+
+    ordered: list[etree._Element] = []
+    visited: set[str] = set()
+    for b in blocks:
+        bid = _bid(b)
+        if bid is None:
+            ordered.append(b)
+            continue
+        if bid in visited or bid in referenced:
+            continue  # emitted (or will be) as part of a chain
+        cur: str | None = bid
+        while cur is not None and cur not in visited:
+            visited.add(cur)
+            ordered.append(by_id[cur])
+            cur = succ.get(cur)
+
+    if len(ordered) != len(blocks):
+        # Unreached blocks = every remaining chain is a cycle → fall back.
+        return blocks
+    return ordered
+
+
+# ---------------------------------------------------------------------------
 # Core parsing
 # ---------------------------------------------------------------------------
 
@@ -157,7 +291,9 @@ def parse_alto_file(
     Parse one ALTO XML file and return (list_of_PageManifest, root_element).
 
     ``pairing_policy`` (F7) is forwarded to the hyphen-pair linker; the
-    default reproduces the historical purely-sequential pairing.
+    default (P1-2) vets heuristic pairs geometrically; pass
+    ``PairingPolicy(geometric_checks=False)`` for the historical
+    purely-sequential pairing.
     """
     # Hardened parser shared with rewriter.py + extract_output_texts.
     # See corrigenda.formats.alto._ns.make_safe_parser docstring.
@@ -184,7 +320,7 @@ def parse_alto_file(
         container = printspace if printspace is not None else page_el
 
         block_order = 0
-        for tb in container.findall(_tag("TextBlock", ns)):
+        for tb in _blocks_in_reading_order(container, ns):
             block_id = tb.get("ID", f"TB_{page_id}_{block_order}")
             block_coords = Coords(
                 hpos=_int_attr(tb, "HPOS"),
@@ -256,6 +392,28 @@ def parse_alto_file(
             )
         )
 
+    # P0-5 — duplicate IDs within one file make every downstream
+    # correction-to-line association ambiguous. Refuse explicitly.
+    ensure_unique_identities(pages, source_name)
+    # Review fix — the rewriter matches TextLine IDs over the WHOLE
+    # document tree (margins included), so the parse-time gate must scan
+    # the same scope: a margin line reusing a body line's ID would
+    # otherwise pass here and only explode at rewrite time, after the
+    # full LLM spend.
+    ensure_unique_element_ids(
+        (tl.get("ID") for tl in root.iter(_tag("TextLine", ns))),
+        source_name,
+        kind="TextLine ID(s)",
+    )
+    # An ID-less TextLine gets a fabricated manifest id the rewriter can
+    # never match (it keys off the real ``ID`` attribute), so its
+    # correction would be silently dropped — refuse it instead.
+    ensure_element_ids_present(
+        (tl.get("ID") for tl in root.iter(_tag("TextLine", ns))),
+        source_name,
+        kind="TextLine element(s)",
+    )
+
     return pages, root
 
 
@@ -268,7 +426,7 @@ def build_document_manifest(
     Files are processed in order; page/line indices are continuous.
 
     ``pairing_policy`` (F7) is applied to both intra-page and cross-page
-    hyphen linking; the default reproduces the historical behaviour.
+    hyphen linking; the default (P1-2) vets heuristic pairs geometrically.
     """
     source_files: list[str] = []
     page_offset = 0

@@ -225,6 +225,13 @@ def _validate_hyphen_integrity(
 
     # 4. Fusion check: PART1 contains the full logical word
     for part1_id, subs_content in hyphen_subs.items():
+        # Restrict to the target/required id set, exactly like the drift
+        # checks above (loop 1-3). In F8 window mode a chunk carries context
+        # lines owned by an ADJACENT chunk; a context-only PART1 the LLM
+        # happens to fuse must not fail THIS chunk (its output is discarded),
+        # or valid TARGET corrections get thrown away on retry/fallback.
+        if part1_id not in chunk_ids:
+            continue
         if not subs_content or part1_id not in text_by_id:
             continue
         part1_text = text_by_id[part1_id]

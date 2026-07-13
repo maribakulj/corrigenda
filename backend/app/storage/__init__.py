@@ -19,6 +19,18 @@ _MAX_ZIP_MEMBERS = 1000  # inode-exhaustion limit
 _ZIP_READ_CHUNK = 64 * 1024
 
 
+def _is_extractable(member_path: Path) -> bool:
+    """True if a ZIP member will actually be extracted (allowed ALTO/XML
+    or image extension, not macOS metadata). Used for both the
+    declared-size precheck and the extraction loop so they agree."""
+    if member_path.name.startswith("._"):  # AppleDouble
+        return False
+    if "__MACOSX" in member_path.parts:
+        return False
+    suffix = member_path.suffix.lower()
+    return suffix in _ALLOWED_EXTENSIONS or suffix in _IMAGE_EXTENSIONS
+
+
 def _safe_zip_read(
     zf: zipfile.ZipFile,
     member: zipfile.ZipInfo,
@@ -31,21 +43,22 @@ def _safe_zip_read(
     (a common bomb pattern). Reads in chunks and checks the running total
     against the caller-supplied budget.
     """
-    chunks: list[bytes] = []
-    consumed = 0
+    # Audit P3 — accumulate into a single growable buffer instead of a
+    # list-of-chunks + b"".join(): the join transiently doubled peak
+    # memory (~2x the member size) before the list was freed.
+    buf = bytearray()
     with zf.open(member) as src:
         while True:
             chunk = src.read(_ZIP_READ_CHUNK)
             if not chunk:
                 break
-            consumed += len(chunk)
-            if consumed > remaining_bytes:
+            if len(buf) + len(chunk) > remaining_bytes:
                 raise ValueError(
                     f"ZIP member {member.filename!r} would exceed extraction "
                     f"safety limit ({_MAX_ZIP_EXTRACTED_BYTES} bytes total)"
                 )
-            chunks.append(chunk)
-    return b"".join(chunks)
+            buf.extend(chunk)
+    return bytes(buf)
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +92,32 @@ def init_job_dirs(job_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _register_flat_name(saved: dict[str, Path], seen_stems: dict[str, str], flat_name: str) -> None:
+    """P1-9 — refuse silent overwrites: flattening ZIP members (and direct
+    uploads) to their basename means ``volume-1/page.xml`` and
+    ``volume-2/page.xml`` both become ``page.xml``; the historical
+    last-write-wins silently DROPPED the earlier document. Stems must be
+    unique too — the output writer names every corrected file
+    ``{stem}_corrected.xml``, so ``page.xml`` + ``page.alto`` would
+    collide at output time after passing here."""
+    if flat_name in saved:
+        raise ValueError(
+            f"duplicate file name after flattening: {flat_name!r} appears "
+            "more than once across the upload (ZIP subdirectories are "
+            "flattened). Rename the files so every basename is unique."
+        )
+    stem = Path(flat_name).stem.lower()
+    other = seen_stems.get(stem)
+    if other is not None:
+        raise ValueError(
+            f"conflicting file names: {flat_name!r} and {other!r} share the "
+            f"stem {stem!r} — corrected outputs are named "
+            "'{stem}_corrected.xml' and would overwrite each other. "
+            "Rename one of the files."
+        )
+    seen_stems[stem] = flat_name
+
+
 def save_uploaded_files(
     job_id: str,
     files: list[tuple[str, bytes]],
@@ -90,6 +129,12 @@ def save_uploaded_files(
     are extracted with only their basename (no subdirectory structure).
     Image members (JPEG, PNG, TIFF) are saved to images_dir(job_id).
 
+    P0-3 — the decompressed-bytes budget is shared across EVERY archive of
+    the job (historically each ZIP got its own 500 MB budget, so a
+    30-ZIP request could stage 15 GB). P1-9 — name collisions (flattened
+    basenames, output stems, image stems) raise instead of silently
+    overwriting an earlier document.
+
     Returns a tuple of:
     - alto_files: {filename → Path} for every ALTO/XML file saved
     - image_files: {lowercase_stem → Path} for every image file saved
@@ -98,6 +143,10 @@ def save_uploaded_files(
     dest.mkdir(parents=True, exist_ok=True)
     saved: dict[str, Path] = {}
     images: dict[str, Path] = {}
+    seen_stems: dict[str, str] = {}
+
+    # P0-3 — ONE decompression budget for the whole job, not per archive.
+    extracted_total = 0
 
     for filename, content in files:
         suffix = Path(filename).suffix.lower()
@@ -116,30 +165,30 @@ def save_uploaded_files(
                         f"({len(members)}, max {_MAX_ZIP_MEMBERS})"
                     )
 
-                # Declared-size precheck rejects "honest" bombs early without
-                # opening any member stream.
-                total_declared = sum(m.file_size for m in members)
-                if total_declared > _MAX_ZIP_EXTRACTED_BYTES:
+                # Declared-size precheck rejects "honest" bombs early
+                # without opening any member stream. Audit P2 — count ONLY
+                # members that will actually be EXTRACTED: a legitimate
+                # upload with a large unrelated member (a 600 MB dataset.csv
+                # next to the ALTO files) is skipped at extraction, so
+                # counting it here false-rejected the whole archive.
+                total_declared = sum(
+                    m.file_size for m in members if _is_extractable(Path(m.filename))
+                )
+                if extracted_total + total_declared > _MAX_ZIP_EXTRACTED_BYTES:
                     raise ValueError(
                         f"ZIP archive declared uncompressed size "
-                        f"({total_declared} bytes) exceeds safety limit "
-                        f"({_MAX_ZIP_EXTRACTED_BYTES} bytes)"
+                        f"({total_declared} bytes) exceeds the job's remaining "
+                        f"extraction budget "
+                        f"({_MAX_ZIP_EXTRACTED_BYTES - extracted_total} bytes)"
                     )
 
                 # Track actual extracted bytes during streaming reads so that
                 # lying central-directory entries can't slip a larger payload past.
-                extracted_total = 0
                 for member in members:
                     member_path = Path(member.filename)
-                    # Skip macOS metadata: AppleDouble files (._*) and the
-                    # __MACOSX directory that macOS injects into every ZIP.
-                    if member_path.name.startswith("._"):
-                        continue
-                    if "__MACOSX" in member_path.parts:
+                    if not _is_extractable(member_path):
                         continue
                     msuffix = member_path.suffix.lower()
-                    if msuffix not in _ALLOWED_EXTENSIONS and msuffix not in _IMAGE_EXTENSIONS:
-                        continue
 
                     data = _safe_zip_read(
                         zf,
@@ -150,17 +199,26 @@ def save_uploaded_files(
 
                     flat_name = member_path.name
                     if msuffix in _ALLOWED_EXTENSIONS:
+                        _register_flat_name(saved, seen_stems, flat_name)
                         out_path = dest / flat_name
                         out_path.write_bytes(data)
                         saved[flat_name] = out_path
                     else:  # image
+                        img_key = member_path.stem.lower()
+                        if img_key in images:
+                            raise ValueError(
+                                f"duplicate image name after flattening: two "
+                                f"images share the stem {img_key!r}. Rename "
+                                "one of them."
+                            )
                         imgs = images_dir(job_id)
                         imgs.mkdir(parents=True, exist_ok=True)
                         out_path = imgs / flat_name
                         out_path.write_bytes(data)
-                        images[member_path.stem.lower()] = out_path
+                        images[img_key] = out_path
         elif suffix in _ALLOWED_EXTENSIONS:
             flat_name = Path(filename).name
+            _register_flat_name(saved, seen_stems, flat_name)
             out_path = dest / flat_name
             out_path.write_bytes(content)
             saved[flat_name] = out_path

@@ -1,5 +1,8 @@
 # Stage 1 — Build React frontend
-FROM node:20-alpine AS frontend-builder
+# Digest-pinned base images (audit: mutable tags meant two builds of the
+# same commit could differ). Refresh deliberately: resolve the new digest
+# with `docker buildx imagetools inspect <image>:<tag>` and update here.
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS frontend-builder
 WORKDIR /frontend
 COPY frontend/package*.json .
 RUN npm ci
@@ -7,7 +10,7 @@ COPY frontend/ .
 RUN npm run build
 
 # Stage 2 — Python backend + static frontend
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3
 WORKDIR /app
 
 # Two-step Python install:
@@ -36,17 +39,20 @@ COPY --from=frontend-builder /frontend/dist /app/backend/static/
 
 ENV JOB_STORAGE_DIR=/tmp/app-jobs
 ENV PYTHONPATH=/app/backend
-# TRUSTED_PROXIES=* is HF SPACES SPECIFIC. The HF edge proxy strips
-# the incoming X-Forwarded-For and re-emits its own, so "trust any
-# upstream" is safe in that context. Anyone reusing this Dockerfile
-# OUTSIDE of HF Spaces (self-hosted, custom k8s, behind a reverse
-# proxy that does NOT sanitise X-Forwarded-For) MUST override this
-# env var to either "127.0.0.1" (safe baseline) or the explicit
-# proxy IP. Leaving the wildcard in a non-HF deployment lets any
-# unauthenticated caller spoof X-Forwarded-For to bypass per-IP
-# rate limits — making /api/providers/models a free
-# credential-spray oracle (see L10/F5).
-ENV TRUSTED_PROXIES=*
+# TRUSTED_PROXIES — audit fix: the generic image no longer bakes in
+# the dangerous wildcard. Default is the safe baseline (trust only
+# loopback); a deployment behind a proxy that SANITISES
+# X-Forwarded-For (HF Spaces, a locked-down ingress) opts in
+# explicitly at build or run time:
+#
+#   docker build --build-arg TRUSTED_PROXIES=* .        # HF Spaces
+#   docker run -e TRUSTED_PROXIES=10.0.0.5 ...          # known proxy IP
+#
+# A wildcard on a directly-exposed deployment lets any unauthenticated
+# caller spoof X-Forwarded-For to bypass per-IP rate limits — making
+# /api/providers/models a free credential-spray oracle (L10/F5).
+ARG TRUSTED_PROXIES=127.0.0.1
+ENV TRUSTED_PROXIES=${TRUSTED_PROXIES}
 
 # Create non-root user and ensure storage dir is writable
 RUN useradd --create-home appuser && mkdir -p /tmp/app-jobs && chown appuser /tmp/app-jobs

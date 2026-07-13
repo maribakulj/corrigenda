@@ -13,6 +13,7 @@ concrete providers (or be replaced wholesale by XerLLM).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -22,6 +23,7 @@ import httpx
 # Re-exports — public LLM contract lives in corrigenda now.
 from corrigenda.core.protocols import (  # noqa: F401  re-exported
     BaseProvider,
+    ProviderPermanentError,
     ProviderTransientError,
 )
 from corrigenda.producers.llm import (  # noqa: F401  re-exported
@@ -49,22 +51,29 @@ _TRANSIENT_HTTPX_TYPES: tuple[type[BaseException], ...] = (
 
 
 def _wrap_if_transient(exc: BaseException) -> BaseException:
-    """Return a ``ProviderTransientError`` chained to ``exc`` when ``exc``
-    is one of the known transient httpx classes; otherwise return
-    ``exc`` unchanged so the caller's raise leaves the original
-    traceback intact.
+    """Classify an httpx failure into the pipeline's provider taxonomy.
 
     httpx.HTTPStatusError is intentionally split: 4xx (other than 429)
-    is a client-side bug — bad credentials, malformed schema — that
-    won't heal on retry, so we leave it alone. 5xx and 429 ARE
-    transient. The split happens here rather than at the catch site so
-    the pipeline doesn't need to know httpx status semantics.
+    is a client-side rejection — bad credentials, unknown model,
+    definitively refused schema — that won't heal on retry. P0-1: it is
+    wrapped as ``ProviderPermanentError`` so the pipeline FAILS THE RUN
+    instead of silently falling every chunk back to OCR and reporting
+    success. 5xx and 429 are transient; transport-level failures too.
+    The split happens here rather than at the catch site so the
+    pipeline doesn't need to know httpx status semantics.
     """
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
-        # 4xx is client error — only 429 (rate-limit) is worth retrying.
-        if 400 <= status < 500 and status != 429:
-            return exc
+        # 4xx is client error EXCEPT the self-healing statuses: 429
+        # (rate-limit), 408 (request timeout) and 425 (too early) are
+        # transient — a CDN/proxy in front of the vendor commonly emits
+        # 408 on a slow upstream. Audit P3 — these were wrongly fatal.
+        if 400 <= status < 500 and status not in (408, 425, 429):
+            return ProviderPermanentError(
+                f"provider rejected the request (HTTP {status}) — check the "
+                "API key, model name and request format",
+                status_code=status,
+            ).with_traceback(exc.__traceback__)
         return ProviderTransientError(str(exc), status_code=status).with_traceback(
             exc.__traceback__
         )
@@ -78,6 +87,46 @@ def _wrap_if_transient(exc: BaseException) -> BaseException:
 # ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
+
+# P2-10 — one shared AsyncClient for every provider call. Historically
+# call_llm and get_json each opened (and tore down) a fresh client per
+# request: no connection reuse, a TLS handshake per chunk, and an extra
+# socket churn under concurrency. The shared client pools connections;
+# per-request timeouts are still passed per call. Closed by the app's
+# lifespan via aclose_shared_client() (harmless to skip in short-lived
+# scripts — the loop teardown closes sockets anyway).
+_shared_client: httpx.AsyncClient | None = None
+#: id() of the event loop the cached client was created on. An
+#: httpx.AsyncClient binds its connection pool to the loop alive at
+#: creation; reusing it from a DIFFERENT loop (a CLI list_models probe
+#: under one asyncio.run(), then a correction job under another) raises
+#: "Event loop is closed" on the first request. Tracking the loop lets
+#: get_shared_client recreate on mismatch instead of handing back a stale
+#: client. is_closed does NOT catch this — the client isn't closed, its
+#: loop is dead.
+_shared_client_loop_id: int | None = None
+
+
+def get_shared_client() -> httpx.AsyncClient:
+    global _shared_client, _shared_client_loop_id
+    loop_id = id(asyncio.get_running_loop())
+    if _shared_client is None or _shared_client.is_closed or _shared_client_loop_id != loop_id:
+        # The stale client (if any) is bound to a now-defunct loop, so it
+        # can't be awaited closed here; drop the reference and let GC reclaim
+        # its sockets. The single-loop FastAPI server never hits this path.
+        _shared_client = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)
+        )
+        _shared_client_loop_id = loop_id
+    return _shared_client
+
+
+async def aclose_shared_client() -> None:
+    global _shared_client, _shared_client_loop_id
+    if _shared_client is not None and not _shared_client.is_closed:
+        await _shared_client.aclose()
+    _shared_client = None
+    _shared_client_loop_id = None
 
 
 async def call_llm(
@@ -98,27 +147,27 @@ async def call_llm(
     routes them to exponential backoff.
     """
     try:
-        async with httpx.AsyncClient() as client:
+        client = get_shared_client()
+        resp = await client.post(
+            url,
+            headers=headers,
+            json=body,
+            params=params,
+            timeout=timeout,
+        )
+
+        if resp.status_code in (400, 422) and fallback_body is not None:
+            logger.info("Schema rejected (%s) — retrying with fallback body", resp.status_code)
             resp = await client.post(
                 url,
                 headers=headers,
-                json=body,
+                json=fallback_body,
                 params=params,
                 timeout=timeout,
             )
 
-            if resp.status_code in (400, 422) and fallback_body is not None:
-                logger.info("Schema rejected (%s) — retrying with fallback body", resp.status_code)
-                resp = await client.post(
-                    url,
-                    headers=headers,
-                    json=fallback_body,
-                    params=params,
-                    timeout=timeout,
-                )
-
-            resp.raise_for_status()
-            return resp.json()
+        resp.raise_for_status()
+        return resp.json()
     except Exception as exc:
         wrapped = _wrap_if_transient(exc)
         if wrapped is exc:
@@ -185,15 +234,14 @@ async def get_json(
     happens in one place.
     """
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                url,
-                headers=headers or {},
-                params=params,
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            return resp.json()
+        resp = await get_shared_client().get(
+            url,
+            headers=headers or {},
+            params=params,
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
     except Exception as exc:
         wrapped = _wrap_if_transient(exc)
         if wrapped is exc:

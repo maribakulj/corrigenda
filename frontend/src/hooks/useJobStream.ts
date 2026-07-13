@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { withToken } from '../api/client'
 import type { JobProgress, JobStatus, LogEntry, LogType, SSEEventData } from '../types'
 
 const MAX_LOGS = 500
@@ -186,24 +187,50 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
           setLogs((l) => appendLog(l, makeLog('warning', ev.message)))
           break
 
-        case 'completed':
-          setStatus('completed')
+        case 'completed': {
+          // P0-1 — the server distinguishes clean success from degraded
+          // success (some lines kept their OCR text); adopt its status.
+          const terminal = ev.status ?? 'completed'
+          setStatus(terminal)
+          // Audit P1 — a synthetic terminal event (emitted when a client
+          // subscribes AFTER the job already finished: fast job, reload,
+          // late reconnect) carries only a partial payload. Default every
+          // field so a missing duration_seconds/total_lines can never
+          // throw (`undefined.toFixed` used to crash the whole UI into
+          // the ErrorBoundary for a job that actually succeeded).
+          const totalLines = ev.total_lines ?? 0
+          const linesModified = ev.lines_modified ?? 0
+          const hyphenPairs = ev.hyphen_pairs_total ?? 0
+          const duration = ev.duration_seconds ?? 0
           setProgress((p) => ({
             ...p,
-            lines_done: ev.total_lines,
-            hyphen_pairs_reconciled: ev.hyphen_pairs_total,
+            lines_done: totalLines,
+            hyphen_pairs_reconciled: hyphenPairs,
           }))
           setLogs((l) =>
             appendLog(
               l,
               makeLog(
                 'success',
-                `Completed — ${ev.lines_modified} line(s) modified, ${ev.hyphen_pairs_total} hyphen pair(s), ${ev.duration_seconds.toFixed(1)}s`,
+                `Completed — ${linesModified} line(s) modified, ${hyphenPairs} hyphen pair(s), ${duration.toFixed(1)}s`,
               ),
             ),
           )
+          if (terminal === 'completed_with_fallbacks') {
+            const n = ev.fallbacks ?? 0
+            setLogs((l) =>
+              appendLog(
+                l,
+                makeLog(
+                  'warning',
+                  `Degraded success — ${n} line(s) fell back to their OCR source text (provider output rejected). Review them in the trace panel.`,
+                ),
+              ),
+            )
+          }
           esRef.current?.close()
           break
+        }
 
         case 'failed':
           setStatus('failed')
@@ -213,6 +240,24 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
 
         case 'keepalive':
           break
+
+        case 'error':
+          // Audit P3 — server-sent SSE error events (job_not_found /
+          // subscriber_cap_reached) used to fall through the switch
+          // silently. Native EventSource connection errors also reach
+          // this listener but carry no parsed data, so discriminate on a
+          // present `reason`. job_not_found is terminal (gone or wrong
+          // token); a cap is a viewer-side limit, not a job failure.
+          if (typeof ev.reason === 'string') {
+            setLogs((l) =>
+              appendLog(l, makeLog('error', `Stream error: ${ev.message ?? ev.reason}`)),
+            )
+            if (ev.reason === 'job_not_found') {
+              setStatus('failed')
+              esRef.current?.close()
+            }
+          }
+          break
       }
     }
 
@@ -220,11 +265,18 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
       for (const name of EVENTS) {
         es.addEventListener(name, (e: MessageEvent) => handleEvent(name, e.data))
       }
+      // Audit P2 — reset the retry counter on a successful (re)connection
+      // so intermittent drops over a long job don't accumulate toward a
+      // spurious 'failed' (three drops hours apart used to trip MAX_RETRIES
+      // even though every reconnection succeeded).
+      es.onopen = () => {
+        retryCountRef.current = 0
+      }
       es.onerror = () => {
         es.close()
         if (cancelled) return
         const s = statusRef.current
-        if (s === 'completed' || s === 'failed') return
+        if (s === 'completed' || s === 'completed_with_fallbacks' || s === 'failed') return
 
         if (retryCountRef.current >= MAX_RETRIES) {
           setLogs((l) =>
@@ -250,14 +302,14 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
         retryTimeoutRef.current = setTimeout(() => {
           retryTimeoutRef.current = null
           if (cancelled) return
-          const reconnect = new EventSource(`/api/jobs/${jobId}/events`)
+          const reconnect = new EventSource(withToken(`/api/jobs/${jobId}/events`))
           esRef.current = reconnect
           attach(reconnect)
         }, delay)
       }
     }
 
-    const es = new EventSource(`/api/jobs/${jobId}/events`)
+    const es = new EventSource(withToken(`/api/jobs/${jobId}/events`))
     esRef.current = es
     attach(es)
 

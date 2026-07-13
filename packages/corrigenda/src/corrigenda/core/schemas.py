@@ -5,7 +5,7 @@ import json
 import uuid
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -206,9 +206,36 @@ class DocumentManifest(BaseModel):
     document_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     source_files: list[str]
     pages: list[PageManifest]
-    total_pages: int
-    total_blocks: int
-    total_lines: int
+    total_pages: int = Field(ge=0)
+    total_blocks: int = Field(ge=0)
+    total_lines: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _totals_match_content(self) -> "DocumentManifest":
+        """P2-5 — contradictory counters are a construction bug, not data.
+
+        The format builders always compute these from the pages; a
+        hand-built manifest that lies about its totals would silently
+        skew progress metrics and reports downstream.
+        """
+        if self.total_pages != len(self.pages):
+            raise ValueError(
+                f"total_pages={self.total_pages} but manifest carries "
+                f"{len(self.pages)} page(s)"
+            )
+        real_blocks = sum(len(p.blocks) for p in self.pages)
+        if self.total_blocks != real_blocks:
+            raise ValueError(
+                f"total_blocks={self.total_blocks} but manifest carries "
+                f"{real_blocks} block(s)"
+            )
+        real_lines = sum(len(p.lines) for p in self.pages)
+        if self.total_lines != real_lines:
+            raise ValueError(
+                f"total_lines={self.total_lines} but manifest carries "
+                f"{real_lines} line(s)"
+            )
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -243,10 +270,20 @@ class ChunkPlannerConfig(FrozenPolicy):
     fingerprintable for provenance (§11).
     """
 
-    max_input_chars_per_request: int = 12000
-    max_lines_per_request: int = 80
-    line_window_size: int = 12
-    line_window_overlap: int = 1
+    max_input_chars_per_request: int = Field(default=12000, gt=0)
+    max_lines_per_request: int = Field(default=80, gt=0)
+    line_window_size: int = Field(default=12, gt=0)
+    line_window_overlap: int = Field(default=1, ge=0)
+
+    @model_validator(mode="after")
+    def _overlap_smaller_than_window(self) -> "ChunkPlannerConfig":
+        """P2-5 — an overlap >= the window size can never advance."""
+        if self.line_window_overlap >= self.line_window_size:
+            raise ValueError(
+                f"line_window_overlap={self.line_window_overlap} must be "
+                f"smaller than line_window_size={self.line_window_size}"
+            )
+        return self
 
 
 class GuardConfig(FrozenPolicy):
@@ -283,51 +320,61 @@ class GuardConfig(FrozenPolicy):
 
     # --- Stage C: line-level acceptance (line_acceptance.check_line) ---
     #: Minimum SequenceMatcher ratio between source OCR and correction.
-    min_source_similarity: float = 0.35
+    min_source_similarity: float = Field(default=0.35, ge=0.0, le=1.0)
     #: Reject if the correction resembles a neighbour more than its own
     #: source by at least this margin (text migration suspected).
-    neighbour_margin: float = 0.15
+    neighbour_margin: float = Field(default=0.15, ge=0.0, le=1.0)
     #: Two adjacent corrections are duplicates above this similarity …
-    duplicate_threshold: float = 0.85
+    duplicate_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
     #: … but only when their sources were below this (genuinely distinct).
-    duplicate_source_min_diff: float = 0.70
+    duplicate_source_min_diff: float = Field(default=0.70, ge=0.0, le=1.0)
     #: Absorption fires only when the correction is this much longer …
-    absorption_length_ratio: float = 1.2
+    absorption_length_ratio: float = Field(default=1.2, gt=0.0)
     #: … and matches source+neighbour concatenated above this similarity.
-    absorption_concat_similarity: float = 0.8
+    absorption_concat_similarity: float = Field(default=0.8, ge=0.0, le=1.0)
 
     # --- Stage B: hyphen-pair reconciliation (hyphenation._part1/2_*) ---
     #: PART1 corrected word count may exceed OCR by at most this many.
     #: Stage-B twin of ``pair_drift_part1_word_growth`` (Stage A); stricter
     #: here (1) than at Stage A (2) on purpose — see the class docstring.
-    part1_max_word_growth: int = 1
+    part1_max_word_growth: int = Field(default=1, ge=0)
     #: PART1 last word may grow by at most this many characters.
-    part1_last_word_char_growth: int = 3
+    part1_last_word_char_growth: int = Field(default=3, ge=0)
     #: PART1 total char length may grow by ratio*len + slack.
-    part1_char_growth_ratio: float = 1.4
-    part1_char_growth_slack: int = 8
+    part1_char_growth_ratio: float = Field(default=1.4, gt=0.0)
+    part1_char_growth_slack: int = Field(default=8, ge=0)
     #: PART2 collapsed if corrected word count < ratio * OCR word count.
     #: Stage-B twin of ``pair_drift_part2_collapse_ratio`` (Stage A); same
     #: default today, kept separate so the two stages tune independently.
-    part2_collapse_ratio: float = 0.4
+    part2_collapse_ratio: float = Field(default=0.4, ge=0.0, le=1.0)
     #: PART2 expansion allowance: OCR word count + max(floor, ratio*OCR).
-    part2_expansion_floor: int = 3
-    part2_expansion_ratio: float = 0.4
+    part2_expansion_floor: int = Field(default=3, ge=0)
+    part2_expansion_ratio: float = Field(default=0.4, ge=0.0)
     #: Boundary-word continuity: shared leading-char count required …
-    boundary_prefix_len: int = 2
+    boundary_prefix_len: int = Field(default=2, ge=0)
     #: … within this corrected/OCR first-word length ratio band.
-    boundary_len_ratio_min: float = 0.5
-    boundary_len_ratio_max: float = 2.0
+    boundary_len_ratio_min: float = Field(default=0.5, gt=0.0)
+    boundary_len_ratio_max: float = Field(default=2.0, gt=0.0)
+
+    @model_validator(mode="after")
+    def _boundary_band_ordered(self) -> "GuardConfig":
+        """P2-5 — an inverted ratio band would reject every boundary word."""
+        if self.boundary_len_ratio_min > self.boundary_len_ratio_max:
+            raise ValueError(
+                f"boundary_len_ratio_min={self.boundary_len_ratio_min} must "
+                f"not exceed boundary_len_ratio_max={self.boundary_len_ratio_max}"
+            )
+        return self
 
     # --- Stage A: pre-retry pair drift (validator._check_pair_drift) ---
     #: PART1 grew by more than this many words → drift (retry). Stage-A twin
     #: of ``part1_max_word_growth`` (Stage B); more permissive (2) here.
-    pair_drift_part1_word_growth: int = 2
+    pair_drift_part1_word_growth: int = Field(default=2, ge=0)
     #: PART2 checked for collapse only when OCR had at least this many words.
-    pair_drift_part2_min_words: int = 2
+    pair_drift_part2_min_words: int = Field(default=2, ge=0)
     #: PART2 collapsed if corrected word count < ratio * OCR word count.
     #: Stage-A twin of ``part2_collapse_ratio`` (Stage B).
-    pair_drift_part2_collapse_ratio: float = 0.4
+    pair_drift_part2_collapse_ratio: float = Field(default=0.4, ge=0.0, le=1.0)
 
     # --- Edit protocol E4: per-op span drift (core/editing.py) ---
     # These bound a ``replace_span`` op ONLY. ``replace_line`` (the historical
@@ -336,11 +383,13 @@ class GuardConfig(FrozenPolicy):
     # response as ``replace_line`` ops stays byte-for-byte identical.
     #: A span replacement may be at most this many times as long as the span
     #: it replaces (``len(replacement) <= ratio * max(1, span_len)``).
-    edit_span_max_growth_ratio: float = 4.0
-    #: Total characters a line may gain/lose across all its span ops
-    #: (``sum(|replacement| - |span|)`` in absolute value). Generous by
-    #: default; a rules pre-pass makes small, local edits well under it.
-    edit_line_max_changed_chars: int = 200
+    edit_span_max_growth_ratio: float = Field(default=4.0, gt=0.0)
+    #: Total characters a line's span ops may actually change (P2-9): per
+    #: op, the size of the differing window after trimming the common
+    #: prefix/suffix of (original span, replacement) — so a length-neutral
+    #: rewrite costs its real size, not 0. Generous by default; a rules
+    #: pre-pass makes small, local edits well under it.
+    edit_line_max_changed_chars: int = Field(default=200, ge=0)
 
 
 #: Module-level default reused wherever a caller passes no GuardConfig, so
@@ -351,36 +400,96 @@ DEFAULT_GUARD_CONFIG = GuardConfig()
 class PairingPolicy(FrozenPolicy):
     """Decides whether a PART1/BOTH line may pair with the following line (F7).
 
-    Hyphen pairing is purely sequential: the parser links a PART1/BOTH line
-    to the line immediately after it, with no geometric check. That is a
-    documented *assumption*, not a proven fact — a PART1 at the bottom of a
-    column and an unrelated line at the top of the next column can be
-    mis-paired. The downstream migration guards (stages A/B/C) already
-    catch the fallout, so the default here stays permissive; this policy is
-    the seam that lets a consumer harden pairing (reject partners too far
-    below, or in an unrelated block) **without forking the parser**.
+    Hyphen pairing is sequential — the parser proposes the next line in
+    reading order — and this policy vets the proposal. P1-2: the default
+    is now *geometric* for **heuristic** pairs (trailing-dash detection):
 
-    Defaults reproduce the historical behaviour exactly: no geometric
-    constraint, cross-block pairing allowed — ``can_pair`` always returns
-    ``True``.
+    * same block — the candidate must sit BELOW the PART1 line, within
+      ``max_gap_line_heights`` of the line's own height (and no more than
+      ``max_rise_line_heights`` above it, tolerance for skew/overlap).
+      Rejects segmentation noise and table-cell jumps.
+    * different block, same page — the candidate must look like a real
+      reading continuation: either *downward with horizontal overlap*
+      (next block in the same column) or *upward and horizontally
+      disjoint* (top of the next column; direction-agnostic, so RTL
+      layouts are treated identically). A note in the margin or a block
+      far below the column is rejected.
+    * different page — always accepted: cross-page linking is only ever
+      proposed between the last line of page N and the first line of
+      page N+1 (see ``link_cross_page_hyphens``), and VPOS restarts per
+      page so geometry is not comparable.
+    * **explicit** pairs (ALTO ``SUBS_TYPE``/``HYP`` markup on either
+      side) bypass the geometric vetting: the OCR engine asserted the
+      continuation; sequential order in the engine's own serialisation
+      is stronger evidence than our geometric plausibility check. NB the
+      opt-in legacy vetoes (``same_block_only``, ``max_vertical_gap``)
+      still apply to explicit pairs — a consumer who set them asked for
+      an absolute restriction.
+    * degenerate geometry — zero-height/width boxes, or the two lines
+      carrying IDENTICAL boxes (block coords copied onto every line, a
+      common lazy export) — accepted: there is nothing trustworthy to
+      verify, and refusing would silently disable hyphenation for every
+      coordinate-less document.
+
+    ``geometric_checks=False`` restores the historical accept-everything
+    behaviour exactly.
     """
 
     #: Reject a partner whose top is more than this many ALTO units below
     #: the PART1 line's bottom (``candidate.vpos - (part1.vpos + height)``).
-    #: ``None`` disables the check (default = historical behaviour).
+    #: ``None`` disables the check (default). Legacy absolute-units knob,
+    #: kept for consumers who tuned it; the relative ``*_line_heights``
+    #: knobs below are the preferred interface.
     #: Only meaningful WITHIN a page: VPOS restarts on every page, so the
     #: check is skipped for cross-page candidates (a legitimate cross-page
     #: pair would otherwise be broken by a spurious negative/huge gap).
-    max_vertical_gap: int | None = None
+    max_vertical_gap: int | None = Field(default=None, ge=0)
     #: When ``True``, only pair lines in the same TextBlock. Because a
     #: cross-page partner is by definition in a different block, this also
     #: forbids cross-page pairing — intended reading of the constraint.
-    #: Default ``False`` keeps the historical cross-block pairing.
     same_block_only: bool = False
+    #: Master switch for the P1-2 geometric vetting of heuristic pairs.
+    #: ``False`` restores the historical purely-sequential behaviour.
+    geometric_checks: bool = True
+    #: Max downward gap between the PART1 line's bottom and the candidate's
+    #: top, in units of the PART1 line's height. Same-block candidates and
+    #: cross-block downward continuations both use it.
+    max_gap_line_heights: float = Field(default=3.0, ge=0.0)
+    #: Tolerance for a candidate whose top sits ABOVE the PART1 line's
+    #: bottom (box overlap, skewed scans), in line heights. Beyond it, an
+    #: upward candidate is only plausible as a column jump (cross-block,
+    #: horizontally disjoint).
+    max_rise_line_heights: float = Field(default=0.5, ge=0.0)
+
+    @staticmethod
+    def _explicit(part1: LineManifest, candidate: LineManifest) -> bool:
+        """Engine-asserted continuation on either side of the pair."""
+        forward_explicit = (
+            part1.hyphen_forward_explicit
+            if part1.hyphen_role == HyphenRole.BOTH
+            else part1.hyphen_source_explicit
+        )
+        backward_explicit = (
+            candidate.hyphen_role in (HyphenRole.PART2, HyphenRole.BOTH)
+            and candidate.hyphen_source_explicit
+        )
+        return forward_explicit or backward_explicit
+
+    @staticmethod
+    def _degenerate(c: Coords) -> bool:
+        return c.height <= 0 or c.width <= 0
 
     def can_pair(self, part1: LineManifest, candidate: LineManifest) -> bool:
         """Return ``True`` if ``candidate`` may be ``part1``'s PART2 partner."""
-        if self.same_block_only and part1.block_id != candidate.block_id:
+        # Page-qualify the same-block veto: block IDs are reused across
+        # pages (both pages export "TextBlock1"), so a bare block_id compare
+        # sees EQUAL ids for a cross-page candidate and lets it through —
+        # the exact opposite of the documented "forbids cross-page pairing"
+        # guarantee. A cross-page candidate is by definition a different
+        # block, mirroring the page-qualified max_vertical_gap veto below.
+        if self.same_block_only and (
+            part1.page_id != candidate.page_id or part1.block_id != candidate.block_id
+        ):
             return False
         if (
             self.max_vertical_gap is not None
@@ -389,7 +498,38 @@ class PairingPolicy(FrozenPolicy):
             gap = candidate.coords.vpos - (part1.coords.vpos + part1.coords.height)
             if gap > self.max_vertical_gap:
                 return False
-        return True
+
+        # --- P1-2 geometric vetting (heuristic pairs, intra-page) ---
+        if not self.geometric_checks:
+            return True
+        if part1.page_id != candidate.page_id:
+            return True  # last-of-page → first-of-next by construction
+        if self._explicit(part1, candidate):
+            return True
+        a, b = part1.coords, candidate.coords
+        if self._degenerate(a) or self._degenerate(b):
+            return True  # nothing to verify
+        if (a.hpos, a.vpos, a.width, a.height) == (b.hpos, b.vpos, b.width, b.height):
+            # Two "consecutive" lines with IDENTICAL boxes = synthetic
+            # geometry (block coords copied onto every line) — treat as
+            # degenerate rather than rejecting every pair in such files.
+            return True
+        gap = b.vpos - (a.vpos + a.height)
+        below_ok = gap <= self.max_gap_line_heights * a.height
+        rise_ok = gap >= -self.max_rise_line_heights * a.height
+
+        if part1.block_id == candidate.block_id:
+            return below_ok and rise_ok
+
+        # Cross-block: downward continuation must overlap horizontally
+        # (next block, same column); an upward jump must be horizontally
+        # disjoint (start of another column — either side, so RTL works)
+        # AND entirely above the PART1 line: a block merely *beside* the
+        # column (marginal note at the same height) is not a column start.
+        h_overlap = b.hpos < a.hpos + a.width and a.hpos < b.hpos + b.width
+        if rise_ok:
+            return below_ok and h_overlap
+        return not h_overlap and (b.vpos + b.height <= a.vpos)
 
 
 #: Module-level default reused wherever a caller passes no PairingPolicy.
@@ -421,11 +561,19 @@ class RetryPolicy(FrozenPolicy):
     reproducible runs.
     """
 
-    max_attempts: int = 3
+    max_attempts: int = Field(default=3, ge=1)
     temperatures: tuple[float, ...] = (0.0, 0.3, 0.5)
-    transient_backoff_base: float = 2.0
-    output_backoff_base: float = 1.0
-    per_chunk_budget: int = 6
+    transient_backoff_base: float = Field(default=2.0, ge=0.0)
+    output_backoff_base: float = Field(default=1.0, ge=0.0)
+    per_chunk_budget: int = Field(default=6, ge=1)
+
+    @model_validator(mode="after")
+    def _temperatures_in_range(self) -> "RetryPolicy":
+        """P2-5 — every provider rejects temperatures outside [0, 2]."""
+        for t in self.temperatures:
+            if not (0.0 <= t <= 2.0):
+                raise ValueError(f"temperature {t} outside the valid [0, 2] range")
+        return self
 
     @classmethod
     def default(cls) -> RetryPolicy:
@@ -468,7 +616,20 @@ class ChunkRequest(BaseModel):
         """The line_ids this chunk owns (all of them when unrestricted)."""
         return self.line_ids if self.target_line_ids is None else self.target_line_ids
 
-    attempt: int = 0
+    attempt: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def _targets_subset_of_lines(self) -> "ChunkRequest":
+        """P2-5 — a target outside the chunk's lines would be silently
+        ignored at correction time (it has no enriched input) while still
+        counting as "owned" — a line lost without a trace."""
+        if self.target_line_ids is not None:
+            extra = set(self.target_line_ids) - set(self.line_ids)
+            if extra:
+                raise ValueError(
+                    f"target_line_ids not contained in line_ids: {sorted(extra)!r}"
+                )
+        return self
 
 
 class ChunkPlan(BaseModel):

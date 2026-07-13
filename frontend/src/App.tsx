@@ -56,7 +56,7 @@ export default function App() {
   // Capture completed stats from the SSE logs
   // (we pull them from the last 'success' log message via progress state)
   // Actually we compute stats from progress + last completed event
-  const isDone = status === 'completed'
+  const isDone = status === 'completed' || status === 'completed_with_fallbacks'
   const isFailed = status === 'failed'
 
   // Load diff + layout data in parallel once the job is completed

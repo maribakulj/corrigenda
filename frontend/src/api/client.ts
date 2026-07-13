@@ -4,11 +4,35 @@ import type { DiffData, LayoutData, ModelInfo, Provider, TraceData } from '../ty
 const BASE = ''
 
 // ---------------------------------------------------------------------------
+// P1-7 — capability token. Returned ONCE by POST /api/jobs; required by
+// every job endpoint afterwards. Sent as the X-Job-Token header where we
+// control the request, or as ?token= for EventSource/download links that
+// cannot carry headers. Held in module state (the app drives one job at
+// a time) and never persisted.
+// ---------------------------------------------------------------------------
+
+let currentJobToken: string | null = null
+
+export function setJobToken(token: string | null): void {
+  currentJobToken = token
+}
+
+export function withToken(url: string): string {
+  if (!currentJobToken) return url
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}token=${encodeURIComponent(currentJobToken)}`
+}
+
+function tokenHeaders(): Record<string, string> {
+  return currentJobToken ? { 'X-Job-Token': currentJobToken } : {}
+}
+
+// ---------------------------------------------------------------------------
 // Generic GET helper — fetchLayout / fetchDiff / fetchTrace share this pattern
 // ---------------------------------------------------------------------------
 
 async function apiGet<T>(url: string, errorMsg: string): Promise<T> {
-  const resp = await fetch(url)
+  const resp = await fetch(url, { headers: tokenHeaders() })
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: resp.statusText }))
     throw new Error((err as { detail?: string }).detail ?? errorMsg)
@@ -43,7 +67,7 @@ export async function createJob(
   provider: Provider,
   apiKey: string,
   model: string,
-): Promise<{ job_id: string }> {
+): Promise<{ job_id: string; job_token?: string | null }> {
   const form = new FormData()
   for (const f of files) {
     form.append('files', f)
@@ -60,7 +84,9 @@ export async function createJob(
     const err = await resp.json().catch(() => ({ detail: resp.statusText }))
     throw new Error((err as { detail?: string }).detail ?? 'Failed to create job')
   }
-  return resp.json() as Promise<{ job_id: string }>
+  const data = (await resp.json()) as { job_id: string; job_token?: string | null }
+  setJobToken(data.job_token ?? null)
+  return data
 }
 
 // ---------------------------------------------------------------------------
@@ -84,7 +110,7 @@ export function fetchTrace(jobId: string): Promise<TraceData> {
 // ---------------------------------------------------------------------------
 
 export function downloadJob(jobId: string): void {
-  const url = `${BASE}/api/jobs/${jobId}/download`
+  const url = withToken(`${BASE}/api/jobs/${jobId}/download`)
   const a = document.createElement('a')
   a.href = url
   a.style.display = 'none'

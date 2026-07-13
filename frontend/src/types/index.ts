@@ -11,7 +11,15 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
   google: 'Google Gemini',
 }
 
-export type JobStatus = 'queued' | 'started' | 'running' | 'completed' | 'failed'
+export type JobStatus =
+  | 'queued'
+  | 'started'
+  | 'running'
+  | 'completed'
+  // P0-1 — terminal success where some lines fell back to their OCR source
+  // text: outputs are valid and downloadable, but the run is degraded.
+  | 'completed_with_fallbacks'
+  | 'failed'
 
 // ---------------------------------------------------------------------------
 // Model info
@@ -118,6 +126,10 @@ export interface SSECompleted {
   lines_modified: number
   hyphen_pairs_total: number
   duration_seconds: number
+  // P0-1 — terminal status ('completed' | 'completed_with_fallbacks') and
+  // the number of lines that kept their OCR source text.
+  status?: JobStatus
+  fallbacks?: number
 }
 export interface SSEFailed {
   event: 'failed'
@@ -125,6 +137,12 @@ export interface SSEFailed {
 }
 export interface SSEKeepalive {
   event: 'keepalive'
+}
+// Server-sent stream error (job_not_found / subscriber_cap_reached).
+export interface SSEError {
+  event: 'error'
+  reason?: string
+  message?: string
 }
 
 export type SSEEventData =
@@ -141,6 +159,7 @@ export type SSEEventData =
   | SSECompleted
   | SSEFailed
   | SSEKeepalive
+  | SSEError
 
 // ---------------------------------------------------------------------------
 // Layout viewer

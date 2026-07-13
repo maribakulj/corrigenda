@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from corrigenda import CorrectionPipeline, ValidationError
-from corrigenda.core.editing import EditScript, ReplaceSpan
+from corrigenda.core.editing import EditScript, ReplaceSpan, apply_edit_script
 from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
 from corrigenda.formats.alto.parser import build_document_manifest
 from corrigenda.producers.rules import RulesProducer, SubstitutionRule
@@ -66,9 +66,26 @@ async def test_rules_producer_drives_full_pipeline_without_credentials():
     for lm in changed:
         assert "3" in lm.corrected_text
 
-    # The run's edit_script carries the producer's actual ReplaceSpan ops.
+    # §4 (Audit P2) — the edit_script reflects what the run ACTUALLY applied.
+    # The producer's real replace_span ops survive for lines whose span
+    # output was accepted unchanged; a hyphen member the reconciler rewrote
+    # is surfaced as a replace_line carrying the FINAL text (never a stale
+    # span claiming text the rewriter never wrote). The binding invariant:
+    # replaying the edit_script over the OCR text reproduces the pipeline's
+    # own final per-line text for every op'd line.
     assert result.edit_script.ops
-    assert all(isinstance(op, ReplaceSpan) for op in result.edit_script.ops)
+    assert any(isinstance(op, ReplaceSpan) for op in result.edit_script.ops)
+    ocr_by_line = {lm.line_id: lm.ocr_text for page in doc.pages for lm in page.lines}
+    final_by_line = {
+        lm.line_id: (
+            lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
+        )
+        for page in doc.pages
+        for lm in page.lines
+    }
+    replayed = apply_edit_script(result.edit_script, ocr_by_line)
+    for op in result.edit_script.ops:
+        assert replayed.text_by_id[op.line_id] == final_by_line[op.line_id]
 
 
 class _VisionProducer:
@@ -82,6 +99,41 @@ class _VisionProducer:
         # Record what the compiler put in the payload, edit nothing.
         self.seen_payload = payload
         return EditScript(ops=[]), None
+
+
+class _BuggyProducer:
+    """Producer that raises a genuine programming error (not a provider /
+    transport / validation error) on every attempt."""
+
+    wants_geometry = False
+    wants_image = False
+    requires_full_coverage = False
+
+    async def produce(self, payload, *, policy):
+        raise KeyError("bug in _script_to_raw")
+
+
+@pytest.mark.asyncio
+async def test_programming_error_propagates_not_masked_as_ocr_fallback():
+    """Audit P3 — a genuine programming error on the producer path must FAIL
+    the run, not be silently degraded to OCR fallback (which would report a
+    'successful' run with every chunk left as uncorrected OCR). Provider
+    transport / validation errors still degrade; only programmer bugs
+    propagate."""
+    doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
+    pipeline = CorrectionPipeline(
+        producer=_BuggyProducer(),
+        observer=_Null(),
+        output_writer=_Null(),
+        provider_name="buggy",
+        model="m",
+    )
+    with pytest.raises(KeyError):
+        await pipeline.run(
+            document_manifest=doc,
+            source_files={_SAMPLE.name: _SAMPLE},
+            apply=False,
+        )
 
 
 @pytest.mark.asyncio

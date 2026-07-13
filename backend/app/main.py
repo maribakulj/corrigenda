@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,6 +16,10 @@ from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+logger = logging.getLogger(__name__)
+
+from corrigenda import __version__ as _corrigenda_version
 
 from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
@@ -32,19 +39,53 @@ _INDEX_HTML = _STATIC_DIR / "index.html"
 # ---------------------------------------------------------------------------
 
 
+#: P1-4 — creation-independent eviction cadence. Eviction used to run
+#: only inside create_job, so a server that stopped receiving new jobs
+#: kept every expired job's files on disk forever.
+# Audit P3 — clamp to a sane minimum: JOB_SWEEP_INTERVAL_SECONDS=0 (or a
+# negative misconfiguration) would make asyncio.sleep return immediately,
+# turning the maintenance loop into a busy-loop that pins a CPU and
+# saturates the thread pool (a self-DoS).
+SWEEP_INTERVAL_SECONDS = max(30, int(os.environ.get("JOB_SWEEP_INTERVAL_SECONDS", "300")))
+
+
+async def _periodic_sweep(app: FastAPI) -> None:
+    while True:
+        await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+        try:
+            evicted = await asyncio.to_thread(app.state.job_store.sweep)
+            if evicted:
+                logger.info("sweep: evicted %d expired job(s)", evicted)
+        except Exception:  # never let a sweep hiccup kill the loop
+            logger.exception("periodic job sweep failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown hooks.
 
-    On startup: nothing extra (state is set up in ``create_app``).
-    On shutdown: ask the background-task registry to drain in-flight
-    correction jobs so we don't leave half-written output files when
-    Docker/HF Spaces sends SIGTERM during a redeploy.
+    On startup: launch the periodic job sweep (P1-4).
+    On shutdown: cancel the sweep, then ask the background-task registry
+    to drain in-flight correction jobs so we don't leave half-written
+    output files when Docker/HF Spaces sends SIGTERM during a redeploy.
     """
-    yield
-    registry: BackgroundTaskRegistry | None = getattr(app.state, "tasks", None)
-    if registry is not None:
-        await registry.shutdown(timeout=30.0)
+    sweep_task = asyncio.create_task(_periodic_sweep(app), name="job-sweep")
+    try:
+        yield
+    finally:
+        # Audit P3 — cancel AND await the sweep task so its cancellation
+        # actually settles (a bare cancel() may not run before the loop
+        # tears down); the shared-client close then always runs.
+        sweep_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sweep_task
+        registry: BackgroundTaskRegistry | None = getattr(app.state, "tasks", None)
+        if registry is not None:
+            await registry.shutdown(timeout=30.0)
+        # P2-10 — close the pooled provider HTTP client.
+        from app.providers.base import aclose_shared_client
+
+        await aclose_shared_client()
 
 
 def _rate_limit_handler(_request: Request, exc: Exception) -> JSONResponse:
@@ -77,15 +118,27 @@ def create_app() -> FastAPI:
     setup_json_logging()
 
     app = FastAPI(
-        title="ALTO LLM Corrector",
-        description="Post-OCR text correction of ALTO XML files using LLM providers.",
-        version="1.0.0",
+        title="Corrigenda",
+        description="Post-OCR text correction of ALTO/PAGE XML files using LLM providers.",
+        # Single version source: the backend tracks the corrigenda library
+        # it embeds (audit: backend version was a hardcoded "1.0.0"
+        # drifting from the package version).
+        version=_corrigenda_version,
         lifespan=lifespan,
     )
 
     # Bind infrastructure to app.state for dependency injection.
     # Endpoints reach this through `Depends(get_job_store)` rather than
     # importing a module-level singleton — see app/api/deps.py.
+    @app.middleware("http")
+    async def _no_store_api_responses(request: Request, call_next):
+        """P1-7 — job responses carry document text, corrections and
+        capability tokens: no shared cache / proxy may retain them."""
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        return response
+
     app.state.job_store = JobStore()
     # Strong-referenced registry for fire-and-forget background tasks
     # (correction runs spawned from POST /api/jobs). Drained on
@@ -178,6 +231,13 @@ def create_app() -> FastAPI:
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
+        # P2-1 — the catch-all must NEVER swallow API/health paths: a
+        # typo like /api/job/123 (singular) used to return index.html
+        # with a 200, masking deployment errors and fooling probes.
+        reserved = full_path == "api" or full_path.startswith("api/")
+        reserved = reserved or full_path == "health" or full_path.startswith("health/")
+        if reserved:
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
         if _INDEX_HTML.exists():
             return FileResponse(str(_INDEX_HTML))
         return JSONResponse({"status": "ok"})

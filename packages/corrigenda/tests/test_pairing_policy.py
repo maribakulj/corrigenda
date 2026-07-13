@@ -88,12 +88,23 @@ def test_vertical_gap_skipped_across_pages():
 
 
 def test_strict_gap_policy_breaks_every_pair():
-    """A policy that rejects any downward gap must link zero pairs, while
-    the default links at least one — proving the seam is honoured and not
-    a no-op."""
+    """A restrictive same-block-only + zero-gap policy must link fewer
+    pairs than the default — proving the seam is honoured and not a
+    no-op. (P2-5: the historical trick of a *negative* gap cap is now
+    rejected by validation — see test below — so the strictest
+    expressible policy is gap 0.)"""
     default_pages, _ = parse_alto_file(_SAMPLE, _SAMPLE.name)
     assert _linked_count(default_pages) > 0
 
-    strict = PairingPolicy(max_vertical_gap=-100000)
+    strict = PairingPolicy(max_vertical_gap=0)
     strict_pages, _ = parse_alto_file(_SAMPLE, _SAMPLE.name, pairing_policy=strict)
-    assert _linked_count(strict_pages) == 0
+    assert _linked_count(strict_pages) < _linked_count(default_pages)
+
+
+def test_negative_gap_cap_is_rejected_at_construction():
+    """P2-5 — a negative vertical-gap cap is a nonsensical configuration
+    (it can only reject-by-arithmetic-accident) and fails fast."""
+    import pytest
+
+    with pytest.raises(ValueError):
+        PairingPolicy(max_vertical_gap=-1)

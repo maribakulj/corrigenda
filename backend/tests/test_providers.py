@@ -31,6 +31,24 @@ def _make_response(status_code: int, body: dict) -> httpx.Response:
     )
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def _patched_shared_client():
+    """P2-10 — call_llm/get_json use ONE pooled AsyncClient via
+    get_shared_client() (no per-call context manager). Tests patch the
+    accessor and get the mock instance to configure .post/.get on."""
+    from unittest.mock import MagicMock
+
+    from app.providers import base as base_module
+
+    instance = MagicMock()
+    instance.is_closed = False
+    with patch.object(base_module, "get_shared_client", return_value=instance):
+        yield instance
+
+
 # ---------------------------------------------------------------------------
 # test_openai_allowlist_prefixes
 # ---------------------------------------------------------------------------
@@ -142,8 +160,7 @@ async def test_anthropic_model_parse():
 
     mock_resp = _make_response(200, api_resp)
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.get = AsyncMock(return_value=mock_resp)
 
         provider = AnthropicProvider()
@@ -171,6 +188,46 @@ def test_system_prompt_contains_hyphen_rule():
     assert "sans déplacer de texte entre elles" in SYSTEM_PROMPT
     assert "backward_join_candidate" in SYSTEM_PROMPT
     assert "forward_join_candidate" in SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Audit P3 — shared AsyncClient is recreated when the event loop changes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_shared_client_recreated_on_loop_mismatch():
+    """A client bound to a defunct loop must NOT be handed back: is_closed
+    stays False but the loop is dead, so the loop-id mismatch forces a fresh
+    client (else the first request raises 'Event loop is closed')."""
+    from unittest.mock import MagicMock
+
+    from app.providers import base as base_module
+
+    stale = MagicMock()
+    stale.is_closed = False
+    base_module._shared_client = stale
+    base_module._shared_client_loop_id = -1  # bogus id != the running loop
+
+    client = base_module.get_shared_client()
+    try:
+        assert client is not stale
+        assert isinstance(client, httpx.AsyncClient)
+    finally:
+        await base_module.aclose_shared_client()
+
+
+@pytest.mark.asyncio
+async def test_shared_client_reused_within_same_loop():
+    from app.providers import base as base_module
+
+    await base_module.aclose_shared_client()  # reset state
+    c1 = base_module.get_shared_client()
+    c2 = base_module.get_shared_client()
+    try:
+        assert c1 is c2  # one pooled client per loop, no spurious churn
+    finally:
+        await base_module.aclose_shared_client()
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +281,7 @@ async def test_anthropic_complete_structured_uses_tools_api():
         }
     )
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
 
         provider = AnthropicProvider()
@@ -269,8 +325,7 @@ async def test_anthropic_complete_structured_skips_thinking_block():
         }
     )
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
         result, _usage = await provider.complete_structured(
@@ -295,8 +350,7 @@ async def test_anthropic_complete_structured_text_block_fallback():
         }
     )
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
         result, _usage = await provider.complete_structured(
@@ -321,8 +375,7 @@ async def test_anthropic_complete_structured_no_usable_block_raises():
         }
     )
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
         with pytest.raises(ValueError, match="no usable block"):
@@ -350,8 +403,7 @@ async def test_openai_complete_structured_uses_json_schema_response_format():
         }
     )
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = OpenAIProvider()
         result, _usage = await provider.complete_structured(
@@ -378,8 +430,7 @@ async def test_openai_complete_structured_uses_json_schema_response_format():
 async def test_openai_complete_structured_raises_on_missing_choices():
     capture = _PostCapture({"object": "chat.completion"})  # no 'choices' key
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = OpenAIProvider()
         with pytest.raises(ValueError, match="missing 'choices'"):
@@ -403,8 +454,7 @@ async def test_mistral_complete_structured_sends_json_schema():
         {"choices": [{"message": {"content": '{"lines":[{"line_id":"M","corrected_text":"y"}]}'}}]}
     )
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = MistralProvider()
         result, _usage = await provider.complete_structured(
@@ -444,8 +494,7 @@ async def test_google_complete_structured_uses_response_schema():
         }
     )
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = GoogleProvider()
         result, _usage = await provider.complete_structured(
@@ -468,8 +517,7 @@ async def test_google_complete_structured_uses_response_schema():
 async def test_google_complete_structured_raises_on_missing_candidates():
     capture = _PostCapture({"promptFeedback": {"blockReason": "SAFETY"}})
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = GoogleProvider()
         with pytest.raises(ValueError, match="missing 'candidates'"):
@@ -486,8 +534,7 @@ async def test_google_complete_structured_raises_on_missing_candidates():
 async def test_google_complete_structured_raises_on_empty_parts():
     capture = _PostCapture({"candidates": [{"content": {"parts": []}}]})
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = GoogleProvider()
         with pytest.raises(ValueError, match="no parts"):
@@ -550,8 +597,7 @@ async def test_google_list_models_does_not_leak_api_key_in_url():
     """
     capture = _FullKwargsCapture({"models": []})
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.get = AsyncMock(side_effect=capture)
         provider = GoogleProvider()
         await provider.list_models(api_key=_SECRET_KEY)
@@ -588,8 +634,7 @@ async def test_google_complete_structured_does_not_leak_api_key_in_url():
         }
     )
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = GoogleProvider()
         await provider.complete_structured(
@@ -644,8 +689,7 @@ async def test_anthropic_max_tokens_scales_with_chunk_size():
     # 60-line chunk — past 8192-token sensible budget.
     big_payload = {"lines": [{"line_id": f"L{i}", "ocr_text": "x" * 60} for i in range(60)]}
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
         await provider.complete_structured(
@@ -686,8 +730,7 @@ async def test_anthropic_max_tokens_floors_at_8192_for_small_chunks():
     )
     tiny_payload = {"lines": [{"line_id": "L1", "ocr_text": "x"}]}
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
         await provider.complete_structured(
@@ -726,8 +769,7 @@ async def test_anthropic_fallback_parses_prose_prefixed_json():
         }
     )
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
         result, _usage = await provider.complete_structured(
@@ -749,8 +791,7 @@ async def test_anthropic_fallback_parses_code_fenced_json():
     fenced = '```json\n{"lines": [{"line_id": "L1", "corrected_text": "ok"}]}\n```'
     capture = _PostCapture({"content": [{"type": "text", "text": fenced}]})
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(side_effect=capture)
         provider = AnthropicProvider()
         result, _usage = await provider.complete_structured(
@@ -813,60 +854,68 @@ def _http_status_error(status: int) -> httpx.HTTPStatusError:
 
 
 @pytest.mark.parametrize(
-    ("exc_factory", "should_wrap", "label"),
+    ("exc_factory", "expected", "label"),
     [
-        # 4xx (non-429) — client errors that don't heal on retry.
-        # Pass through unchanged so the classifier short-circuits.
-        (lambda: _http_status_error(400), False, "400 Bad Request"),
-        (lambda: _http_status_error(401), False, "401 Unauthorized"),
-        (lambda: _http_status_error(403), False, "403 Forbidden"),
-        (lambda: _http_status_error(404), False, "404 Not Found"),
-        (lambda: _http_status_error(422), False, "422 Unprocessable"),
+        # 4xx (non-429) — client rejections that never heal on retry.
+        # P0-1: wrapped as ProviderPermanentError so the pipeline FAILS
+        # the run instead of silently falling every chunk back to OCR.
+        (lambda: _http_status_error(400), "permanent", "400 Bad Request"),
+        (lambda: _http_status_error(401), "permanent", "401 Unauthorized"),
+        (lambda: _http_status_error(403), "permanent", "403 Forbidden"),
+        (lambda: _http_status_error(404), "permanent", "404 Not Found"),
+        (lambda: _http_status_error(422), "permanent", "422 Unprocessable"),
         # 429 — rate limit, MAY heal → wrapped → retried with backoff.
-        (lambda: _http_status_error(429), True, "429 Too Many Requests"),
+        (lambda: _http_status_error(429), "transient", "429 Too Many Requests"),
         # 5xx — upstream blip, MAY heal → wrapped.
-        (lambda: _http_status_error(500), True, "500 Internal Server Error"),
-        (lambda: _http_status_error(502), True, "502 Bad Gateway"),
-        (lambda: _http_status_error(503), True, "503 Service Unavailable"),
-        (lambda: _http_status_error(504), True, "504 Gateway Timeout"),
+        (lambda: _http_status_error(500), "transient", "500 Internal Server Error"),
+        (lambda: _http_status_error(502), "transient", "502 Bad Gateway"),
+        (lambda: _http_status_error(503), "transient", "503 Service Unavailable"),
+        (lambda: _http_status_error(504), "transient", "504 Gateway Timeout"),
         # Transport-level (no status code) — wrapped.
-        (lambda: httpx.TimeoutException("read timeout"), True, "TimeoutException"),
-        (lambda: httpx.ConnectError("connection refused"), True, "ConnectError"),
-        (lambda: httpx.RemoteProtocolError("disconnected"), True, "RemoteProtocolError"),
+        (lambda: httpx.TimeoutException("read timeout"), "transient", "TimeoutException"),
+        (lambda: httpx.ConnectError("connection refused"), "transient", "ConnectError"),
+        (
+            lambda: httpx.RemoteProtocolError("disconnected"),
+            "transient",
+            "RemoteProtocolError",
+        ),
         # Non-httpx exceptions — caller's responsibility, pass through.
-        (lambda: ValueError("malformed JSON"), False, "ValueError"),
-        (lambda: RuntimeError("internal"), False, "RuntimeError"),
+        (lambda: ValueError("malformed JSON"), "passthrough", "ValueError"),
+        (lambda: RuntimeError("internal"), "passthrough", "RuntimeError"),
     ],
 )
-def test_wrap_if_transient_classifies_correctly(exc_factory, should_wrap, label):
-    """Pin the policy of ``_wrap_if_transient``: which exceptions are
-    wrapped as ``ProviderTransientError`` (retryable transport failure)
-    vs. passed through unchanged (caller-side bug, won't heal on retry).
+def test_wrap_if_transient_classifies_correctly(exc_factory, expected, label):
+    """Pin the 3-way policy of ``_wrap_if_transient`` (P0-1 taxonomy):
+    transient (retry with backoff) / permanent (FAIL the whole run —
+    bad key, unknown model) / passthrough (non-httpx, caller's bug).
 
-    A future "let's just wrap everything httpx-y" refactor that removed
-    the 4xx exception would silently re-introduce the 3-retry waste on
-    permanent client errors (bad keys, wrong models). A refactor that
-    forgot to wrap 5xx would break exponential backoff on upstream
-    blips. Either regression is caught here.
+    A refactor that stopped wrapping 4xx as permanent would silently
+    re-introduce the false-success failure mode: every chunk falls back
+    to OCR and the job reports success on an invalid API key.
     """
-    from corrigenda.core.protocols import ProviderTransientError
+    from corrigenda.core.protocols import (
+        ProviderPermanentError,
+        ProviderTransientError,
+    )
 
     from app.providers.base import _wrap_if_transient
 
     exc = exc_factory()
     result = _wrap_if_transient(exc)
 
-    if should_wrap:
+    if expected == "transient":
         assert isinstance(result, ProviderTransientError), (
             f"{label}: expected ProviderTransientError, got {type(result).__name__}"
         )
         assert result is not exc, f"{label}: wrapped result must be a new exception"
+    elif expected == "permanent":
+        assert isinstance(result, ProviderPermanentError), (
+            f"{label}: expected ProviderPermanentError, got {type(result).__name__}"
+        )
+        assert result.status_code == exc.response.status_code
     else:
         assert result is exc, (
             f"{label}: expected pass-through (same object), got {type(result).__name__}"
-        )
-        assert not isinstance(result, ProviderTransientError), (
-            f"{label}: must NOT be wrapped as ProviderTransientError"
         )
 
 
@@ -883,37 +932,30 @@ async def test_call_llm_wraps_5xx_as_provider_transient_error():
     from app.providers.base import call_llm
 
     mock_resp = _make_response(503, {"error": "upstream blip"})
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(return_value=mock_resp)
         with pytest.raises(ProviderTransientError):
             await call_llm(url="https://api.example.com", headers={}, body={})
 
 
 @pytest.mark.asyncio
-async def test_call_llm_passes_4xx_through_as_raw_http_status_error():
-    """Wiring symmetric — ``call_llm`` must NOT wrap 4xx-non-429. The
-    raw ``HTTPStatusError`` surfaces so the classifier's isinstance
-    chain misses every retryable branch and the chunk falls back on
-    first failure (the contract pinned by
-    ``test_pipeline_classifies_client_http_4xx_as_non_retryable``).
+async def test_call_llm_wraps_4xx_as_provider_permanent_error():
+    """Wiring (P0-1) — ``call_llm`` must wrap 4xx-non-429 as
+    ``ProviderPermanentError`` so the pipeline FAILS the run: a bad API
+    key must never degrade into per-chunk OCR fallbacks that end in a
+    "successful" job. The wrapped error keeps the status code and never
+    leaks the credential in its message.
     """
-    from corrigenda.core.protocols import ProviderTransientError
+    from corrigenda.core.protocols import ProviderPermanentError
 
     from app.providers.base import call_llm
 
     mock_resp = _make_response(401, {"error": "bad key"})
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(return_value=mock_resp)
-        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        with pytest.raises(ProviderPermanentError) as exc_info:
             await call_llm(url="https://api.example.com", headers={}, body={})
-        # Critical: the raised exception must NOT be a ProviderTransientError.
-        assert not isinstance(exc_info.value, ProviderTransientError), (
-            "4xx-non-429 must NOT be wrapped; wrapping would restore the 3-retry waste on bad keys."
-        )
-        # And the status code is preserved on the original exception.
-        assert exc_info.value.response.status_code == 401
+        assert exc_info.value.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -929,8 +971,7 @@ async def test_get_json_wraps_5xx_as_provider_transient_error():
     from app.providers.base import get_json
 
     mock_resp = _make_response(503, {"error": "upstream blip"})
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.get = AsyncMock(return_value=mock_resp)
         with pytest.raises(ProviderTransientError):
             await get_json(url="https://api.example.com/models")
@@ -997,8 +1038,7 @@ async def test_call_llm_wrapped_5xx_exposes_status_code_and_original_via_cause()
     from app.providers.base import call_llm
 
     mock_resp = _make_response(503, {"error": "blip"})
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
+    with _patched_shared_client() as instance:
         instance.post = AsyncMock(return_value=mock_resp)
         with pytest.raises(ProviderTransientError) as exc_info:
             await call_llm(url="https://api.example.com", headers={}, body={})

@@ -17,14 +17,17 @@ from corrigenda.core.pairing import (
 from corrigenda.core.schemas import Coords, HyphenRole, LineManifest, PageManifest
 
 
-def _line(line_id: str, text: str, page_id: str = "p1") -> LineManifest:
+def _line(line_id: str, text: str, page_id: str = "p1", vpos: int = 0) -> LineManifest:
+    # P1-2 — the default PairingPolicy vets geometry, so consecutive test
+    # lines must be stacked realistically (pass vpos) instead of all
+    # sitting at the same coordinates.
     return LineManifest(
         line_id=line_id,
         page_id=page_id,
         block_id="b1",
         line_order_global=0,
         line_order_in_block=0,
-        coords=Coords(hpos=0, vpos=0, width=100, height=10),
+        coords=Coords(hpos=0, vpos=vpos, width=100, height=10),
         ocr_text=text,
     )
 
@@ -64,7 +67,7 @@ def test_trailing_hyphen_char_empty():
 def test_link_pairs_marks_next_line_part2():
     part1 = _line("l1", "appro-")
     part1.hyphen_role = HyphenRole.PART1
-    part2 = _line("l2", "bation")
+    part2 = _line("l2", "bation", vpos=12)
     link_hyphen_pairs([part1, part2])
     assert part2.hyphen_role == HyphenRole.PART2
     assert part1.hyphen_pair_line_id == "l2"

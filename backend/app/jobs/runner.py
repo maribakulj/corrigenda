@@ -17,6 +17,7 @@ import warnings
 from pathlib import Path
 
 from corrigenda import CorrectionPipeline, CorrectionResult, sanitize_error
+from corrigenda.core.protocols import ProviderPermanentError
 
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore, OutputWriter
@@ -50,6 +51,23 @@ class JobRunner:
 
     def __init__(self, job_store: JobStore) -> None:
         self.job_store = job_store
+
+    @staticmethod
+    def _commit_outputs(output_writer: OutputWriter) -> None:
+        """P0-4 — promote staged outputs atomically after a successful
+        run. Duck-typed: writers without a staging concept (in-memory
+        test doubles, custom sinks) simply skip it."""
+        commit = getattr(output_writer, "commit", None)
+        if callable(commit):
+            commit()
+
+    @staticmethod
+    def _discard_outputs(output_writer: OutputWriter) -> None:
+        """P0-4 — drop staged outputs on failure/timeout/cancellation so
+        nothing partial ever becomes downloadable."""
+        discard = getattr(output_writer, "discard", None)
+        if callable(discard):
+            discard()
 
     async def run(
         self,
@@ -108,9 +126,22 @@ class JobRunner:
             )
             elapsed = round(time.monotonic() - start_time, 2)
 
+            # P0-4 — promote the staged outputs BEFORE the job turns
+            # terminal-success: a client that sees the status can always
+            # download the complete, committed set.
+            self._commit_outputs(output_writer)
+
+            # P0-1 — COMPLETED strictly means "zero fallbacks". A run where
+            # some lines silently kept their OCR source text is a DEGRADED
+            # success and says so in its terminal state.
+            terminal = (
+                JobStatus.COMPLETED_WITH_FALLBACKS
+                if result.fallback_count > 0
+                else JobStatus.COMPLETED
+            )
             self.job_store.update_job(
                 job_id,
-                status=JobStatus.COMPLETED,
+                status=terminal,
                 chunks_total=total_chunks,
                 lines_modified=lines_modified,
                 duration_seconds=elapsed,
@@ -140,10 +171,17 @@ class JobRunner:
                     "hyphen_pairs_total": total_reconciled,
                     "chunks_total": total_chunks,
                     "duration_seconds": elapsed,
+                    # P0-1 — degraded-success visibility: the terminal
+                    # status and the fallback count ride the event so the
+                    # client can render "success" vs "success with N
+                    # uncorrected lines" without an extra round-trip.
+                    "status": terminal.value,
+                    "fallbacks": result.fallback_count,
                 },
             )
 
         except TimeoutError:
+            self._discard_outputs(output_writer)
             logger.error("Job %s timed out after %ss", job_id, timeout_seconds)
             elapsed = round(time.monotonic() - start_time, 2)
             safe_error = f"Job timed out after {timeout_seconds}s"
@@ -158,6 +196,7 @@ class JobRunner:
             )
 
         except asyncio.CancelledError:
+            self._discard_outputs(output_writer)
             # L10/B8 — SIGTERM during shutdown cancels the runner task
             # via `BackgroundTaskRegistry.shutdown()` past the 30 s grace
             # deadline. `CancelledError` extends `BaseException` (not
@@ -183,7 +222,34 @@ class JobRunner:
             # pattern for handling CancelledError — never silently swallow).
             raise
 
+        except ProviderPermanentError as exc:
+            self._discard_outputs(output_writer)
+            # P0-1 — the provider definitively rejected the request
+            # (invalid key, unknown model, 4xx family). The message is
+            # already built provider-side without credentials; sanitise
+            # anyway (defence in depth) and fail with a clear, actionable
+            # error instead of ever reaching COMPLETED.
+            logger.error(
+                "Job %s failed on a permanent provider error (HTTP %s)",
+                job_id,
+                exc.status_code,
+            )
+            elapsed = round(time.monotonic() - start_time, 2)
+            safe_error = sanitize_error(str(exc), api_key)[:500]
+            self.job_store.update_job(
+                job_id,
+                status=JobStatus.FAILED,
+                error=safe_error,
+                duration_seconds=elapsed,
+            )
+            self.job_store.emit(
+                job_id,
+                PipelineEventType.FAILED,
+                {"job_id": job_id, "error": safe_error},
+            )
+
         except Exception as exc:
+            self._discard_outputs(output_writer)
             logger.exception("Job %s failed", job_id)
             # Sanitise BEFORE truncating: if the api_key straddles the 500-char
             # boundary, slicing first would leave half the key visible and the
@@ -193,7 +259,9 @@ class JobRunner:
                 job_id,
                 status=JobStatus.FAILED,
                 error=safe_error,
-                duration_seconds=time.monotonic() - start_time,
+                # Audit P3 — round like the three other handlers do (was
+                # the only one recording an unrounded float).
+                duration_seconds=round(time.monotonic() - start_time, 2),
             )
             self.job_store.emit(
                 job_id,

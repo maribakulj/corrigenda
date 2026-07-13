@@ -185,9 +185,18 @@ def test_changelog_added_symbols_are_importable():
         # corrigenda.core.protocols
         (
             "corrigenda.core.protocols",
-            ["BaseProvider", "PipelineObserver", "OutputWriter"],
+            [
+                "BaseProvider",
+                "PipelineObserver",
+                "OutputWriter",
+                # P0-1 provider taxonomy (Unreleased ### Added)
+                "ProviderTransientError",
+                "ProviderPermanentError",
+            ],
         ),
         ("corrigenda.producers.llm", ["OUTPUT_JSON_SCHEMA", "SYSTEM_PROMPT"]),
+        # corrigenda.errors — P0-5 (Unreleased ### Added)
+        ("corrigenda.errors", ["DuplicateIdError"]),
     ]
 
     missing: list[str] = []

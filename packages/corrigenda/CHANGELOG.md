@@ -7,7 +7,248 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed (exhaustive audit — library correctness cluster, 2026-07-12)
+
+- **Hyphen reconciliation.** The explicit-mode subs join stripped only
+  ASCII `-`, so an explicit pair whose break char is `¬`/`⸗`/soft-hyphen
+  (Fraktur/old print) never matched its `SUBS_CONTENT` and was
+  systematically reverted to OCR — the join now strips the full
+  `HYPHEN_CHARS` repertoire (matching the widened trailing-hyphen gate).
+  Separately, an explicit-mode PART2 that absorbed trailing words from the
+  next line (`"saires"` → `"saires du roi"`) could pass the boundary-word
+  join and survive as a merged line; PART2 word growth now forces a
+  fallback, preserving the "lines never merge" invariant.
+- **Edit protocol (E2).** A zero-length insertion co-located with a
+  replacement's start offset escaped the overlap check and, applied
+  right-to-left in an ambiguous order, could leave a character the
+  replacement was meant to remove — co-located span ops are now rejected as
+  overlaps.
+- **ALTO rewriter.** (a) A heuristically-detected PART1 (trailing dash, no
+  explicit markup) no longer gets a synthesised `<HYP>` or a phantom
+  trailing hyphen on the slow path — the conservative-heuristic invariant.
+  (b) A single-`String` `BOTH` line keeps its backward `HypPart2` marker
+  instead of the forward `HypPart1` write clobbering the same element.
+  (c) *(byte change)* the slow-path rebuild reserves the trailing HYP's
+  real width and repositions it flush at the line's right edge, so the
+  child widths sum exactly to the line `WIDTH` with no overlap (previously
+  the HYP kept its stale HPOS/WIDTH while the Strings were laid over a 4%
+  estimate). The scripted byte-parity goldens move accordingly; identity
+  goldens are unchanged.
+- **LLM-response validator.** The hyphen fusion check now honours
+  `target_line_ids`: in F8 window mode a hyphen pair sitting entirely in a
+  chunk's *context* region can no longer fail the whole chunk (which
+  discarded the chunk's valid *target* corrections on retry/fallback).
+- **`PairingPolicy.same_block_only`** is page-qualified, honouring its
+  documented cross-page guarantee when block ids repeat across pages (both
+  pages exporting `TextBlock1`).
+- **Adjacent-duplicate guard.** A run of three or more identical
+  corrections now reverts every member; the loop used to skip the third.
+- **PAGE `polygon_to_bbox`.** A half-malformed `x,y` pair (good `x`, bad
+  `y`) is skipped atomically instead of leaving a dangling `x` that
+  inflated the bbox.
+- **`RulesProducer` lexicon guard** normalises through `ncfold` (NFC +
+  casefold), so a decomposed (NFD) lexicon entry matches the parser's
+  NFC-normalised tokens (previously a silently missed guarded correction).
+- **Parsers refuse an id-less `TextLine`** (both ALTO and PAGE): a
+  fabricated manifest id cannot round-trip through the rewriter (it matches
+  on the real id attribute), so its correction would be silently dropped —
+  the file is now rejected with `ParseError` instead. An id-less region
+  under a `ReadingOrder` keeps document order (conservative bail).
+- **Pipeline.** The cross-page duplicate-revert now reaches a hyphen
+  partner living on another page, so a reconciled cross-page pair reverts
+  atomically (never half OCR / half corrected). The page-seam duplicate
+  pass compares a seam only within one source file. `CorrectionResult.
+  edit_script` is rebuilt from the final per-line state (after
+  reconciliation, acceptance and every revert), so a dry-run consumer
+  replaying it reproduces the pipeline's own output — it never carries a
+  stale op for a line reverted to OCR or reconciled to different text; an
+  accepted-unchanged line keeps the producer's original op type. The
+  producer-attempt error guard uses a denylist of genuine programming-error
+  types, so a real bug (KeyError/TypeError/…) fails the run instead of
+  silently degrading every chunk to OCR, while provider transport /
+  validation errors still degrade.
+
+### Fixed
+
+- **P1-1 — recursive structure traversal.** Both parsers only visited
+  *direct* children: ALTO ``TextBlock``s nested inside a ``ComposedBlock``
+  and PAGE ``TextRegion``s nested inside another region were silently
+  dropped — their lines never entered the manifest and were never
+  corrected. Both parsers now walk the whole subtree in document order
+  (each PAGE region still contributes only its direct lines, so nothing
+  is double-counted). ALTO's container rule is unchanged (``PrintSpace``
+  when present, else the whole ``Page``).
+
+### Changed
+
+- **P2-5 — configuration models validate invariants, not just types.**
+  Every policy knob used to be a bare `int`/`float`: negative backoffs,
+  zero chunk limits, out-of-range similarity ratios, temperatures outside
+  [0, 2], a window overlap ≥ the window size, `target_line_ids` outside
+  the chunk's `line_ids` and contradictory `DocumentManifest` totals were
+  silently accepted, then produced arithmetic nonsense deep inside the
+  pipeline. All config models (`ChunkPlannerConfig`, `GuardConfig`,
+  `RetryPolicy`, `PairingPolicy`), `ChunkRequest` and `DocumentManifest`
+  now fail fast at construction (`Field(ge/gt/le)` + cross-field
+  validators). Policy fingerprints are unchanged (values didn't move).
+  Deliberate exception, documented: *data* models fed from wild heritage
+  XML (`Coords`, …) stay tolerant per F5 — a skewed scan's slightly
+  negative position must not abort the file; geometry consumers treat
+  degenerate boxes defensively instead.
+- **P2-8 — `MatchAnchor.occurrence` is now `int | None = None`.** The old
+  `int = 0` default conflated "producer said nothing" with "producer wants
+  the first occurrence", making the first of a repeated pattern
+  *inexpressible* (0 + multiple matches → rejected as ambiguous). `None`
+  (the new default) requires uniqueness — same behaviour as before for
+  producers that never set the field — while an explicit integer,
+  **including 0**, always selects that occurrence. Aligns the
+  implementation with §4.3's own wording ("plusieurs occurrences sans
+  `occurrence` explicite → rejetée").
+- **P2-9 — the E4 line budget counts characters actually changed.**
+  `edit_line_max_changed_chars` used to sum `abs(len(replacement) −
+  len(span))`: a length-neutral rewrite of 100 characters cost 0, so the
+  knob bounded length drift, not the amount of text changed. Each span op
+  is now costed by the size of its differing window after trimming the
+  common prefix/suffix (0 for identical text, its length for a pure
+  insertion, the larger side for a full rewrite — an upper bound on the
+  Levenshtein distance). Length-neutral rewrites that previously slid
+  under the budget are now rejected with `e4_line_budget`.
+- **P1-2 — the default `PairingPolicy` is now geometric.** The historical
+  default accepted *every* sequential hyphen-pair candidate — on layouts
+  whose serialisation order diverges from reading order, a PART1 line
+  could silently pair with a marginal note, an unrelated block, or an
+  out-of-order line, shaping the LLM context with the wrong partner.
+  Heuristic (trailing-dash) pairs are now vetted at pairing time: same
+  block → candidate below within ``max_gap_line_heights`` (default 3.0)
+  of the line's own height; cross-block same page → either a downward
+  continuation with horizontal overlap (next block, same column) or an
+  upward, horizontally disjoint, entirely-above jump (top of the next
+  column — direction-agnostic, RTL-safe). Engine-asserted (explicit
+  ``SUBS_TYPE``/``HYP``) pairs, cross-page seams and degenerate
+  (coordinate-less) geometry are always trusted. New fingerprinted
+  fields ``geometric_checks`` / ``max_gap_line_heights`` /
+  ``max_rise_line_heights``; ``PairingPolicy(geometric_checks=False)``
+  restores the historical behaviour exactly. Composite config
+  fingerprint moves ``3a06d0a93ac4eedc`` → ``216aa712f1e99b79``.
+
+### Added (provider error taxonomy — P0-1/P0-2)
+
+- **`ProviderPermanentError`** *(in `corrigenda.core.protocols`, next to
+  `ProviderTransientError`)* — the provider definitively rejected the
+  request (invalid credentials, unknown model — the 4xx-non-429 family).
+  The pipeline treats it as **fatal for the whole run**: never retried,
+  never downgraded, never converted into an OCR fallback; it propagates
+  out of `run()` before any output is written, like `CorrectionAborted`.
+  Providers that don't wrap keep the old degrade-to-fallback behaviour.
+- **P0-2 — the per-chunk `except Exception` is gone.** Only recoverable
+  domain errors (`CorrectionError` subclasses) may be absorbed as a
+  `chunk_error` event + continue; a programming error (KeyError, broken
+  invariant, pydantic bug) now fails the run instead of letting it
+  complete "successfully" with lines in an unknown state.
+
+### Fixed (adversarial-review wave over the remediation itself)
+
+- **Planner window walk survives config-validation bypass.** Pydantic's
+  `model_copy(update=…)` bypasses the P2-5 validators, so
+  `line_window_overlap >= line_window_size` spun the window loop forever
+  (reproduced). A progress clamp restores the historical guarantee.
+- **LINE-mode chain cap now UNLINKS the cut pair.** Truncating a
+  longer-than-cap hyphen chain used to leave the pair straddling the cut
+  still linked across two chunks — the validator skips such pairs and the
+  reconciler could write across the boundary. Both sides now degrade to
+  independent lines (OCR text preserved verbatim), so pair atomicity
+  stays true by construction.
+- **ALTO IDNEXT:** an empty-string block ID crashed the chain walk with a
+  raw `KeyError`; an IDNEXT pointing outside the page (cross-page article
+  continuation — a legitimate METS/ALTO pattern — or a margin block) now
+  ends the chain instead of voiding the page's whole declared order.
+- **ALTO margins:** without `PrintSpace` the recursive block walk swept
+  margin-nested blocks (running heads, page numbers) into correction
+  scope; they are explicitly excluded again in both container shapes.
+- **Duplicate-ID gate covers the whole tree.** The rewriters match
+  TextLine ids document-wide, but the parse gate only checked manifest
+  scope: a margin line reusing a body line's ID passed upload validation
+  and exploded at rewrite time, after the full producer spend. Both
+  parsers now scan every TextLine id in the file.
+- **Block IDs are page-scoped.** Per-page OCR exports that reuse
+  `block_0`/`block_1` on every page of a file are legitimate (every block
+  lookup downstream is page-scoped) — the per-file check refused them.
+- **PAGE ReadingOrder: partial declarations are ignored.** A declaration
+  covering only some regions used to yank the referenced regions ahead of
+  everything else, reordering text it said nothing about; only a
+  declaration covering every id-bearing region now reorders (same
+  conservative rule as the IDNEXT fallbacks).
+- **Identical line boxes = synthetic geometry.** Exports that copy the
+  block's coords onto every line no longer have their heuristic hyphen
+  pairing silently disabled by the P1-2 geometric vetting.
+- **Duplicate reverts are pair-atomic and cover page seams.** Reverting
+  one member of a reconciled hyphen pair left a mixed OCR+corrected pair
+  (the state `reconcile_hyphen_pair` forbids) — the revert now extends to
+  the partner (`adjacent_duplicate_pair_atomicity`), the revert logic is
+  one shared helper instead of two divergent copies, the P2-6 pass is
+  restricted to actual chunk-boundary pairs (no redundant re-checking),
+  and page-boundary seams are checked too (the same leak one level up).
+- The explicit-pair bypass in `PairingPolicy` is documented precisely:
+  the opt-in legacy vetoes (`same_block_only`, `max_vertical_gap`) still
+  apply to explicit pairs; only the geometric vetting is bypassed.
+- `docs/edit-protocol.md` updated to the new `occurrence` semantics.
+
+### Fixed (guards & budgets)
+
+- **P1-8 — `max_input_chars_per_request` is now a real bound.** Only PAGE
+  and BLOCK honoured the char budget; a WINDOW of pathologically long
+  lines blew straight past it and LINE mode could follow an unbounded
+  hyphen chain. Windows are now bounded by BOTH the line count and the
+  char budget (the overlap step follows the actual window end so a
+  budget-shortened window never skips lines — full windows keep the
+  historical fixed step exactly), and LINE chains are capped at
+  `max_lines_per_request`. Two documented atomic exceptions may
+  overshoot: a hyphen chain (splitting corrupts reconciliation) and a
+  single line longer than the whole budget. The budget's semantics are
+  now documented precisely: it counts RAW OCR text, not the enriched
+  request envelope — size it with headroom.
+- **P2-6 — duplications straddling a chunk boundary are now caught.**
+  Adjacent-duplicate detection ran per chunk on that chunk's target
+  lines only, so two document-adjacent lines owned by different chunks
+  were never compared. A page-level pass after all chunks re-checks
+  every adjacent pair in reading order (idempotent over the intra-chunk
+  results) and reverts both sides of a boundary duplicate to OCR with
+  `adjacent_duplicate_detected`.
+- **P2-7 — guards stage-strictness doc contradiction resolved.**
+  `guards.py` called Stage A "the strictest" while the config documents
+  Stage A as more permissive on PART1 growth (2 words vs 1 at Stage B).
+  The docs now say what the code does: Stage A carries the most
+  aggressive *remedy* (whole-chunk retry), Stage B the strictest
+  *thresholds* — a maintainer can no longer tune them backwards on the
+  strength of the old sentence.
+
+### Added
+
+- **P1-1 — explicit reading order.** PAGE ``ReadingOrder`` declarations
+  (nested Ordered/Unordered groups, ``RegionRefIndexed`` by ``@index``)
+  and ALTO ``IDNEXT`` block chains now drive block/region order — hence
+  ``line_order_global``, prev/next neighbour context and hyphen pairing —
+  instead of raw XML serialisation order (wrong on multicolumn layouts
+  whose declaration diverges). Conservative by construction: regions not
+  covered by the declaration follow in document order; an inconsistent
+  declaration (dangling ref, cycle, converging IDNEXT chains) falls back
+  to document order entirely — the library never guesses. Corpus files
+  whose declaration matches document order (all of ``examples/``) produce
+  byte-identical output.
+
+- **`DuplicateIdError`** *(top-level, subclasses `ParseError`)* — P0-5
+  identity-uniqueness invariant. A source file whose Page / TextBlock /
+  TextLine IDs are not unique is now refused explicitly instead of being
+  silently mis-corrected: previously, two `TextLine` elements sharing an ID
+  made the rewriters apply the *last* parsed manifest to **both** physical
+  lines (last-write-wins on an internal `line_id` dict), destroying one
+  line's text. Enforced in four layers: both format parsers (right after
+  manifest construction), `CorrectionPipeline.run()` (at the door, so
+  hand-built manifests get the same guarantee — including cross-file
+  `page_id` collisions), both rewriters, and both `extract_output_texts`.
+  Duplicate IDs across *different* source files remain legitimate (every
+  downstream lookup is scoped to one file). Additive change: existing
+  `except ParseError` / `except CorrectionError` call sites keep working.
 
 ## [1.0.0] — 2026-07-06
 

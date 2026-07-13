@@ -55,8 +55,8 @@ have since moved, e.g. the pre-extraction `backend/app/alto/*` layout):**
 ## Local installation
 
 ```bash
-git clone https://github.com/maribakulj/alto-llm-corrector.git
-cd alto-llm-corrector
+git clone https://github.com/maribakulj/corrigenda.git
+cd corrigenda
 
 # Copy the example env file (edit if needed)
 cp .env.example .env
