@@ -36,3 +36,6 @@ Thumbs.db
 htmlcov/
 .coverage
 coverage.xml
+
+# vitest / v8 coverage (frontend)
+frontend/coverage/

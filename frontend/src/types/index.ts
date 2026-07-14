@@ -101,8 +101,45 @@ export interface SSEChunkCompleted {
   event: 'chunk_completed'
   chunk_id: string
   line_count: number
+  // Audit-F25 — the lines this chunk OWNS (excludes WINDOW context
+  // overlap). Present on current backends; absent on older ones.
+  target_count?: number
   hyphen_pairs_reconciled: number
   attempt: number
+}
+// Audit-F26 — diagnostic events the backend emits and the hook now
+// surfaces (previously subscribed but unmodelled → silently swallowed).
+export interface SSEChunkError {
+  event: 'chunk_error'
+  chunk_id?: string
+  message?: string
+}
+// Wave-4 review — these payloads mirror the backend's ACTUAL emit sites
+// (core/pipeline.py); the previous shapes pinned fields that were never
+// sent (`granularity`, `message`).
+export interface SSEChunkDowngraded {
+  event: 'chunk_downgraded'
+  chunk_id?: string
+  from_granularity?: string
+  to_granularity?: string
+  line_count?: number
+  target_count?: number
+  budget_remaining?: number
+}
+export interface SSEHyphenPartnerMissing {
+  event: 'hyphen_partner_missing'
+  chunk_id?: string
+  line_id?: string
+  missing_partner_id?: string
+  direction?: string
+}
+// Per-run statistics events — modelled so the stream switch can
+// deliberately silence them (they carry no user-facing state).
+export interface SSERewriterStats {
+  event: 'rewriter_stats'
+}
+export interface SSEReconcileStats {
+  event: 'reconcile_stats'
 }
 export interface SSERetry {
   event: 'retry'
@@ -153,6 +190,9 @@ export type SSEEventData =
   | SSEChunkPlanned
   | SSEChunkStarted
   | SSEChunkCompleted
+  | SSEChunkError
+  | SSEChunkDowngraded
+  | SSEHyphenPartnerMissing
   | SSERetry
   | SSEWarning
   | SSEPageCompleted
@@ -160,6 +200,8 @@ export type SSEEventData =
   | SSEFailed
   | SSEKeepalive
   | SSEError
+  | SSERewriterStats
+  | SSEReconcileStats
 
 // ---------------------------------------------------------------------------
 // Layout viewer

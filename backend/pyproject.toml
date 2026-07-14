@@ -119,6 +119,14 @@ asyncio_mode = "auto"
 # invocation form (PR #45 introduced bare ``pytest`` in CI and broke
 # the backend-tests job; this restores it).
 pythonpath = ["."]
+# Wave 0 (docs/audit/PLAN-CORRECTIONS.md) — the E2E scenarios in
+# tests/e2e/ launch real uvicorn servers (backend + mock vendor). They
+# run in their own CI job (backend-e2e); backend-tests deselects them
+# with `-m "not e2e"` so the unit run stays fast and its coverage gate
+# unchanged. A bare local `pytest` still runs everything.
+markers = [
+    "e2e: end-to-end scenarios against a real uvicorn backend + mock vendor",
+]
 # Surface DeprecationWarnings so upstream API changes (corrigenda, FastAPI,
 # Pydantic, ...) reach us early instead of breaking suddenly. Switch to
 # "error" once the baseline is clean.

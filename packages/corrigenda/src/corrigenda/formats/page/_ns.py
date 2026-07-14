@@ -11,6 +11,7 @@ siblings of the neutral ``_xml`` module. Only the PAGE-specific schema-year
 
 from __future__ import annotations
 
+from corrigenda.core._parse import parse_int_tolerant
 from corrigenda.formats._xml import (
     detect_namespace as _detect_namespace,
     make_safe_parser as make_safe_parser,
@@ -58,14 +59,22 @@ def polygon_to_bbox(points: str) -> tuple[int, int, int, int]:
         if "," not in pair:
             continue
         x_str, _, y_str = pair.partition(",")
+        # An empty side (",5") must skip the pair, not default to 0 —
+        # keep the pre-helper semantics before delegating to
+        # parse_int_tolerant (whose empty-string behaviour is `default`).
+        if not x_str or not y_str:
+            continue
         try:
             # Parse BOTH coordinates before mutating either list, so a pair
             # with a good x but a bad y (heritage-OCR garbage) is skipped
             # atomically. Appending x first left a half-added pair (xs longer
             # than ys), inflating the bbox with a coordinate the docstring
-            # promises to skip.
-            xi = int(float(x_str))
-            yi = int(float(y_str))
+            # promises to skip. Audit-F9 — the shared strict parser also
+            # surfaces inf/overflow-shaped coordinates as ValueError
+            # (pre-fix ``int(float("inf"))`` escaped as OverflowError and
+            # aborted the whole file, violating the skip promise above).
+            xi = parse_int_tolerant(x_str, strict=True)
+            yi = parse_int_tolerant(y_str, strict=True)
         except ValueError:
             continue
         xs.append(xi)

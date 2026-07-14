@@ -1,0 +1,8 @@
+# Wave-5 review — the frontend image builds with context ./frontend, so
+# the ROOT .dockerignore does not apply here. Without this file a local
+# `docker-compose build` COPYs the host's node_modules over the image's
+# freshly `npm ci`-installed one (host-platform native binaries → build
+# failure or non-lockfile deps) and bloats the context with artefacts.
+node_modules
+dist
+coverage

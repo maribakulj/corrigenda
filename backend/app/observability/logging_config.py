@@ -22,6 +22,7 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Callable
 from typing import Any
 
 # Standard LogRecord attributes — anything else on the record is treated
@@ -55,6 +56,44 @@ _RESERVED_ATTRS = frozenset(
         "taskName",
     }
 )
+
+
+def _sanitize_deep(value: Any, sanitize: Callable[[str], str], depth: int = 6) -> Any:
+    """Sanitise every string leaf of a (possibly nested) extra value.
+
+    Depth-bounded: past the bound the subtree is stringified through the
+    sanitiser rather than walked, so cycles/pathological nesting degrade
+    safely instead of recursing forever.
+    """
+    if isinstance(value, str):
+        return sanitize(value)
+    # Json-safe scalars carry no redactable text and serialise as-is.
+    # (bool is checked implicitly — it is an int subclass, harmless here.)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if depth <= 0:
+        try:
+            return sanitize(repr(value))
+        except Exception:
+            return "<unrepresentable>"
+    if isinstance(value, dict):
+        return {k: _sanitize_deep(v, sanitize, depth - 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        seq = [_sanitize_deep(v, sanitize, depth - 1) for v in value]
+        return seq if isinstance(value, list) else tuple(seq)
+    # Wave-6 review — set/frozenset are NOT json-serialisable, so the
+    # JsonFormatter would repr the whole container; sanitise each element
+    # and hand back a list (json-safe, and its strings are individually
+    # redacted rather than relying on json.dumps incidentally failing).
+    if isinstance(value, (set, frozenset)):
+        return [_sanitize_deep(v, sanitize, depth - 1) for v in value]
+    # Any other object: repr-sanitise HERE rather than depend on the
+    # formatter's json.dumps failing (a future ``default=`` handler would
+    # silently reopen the leak). The value becomes a redacted string.
+    try:
+        return sanitize(repr(value))
+    except Exception:
+        return "<unrepresentable>"
 
 
 class RedactionFilter(logging.Filter):
@@ -95,13 +134,15 @@ class RedactionFilter(logging.Filter):
         # Audit P3 — the JSON formatter copies every non-reserved record
         # attribute (logger.X(..., extra={...})) into the payload
         # verbatim, so a string extra like {"raw": "Authorization: Bearer
-        # sk-…"} bypassed redaction entirely. Sanitise string-valued
-        # extras here too, closing the docstring's promise.
+        # sk-…"} bypassed redaction entirely. Wave-3 review — string-only
+        # sanitisation left CONTAINER extras ({"api_key": "sk-…"}, nested
+        # lists) carrying secrets straight through: sanitise every string
+        # leaf, bounded in depth so a pathological structure can't wedge
+        # the logger.
         for key, value in record.__dict__.items():
             if key in _RESERVED_ATTRS or key.startswith("_"):
                 continue
-            if isinstance(value, str):
-                setattr(record, key, sanitize_error(value))
+            setattr(record, key, _sanitize_deep(value, sanitize_error))
         return True
 
 
@@ -135,8 +176,22 @@ class JsonFormatter(logging.Formatter):
                 continue
             try:
                 json.dumps(value)  # only include JSON-serialisable extras
-            except TypeError:
-                value = repr(value)
+            except Exception:
+                # Audit-F22 — a probe that raised only for TypeError let a
+                # circular reference (ValueError) or a deeply-nested value
+                # (RecursionError) escape and drop the whole record. A log
+                # must NEVER kill its own record: fall back to repr() for
+                # anything json.dumps refuses, and if repr() itself blows
+                # up, degrade to a placeholder rather than propagate.
+                # Wave-3 review — the repr materialises NEW text AFTER the
+                # RedactionFilter ran, so it must go through the sanitiser
+                # itself or it reintroduces the exact leak P1-6 closed.
+                try:
+                    from corrigenda import sanitize_error
+
+                    value = sanitize_error(repr(value))
+                except Exception:
+                    value = "<unrepresentable>"
             payload[key] = value
         return json.dumps(payload, ensure_ascii=False)
 

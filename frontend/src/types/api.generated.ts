@@ -73,7 +73,8 @@ export interface paths {
     }
     /**
      * Job Events
-     * @description SSE stream of correction job events.
+     * @description SSE stream of correction job events. P1-7 — EventSource cannot set
+     *     headers, so the capability token arrives as ``?token=``.
      */
     get: operations['job_events_api_jobs__job_id__events_get']
     put?: never
@@ -113,7 +114,12 @@ export interface paths {
     }
     /**
      * Get Job Trace
-     * @description Return per-line text traces for a completed job.
+     * @description Return the job's CorrectionReport (§9) — per-line text traces.
+     *
+     *     The response IS the versioned ``CorrectionReport`` JSON (the same
+     *     document persisted as ``trace.json``): ``report_version`` / ``run_id``
+     *     (== ``job_id``) / ``total_lines`` / ``lines``. The pre-unification
+     *     ``{job_id, total_lines, lines}`` JobTrace shape is gone.
      */
     get: operations['get_job_trace_api_jobs__job_id__trace_get']
     put?: never
@@ -134,6 +140,11 @@ export interface paths {
     /**
      * Get Job Diff
      * @description Return per-line OCR vs corrected diff data for a completed job.
+     *
+     *     Thin adapter: the projection lives in ``app.api.read_models.build_diff``
+     *     (pure, unit-tested). ``get_completed_job`` already 404s on a missing
+     *     manifest, but an ``assert`` would disappear under ``python -O`` (bandit
+     *     B101), so keep a real runtime guard.
      */
     get: operations['get_job_diff_api_jobs__job_id__diff_get']
     put?: never
@@ -154,6 +165,8 @@ export interface paths {
     /**
      * Get Job Layout
      * @description Return structural layout data (blocks + lines with ALTO coordinates).
+     *
+     *     Thin adapter over ``app.api.read_models.build_layout`` (pure, unit-tested).
      */
     get: operations['get_job_layout_api_jobs__job_id__layout_get']
     put?: never
@@ -173,7 +186,8 @@ export interface paths {
     }
     /**
      * Get Job Image
-     * @description Serve a source scan image for a job.
+     * @description Serve a source scan image for a job. P1-7 — <img> tags cannot set
+     *     headers, so the capability token arrives as ``?token=``.
      */
     get: operations['get_job_image_api_jobs__job_id__images__image_name__get']
     put?: never
@@ -198,11 +212,18 @@ export interface components {
       api_key: string
       /** Model */
       model: string
+      /**
+       * Geometric Pairing
+       * @default true
+       */
+      geometric_pairing: boolean
     }
     /** CreateJobResponse */
     CreateJobResponse: {
       /** Job Id */
       job_id: string
+      /** Job Token */
+      job_token?: string | null
     }
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -211,9 +232,16 @@ export interface components {
     }
     /**
      * JobStatus
+     * @description Lifecycle state of a correction job, surfaced to API clients.
      * @enum {string}
      */
-    JobStatus: 'queued' | 'started' | 'running' | 'completed' | 'failed'
+    JobStatus:
+      | 'queued'
+      | 'started'
+      | 'running'
+      | 'completed'
+      | 'completed_with_fallbacks'
+      | 'failed'
     /** JobStatusResponse */
     JobStatusResponse: {
       /** Job Id */
@@ -261,7 +289,10 @@ export interface components {
       /** Models */
       models: components['schemas']['ModelInfo'][]
     }
-    /** ModelInfo */
+    /**
+     * ModelInfo
+     * @description An LLM model description as returned by ``BaseProvider.list_models``.
+     */
     ModelInfo: {
       /** Id */
       id: string
@@ -277,6 +308,7 @@ export interface components {
     }
     /**
      * Provider
+     * @description Identifier for an LLM vendor. Each value maps to one ``BaseProvider``.
      * @enum {string}
      */
     Provider: 'openai' | 'anthropic' | 'mistral' | 'google'

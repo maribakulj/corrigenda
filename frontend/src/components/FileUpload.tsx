@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 interface FileUploadProps {
   onFilesChange: (files: File[]) => void
@@ -19,38 +19,73 @@ function isAllowed(file: File): boolean {
   return ACCEPTED.some((ext) => name.endsWith(ext)) || ACCEPTED_MIME.includes(file.type)
 }
 
+// Audit-F32 — identity is (name, size, lastModified), NOT name alone:
+// two distinct files from different folders often share a filename
+// (page.xml), and de-duping by name silently dropped one.
+function fileKey(f: File): string {
+  return `${f.name}\0${f.size}\0${f.lastModified}`
+}
+
 export function FileUpload({ onFilesChange, disabled }: FileUploadProps) {
   const [files, setFiles] = useState<File[]>([])
   const [dragging, setDragging] = useState(false)
+  const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Functional setState lets these handlers read the current `files`
-  // without capturing it in a closure — so they don't need `useCallback`
-  // and the parent's `onFilesChange` is called exactly once per change
-  // with the up-to-date list. The earlier `useCallback([files, ...])`
-  // chain was eslint-clean but produced a new identity on every `files`
-  // change anyway, so the memoisation gave nothing.
+  // Audit-F31 — notify the parent from an EFFECT, not from inside the
+  // setFiles updater. React runs updaters during the render phase, so
+  // calling the parent's setState there produced a "Cannot update a
+  // component while rendering a different component" warning and ran the
+  // side-effect twice under StrictMode. The effect fires after commit,
+  // exactly once per real `files` change.
+  //
+  // Wave-4 review — a firstRender ref is DEFEATED by StrictMode's
+  // setup→cleanup→setup replay (the ref persists across the replay), so
+  // every mount still emitted a spurious onFilesChange([]). Skip on
+  // content instead: an empty list is only notified if files were ever
+  // non-empty (a real remove-back-to-empty), never at mount.
+  const hadFilesRef = useRef(false)
+  useEffect(() => {
+    if (files.length > 0) {
+      hadFilesRef.current = true
+    } else if (!hadFilesRef.current) {
+      return
+    }
+    onFilesChange(files)
+    // onFilesChange identity is the parent's setter — stable enough; we
+    // deliberately depend only on `files` so a parent re-render doesn't
+    // re-emit an unchanged list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files])
+
   function addFiles(incoming: FileList | null) {
     if (!incoming) return
     const valid = Array.from(incoming).filter(isAllowed)
-    setFiles((prev) => {
-      const merged = [...prev]
-      for (const f of valid) {
-        if (!merged.some((existing) => existing.name === f.name)) {
-          merged.push(f)
-        }
+    // Compute the merge from committed state in the event handler (not
+    // inside a setState updater) so neither setState runs during render.
+    const seen = new Set(files.map(fileKey))
+    const merged = [...files]
+    let dropped = 0
+    for (const f of valid) {
+      const key = fileKey(f)
+      if (seen.has(key)) {
+        dropped += 1
+        continue
       }
-      onFilesChange(merged)
-      return merged
-    })
+      seen.add(key)
+      merged.push(f)
+    }
+    setDuplicateNotice(
+      dropped > 0
+        ? `${dropped} duplicate file${dropped > 1 ? 's' : ''} already added — skipped.`
+        : null,
+    )
+    setFiles(merged)
   }
 
   function removeFile(index: number) {
-    setFiles((prev) => {
-      const next = prev.filter((_, i) => i !== index)
-      onFilesChange(next)
-      return next
-    })
+    setDuplicateNotice(null)
+    setFiles((prev) => prev.filter((_, i) => i !== index))
   }
 
   function onDrop(e: React.DragEvent) {
@@ -99,6 +134,16 @@ export function FileUpload({ onFilesChange, disabled }: FileUploadProps) {
           disabled={disabled}
         />
       </div>
+
+      {/* Audit-F32 — visible notice when a true duplicate was skipped. */}
+      {duplicateNotice && (
+        <p
+          role="status"
+          className="font-mono text-xs text-amber-300/80 bg-amber-950/20 border border-amber-800/30 rounded px-3 py-1.5"
+        >
+          {duplicateNotice}
+        </p>
+      )}
 
       {/* File list */}
       {files.length > 0 && (

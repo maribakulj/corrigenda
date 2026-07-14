@@ -191,13 +191,18 @@ def test_upload_single_xml():
     """POST /api/jobs with sample.xml → 200 + job_id, job ends completed."""
     client = _make_client()
     try:
-        resp = _upload_sample(client)
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "job_id" in body
+        # Entered as a context manager: the background job task must live
+        # on a PERSISTENT portal loop — since the wave-3 review offloads
+        # (asyncio.to_thread) the job genuinely suspends, and a per-request
+        # loop would cancel it at request end.
+        with client:
+            resp = _upload_sample(client)
+            assert resp.status_code == 200
+            body = resp.json()
+            assert "job_id" in body
 
-        status = _poll_completed(client, body["job_id"], body.get("job_token"))
-        assert status == "completed"
+            status = _poll_completed(client, body["job_id"], body.get("job_token"))
+            assert status == "completed"
     finally:
         _restore(client)
 
@@ -217,19 +222,22 @@ def test_upload_zip():
 
     client = _make_client()
     try:
-        resp = client.post(
-            "/api/jobs",
-            data={"provider": "openai", "api_key": "x", "model": "mock"},
-            files=[("files", ("archive.zip", buf.getvalue(), "application/zip"))],
-        )
-        assert resp.status_code == 200
-        job_id = resp.json()["job_id"]
-        token = resp.json()["job_token"]
+        # Entered CM — see test_upload_single_xml: the offloaded job task
+        # needs the persistent portal loop.
+        with client:
+            resp = client.post(
+                "/api/jobs",
+                data={"provider": "openai", "api_key": "x", "model": "mock"},
+                files=[("files", ("archive.zip", buf.getvalue(), "application/zip"))],
+            )
+            assert resp.status_code == 200
+            job_id = resp.json()["job_id"]
+            token = resp.json()["job_token"]
 
-        status = _poll_completed(client, job_id, token)
-        assert status == "completed"
+            status = _poll_completed(client, job_id, token)
+            assert status == "completed"
 
-        assert len(get_output_files(job_id)) == 2
+            assert len(get_output_files(job_id)) == 2
     finally:
         _restore(client)
 
@@ -545,29 +553,31 @@ def test_zip_with_images():
 
     client = _make_client()
     try:
-        resp = client.post(
-            "/api/jobs",
-            data={"provider": "openai", "api_key": "x", "model": "mock"},
-            files=[("files", ("archive.zip", buf.getvalue(), "application/zip"))],
-        )
-        assert resp.status_code == 200
-        job_id = resp.json()["job_id"]
-        token = resp.json()["job_token"]
+        # Entered CM — see test_upload_single_xml.
+        with client:
+            resp = client.post(
+                "/api/jobs",
+                data={"provider": "openai", "api_key": "x", "model": "mock"},
+                files=[("files", ("archive.zip", buf.getvalue(), "application/zip"))],
+            )
+            assert resp.status_code == 200
+            job_id = resp.json()["job_id"]
+            token = resp.json()["job_token"]
 
-        status = _poll_completed(client, job_id, token)
-        assert status == "completed"
+            status = _poll_completed(client, job_id, token)
+            assert status == "completed"
 
-        # Layout should reference the image
-        layout = client.get(f"/api/jobs/{job_id}/layout", headers={"X-Job-Token": token}).json()
-        image_url = layout["pages"][0].get("image_url")
-        assert image_url is not None, "image_url should be set when image matches ALTO stem"
+            # Layout should reference the image
+            layout = client.get(f"/api/jobs/{job_id}/layout", headers={"X-Job-Token": token}).json()
+            image_url = layout["pages"][0].get("image_url")
+            assert image_url is not None, "image_url should be set when image matches ALTO stem"
 
-        # Image endpoint should return the PNG bytes. P1-7 — <img> URLs
-        # carry the token as a query param (no headers on <img> tags).
-        img_resp = client.get(f"{image_url}?token={token}")
-        assert img_resp.status_code == 200
-        assert img_resp.headers["content-type"] == "image/png"
-        assert img_resp.content[:8] == b"\x89PNG\r\n\x1a\n"
+            # Image endpoint should return the PNG bytes. P1-7 — <img> URLs
+            # carry the token as a query param (no headers on <img> tags).
+            img_resp = client.get(f"{image_url}?token={token}")
+            assert img_resp.status_code == 200
+            assert img_resp.headers["content-type"] == "image/png"
+            assert img_resp.content[:8] == b"\x89PNG\r\n\x1a\n"
     finally:
         _restore(client)
 

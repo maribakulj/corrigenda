@@ -94,7 +94,7 @@ def test_newline_in_text():
             {"line_id": "L1", "corrected_text": "hello\nworld"},
         ]
     }
-    with pytest.raises(ValueError, match="newline"):
+    with pytest.raises(ValueError, match="line separator"):
         validate_llm_response(raw, ["L1"])
 
 

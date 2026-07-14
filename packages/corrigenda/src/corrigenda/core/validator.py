@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from corrigenda.core._norm import ncfold
+from corrigenda.core._norm import has_line_separator, ncfold
 from corrigenda.errors import ValidationError
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
@@ -146,9 +146,12 @@ def validate_llm_response(
         # (ASCII spaces + Unicode whitespace incl. NBSP).
         if not isinstance(corrected_text, str) or corrected_text.strip() == "":
             raise ValidationError(f"corrected_text for {line_id!r} is empty or missing")
-        if "\n" in corrected_text or "\r" in corrected_text:
+        # Audit-F10 — reject EVERY str.splitlines boundary, not just
+        # \n/\r: U+2028/U+2029 (and \x0b \x0c \x85 \x1c-\x1e) survive
+        # clean_content into a single-line CONTENT attribute otherwise.
+        if has_line_separator(corrected_text):
             raise ValidationError(
-                f"corrected_text for {line_id!r} contains a newline character"
+                f"corrected_text for {line_id!r} contains a line separator"
             )
 
         outputs.append(LLMLineOutput(line_id=line_id, corrected_text=corrected_text))

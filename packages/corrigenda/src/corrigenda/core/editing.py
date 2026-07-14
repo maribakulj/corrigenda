@@ -36,6 +36,7 @@ from typing import Literal, Union
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Annotated
 
+from corrigenda.core._norm import has_line_separator
 from corrigenda.core.pairing import HYPHEN_CHARS
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
@@ -88,6 +89,13 @@ class ReplaceLine(BaseModel):
     op: Literal["replace_line"] = "replace_line"
     line_id: str
     text: str
+    # Wave-1 review (F4 residual) — line_ids may legitimately repeat across
+    # FILES; only page_ids are document-unique. The final edit_script stamps
+    # this so a consumer can attribute every op to its file. Optional and
+    # additive: hand-written scripts without it keep their old semantics,
+    # and per the CorrectionReport contract a new optional key does NOT
+    # bump report_version.
+    page_id: str | None = None
 
 
 class ReplaceSpan(BaseModel):
@@ -95,6 +103,8 @@ class ReplaceSpan(BaseModel):
     line_id: str
     anchor: Union[MatchAnchor, RangeAnchor]
     text: str
+    #: See ``ReplaceLine.page_id``.
+    page_id: str | None = None
 
 
 EditOp = Annotated[Union[ReplaceLine, ReplaceSpan], Field(discriminator="op")]
@@ -192,7 +202,10 @@ def normalize_anchor(
 
 
 def _has_newline(text: str) -> bool:
-    return "\n" in text or "\r" in text
+    # Audit-F10 — twin of the validator's single-line gate: every
+    # str.splitlines boundary counts, not just \n/\r (the shared
+    # predicate keeps the two enforcement points from drifting).
+    return has_line_separator(text)
 
 
 def _changed_chars(original: str, replacement: str) -> int:
@@ -365,6 +378,7 @@ def apply_edit_script(
     chunk_line_ids: set[str] | None = None,
     guard_config: GuardConfig = DEFAULT_GUARD_CONFIG,
     line_by_id: dict[str, LineManifest] | None = None,
+    page_id: str | None = None,
 ) -> EditResult:
     """Apply an ``EditScript`` and return per-line corrected text + rejections.
 
@@ -374,11 +388,20 @@ def apply_edit_script(
     treated as role NONE (E5 is a no-op). E6 (the three-stage guard matrix)
     is NOT run here — the pipeline applies it afterwards to the resulting
     line text, identically for ``replace_line`` and ``replace_span``.
+
+    ``page_id`` (wave-1 review, F4 residual) scopes replay to one page of a
+    multi-file script: ops stamped with a DIFFERENT page_id are silently
+    out of scope (not rejections — they belong to another file), so a
+    consumer can replay the whole final edit_script one page at a time
+    even when files reuse line_ids. Ops without a stamp are always in
+    scope (hand-written scripts keep their historical behaviour).
     """
     result = EditResult()
 
     ops_by_line: dict[str, list[ReplaceLine | ReplaceSpan]] = {}
     for op in script.ops:
+        if page_id is not None and op.page_id is not None and op.page_id != page_id:
+            continue
         ops_by_line.setdefault(op.line_id, []).append(op)
 
     for line_id, ops in ops_by_line.items():

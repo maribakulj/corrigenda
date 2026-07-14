@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 from app.providers.base import call_llm, extract_usage, get_json
 from app.schemas import ModelInfo, Usage
+
+logger = logging.getLogger(__name__)
 
 _BASE = "https://api.anthropic.com"
 _VERSION = "2023-06-01"
@@ -33,17 +36,51 @@ def _model_output_cap(model: str) -> int:
     safe cap from the model id (conservative on anything unrecognised).
     """
     m = model.lower()
+    # Wave-2 review — the current flagship generations were absent and
+    # fell to the 8192 default: a dense PAGE chunk then truncated its
+    # forced tool_use JSON (the exact F14 retry-storm class) on the very
+    # models F13 targets. Per the models-overview table: Fable 5 /
+    # Mythos 5 / Sonnet 5 and Opus 4.7/4.8 → 128k.
+    if any(k in m for k in ("fable", "mythos", "sonnet-5", "opus-4-7", "opus-4-8")):
+        return 128_000
     # Claude 3.5 family — 8192 output tokens.
     if "claude-3-5" in m or "claude-3.5" in m:
         return 8192
+    # Claude 3.7 — 64k. Audit-F14: this branch MUST precede the generic
+    # 'claude-3' one ("claude-3-7-…" contains the substring "claude-3"),
+    # otherwise 3.7 is silently capped at 4096 and long chunks truncate
+    # into a retry storm.
+    if "claude-3-7" in m or "claude-3.7" in m:
+        return 64_000
     # Claude 3 family (haiku/sonnet/opus) — 4096.
     if "claude-3" in m:
         return 4096
-    # Claude 3.7 / 4.x (sonnet-4, opus-4, etc.) — 64k.
-    if "claude-3-7" in m or "claude-3.7" in m or "-4" in m or "claude-4" in m:
+    # First-generation Claude 4 Opus — 32k (a 64k request risks a 400).
+    if "opus-4-0" in m or "opus-4-1" in m:
+        return 32_000
+    # Remaining Claude 4.x (sonnet-4-x, haiku-4-5, opus-4-5/4-6…) — 64k.
+    if "-4" in m or "claude-4" in m:
         return 64_000
     # Unknown / future model: the safe, universally-supported ceiling.
     return 8192
+
+
+# Audit-F13 — model families that REJECT the `temperature` parameter
+# with a hard 400: Anthropic removed sampling params on Opus 4.7/4.8 and
+# Fable 5/Mythos 5, and Sonnet 5 rejects any NON-default value (our
+# retry ramp 0.0/0.3/0.5 is always non-default, so omit for the family).
+# `list_models` returns the catalog unfiltered, so these are fully
+# selectable; sending temperature failed the whole run (the schema
+# fallback only dropped tool_choice, and the second 400 was permanent).
+# Substring notes: "sonnet-5" does not occur in "claude-3-5-sonnet-…"
+# or "claude-sonnet-4-5". Unknown FUTURE families are covered by the
+# generic strip-param-on-400 fallback in base.call_llm.
+_NO_TEMPERATURE_MARKERS = ("fable", "mythos", "opus-4-7", "opus-4-8", "sonnet-5")
+
+
+def _supports_temperature(model: str) -> bool:
+    m = model.lower()
+    return not any(marker in m for marker in _NO_TEMPERATURE_MARKERS)
 
 
 def _compute_max_tokens(user_payload: dict[str, Any], model: str) -> int:
@@ -102,16 +139,37 @@ class AnthropicProvider:
         }
 
     async def list_models(self, api_key: str) -> list[ModelInfo]:
-        data = await get_json(
-            url=f"{_BASE}/v1/models",
-            headers=self._headers(api_key),
-        )
-
+        # Wave-2 review — /v1/models is PAGINATED (limit default 20, max
+        # 1000; after_id cursor, has_more/last_id in the response): the
+        # single unparameterised GET silently hid every model past page
+        # one — the same defect class Audit-F16 fixed on Gemini. Ask for
+        # the biggest pages, follow the cursor with the same safety
+        # bound, and make truncation loud instead of silent.
         models = []
-        for m in data.get("data", []):
-            mid = m.get("id", "")
-            label = m.get("display_name") or mid
-            models.append(ModelInfo(id=mid, label=label))
+        after_id: str | None = None
+        has_more = False
+        for _ in range(10):
+            params = {"limit": "1000"}
+            if after_id:
+                params["after_id"] = after_id
+            data = await get_json(
+                url=f"{_BASE}/v1/models",
+                headers=self._headers(api_key),
+                params=params,
+            )
+            for m in data.get("data", []):
+                mid = m.get("id", "")
+                label = m.get("display_name") or mid
+                models.append(ModelInfo(id=mid, label=label))
+            has_more = bool(data.get("has_more"))
+            after_id = data.get("last_id")
+            if not has_more or not after_id:
+                break
+        if has_more and after_id:
+            logger.warning(
+                "Anthropic model list truncated at the 10-page safety bound "
+                "(has_more still true) — some models are not shown"
+            )
         models.sort(key=lambda m: m.id)
         return models
 
@@ -138,7 +196,6 @@ class AnthropicProvider:
         body: dict[str, Any] = {
             "model": model,
             "max_tokens": _compute_max_tokens(user_payload, model),
-            "temperature": temperature,
             "system": system_prompt,
             "messages": [
                 {
@@ -155,6 +212,20 @@ class AnthropicProvider:
             ],
             "tool_choice": {"type": "tool", "name": tool_name},
         }
+        # Audit-F13 — only send temperature to families that accept it.
+        if _supports_temperature(model):
+            body["temperature"] = temperature
+        elif temperature:
+            # Wave-2 review — the orchestrator's retry ramp (0.0/0.3/0.5)
+            # is a no-op here: every retry is byte-identical. Unavoidable
+            # at the API level, but it must be visible, not silent.
+            logger.info(
+                "temperature=%s requested but omitted for %s — the family "
+                "rejects sampling params, so the retry ramp does not "
+                "diversify attempts",
+                temperature,
+                model,
+            )
         # Fallback: keep the tool definition but drop the forced choice. The
         # model may still emit a tool_use voluntarily; otherwise it falls
         # back to free text that we'll attempt to JSON-parse.

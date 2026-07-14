@@ -1,16 +1,14 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "ALTO LLM Corrector",
-    "description": "Post-OCR text correction of ALTO XML files using LLM providers.",
+    "title": "Corrigenda",
+    "description": "Post-OCR text correction of ALTO/PAGE XML files using LLM providers.",
     "version": "1.0.0"
   },
   "paths": {
     "/api/providers/models": {
       "post": {
-        "tags": [
-          "providers"
-        ],
+        "tags": ["providers"],
         "summary": "List Models",
         "description": "List available models for a given provider and API key.",
         "operationId": "list_models_api_providers_models_post",
@@ -50,9 +48,7 @@
     },
     "/api/jobs": {
       "post": {
-        "tags": [
-          "jobs"
-        ],
+        "tags": ["jobs"],
         "summary": "Create Job",
         "description": "Upload ALTO files and start a correction job.",
         "operationId": "create_job_api_jobs_post",
@@ -92,9 +88,7 @@
     },
     "/api/jobs/{job_id}": {
       "get": {
-        "tags": [
-          "jobs"
-        ],
+        "tags": ["jobs"],
         "summary": "Get Job",
         "description": "Poll the status of a correction job.",
         "operationId": "get_job_api_jobs__job_id__get",
@@ -135,11 +129,9 @@
     },
     "/api/jobs/{job_id}/events": {
       "get": {
-        "tags": [
-          "jobs"
-        ],
+        "tags": ["jobs"],
         "summary": "Job Events",
-        "description": "SSE stream of correction job events.",
+        "description": "SSE stream of correction job events. P1-7 \u2014 EventSource cannot set\nheaders, so the capability token arrives as ``?token=``.",
         "operationId": "job_events_api_jobs__job_id__events_get",
         "parameters": [
           {
@@ -176,9 +168,7 @@
     },
     "/api/jobs/{job_id}/download": {
       "get": {
-        "tags": [
-          "jobs"
-        ],
+        "tags": ["jobs"],
         "summary": "Download Job",
         "description": "Download corrected XML file(s).",
         "operationId": "download_job_api_jobs__job_id__download_get",
@@ -217,11 +207,9 @@
     },
     "/api/jobs/{job_id}/trace": {
       "get": {
-        "tags": [
-          "jobs"
-        ],
+        "tags": ["jobs"],
         "summary": "Get Job Trace",
-        "description": "Return per-line text traces for a completed job.",
+        "description": "Return the job's CorrectionReport (\u00a79) \u2014 per-line text traces.\n\nThe response IS the versioned ``CorrectionReport`` JSON (the same\ndocument persisted as ``trace.json``): ``report_version`` / ``run_id``\n(== ``job_id``) / ``total_lines`` / ``lines``. The pre-unification\n``{job_id, total_lines, lines}`` JobTrace shape is gone.",
         "operationId": "get_job_trace_api_jobs__job_id__trace_get",
         "parameters": [
           {
@@ -262,11 +250,9 @@
     },
     "/api/jobs/{job_id}/diff": {
       "get": {
-        "tags": [
-          "jobs"
-        ],
+        "tags": ["jobs"],
         "summary": "Get Job Diff",
-        "description": "Return per-line OCR vs corrected diff data for a completed job.",
+        "description": "Return per-line OCR vs corrected diff data for a completed job.\n\nThin adapter: the projection lives in ``app.api.read_models.build_diff``\n(pure, unit-tested). ``get_completed_job`` already 404s on a missing\nmanifest, but an ``assert`` would disappear under ``python -O`` (bandit\nB101), so keep a real runtime guard.",
         "operationId": "get_job_diff_api_jobs__job_id__diff_get",
         "parameters": [
           {
@@ -307,11 +293,9 @@
     },
     "/api/jobs/{job_id}/layout": {
       "get": {
-        "tags": [
-          "jobs"
-        ],
+        "tags": ["jobs"],
         "summary": "Get Job Layout",
-        "description": "Return structural layout data (blocks + lines with ALTO coordinates).",
+        "description": "Return structural layout data (blocks + lines with ALTO coordinates).\n\nThin adapter over ``app.api.read_models.build_layout`` (pure, unit-tested).",
         "operationId": "get_job_layout_api_jobs__job_id__layout_get",
         "parameters": [
           {
@@ -352,11 +336,9 @@
     },
     "/api/jobs/{job_id}/images/{image_name}": {
       "get": {
-        "tags": [
-          "jobs"
-        ],
+        "tags": ["jobs"],
         "summary": "Get Job Image",
-        "description": "Serve a source scan image for a job.",
+        "description": "Serve a source scan image for a job. P1-7 \u2014 <img> tags cannot set\nheaders, so the capability token arrives as ``?token=``.",
         "operationId": "get_job_image_api_jobs__job_id__images__image_name__get",
         "parameters": [
           {
@@ -424,15 +406,15 @@
           "model": {
             "type": "string",
             "title": "Model"
+          },
+          "geometric_pairing": {
+            "type": "boolean",
+            "title": "Geometric Pairing",
+            "default": true
           }
         },
         "type": "object",
-        "required": [
-          "files",
-          "provider",
-          "api_key",
-          "model"
-        ],
+        "required": ["files", "provider", "api_key", "model"],
         "title": "Body_create_job_api_jobs_post"
       },
       "CreateJobResponse": {
@@ -440,12 +422,21 @@
           "job_id": {
             "type": "string",
             "title": "Job Id"
+          },
+          "job_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Token"
           }
         },
         "type": "object",
-        "required": [
-          "job_id"
-        ],
+        "required": ["job_id"],
         "title": "CreateJobResponse"
       },
       "HTTPValidationError": {
@@ -463,14 +454,9 @@
       },
       "JobStatus": {
         "type": "string",
-        "enum": [
-          "queued",
-          "started",
-          "running",
-          "completed",
-          "failed"
-        ],
-        "title": "JobStatus"
+        "enum": ["queued", "started", "running", "completed", "completed_with_fallbacks", "failed"],
+        "title": "JobStatus",
+        "description": "Lifecycle state of a correction job, surfaced to API clients."
       },
       "JobStatusResponse": {
         "properties": {
@@ -530,10 +516,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "job_id",
-          "status"
-        ],
+        "required": ["job_id", "status"],
         "title": "JobStatusResponse"
       },
       "ListModelsRequest": {
@@ -547,10 +530,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "provider",
-          "api_key"
-        ],
+        "required": ["provider", "api_key"],
         "title": "ListModelsRequest"
       },
       "ListModelsResponse": {
@@ -567,10 +547,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "provider",
-          "models"
-        ],
+        "required": ["provider", "models"],
         "title": "ListModelsResponse"
       },
       "ModelInfo": {
@@ -601,21 +578,15 @@
           }
         },
         "type": "object",
-        "required": [
-          "id",
-          "label"
-        ],
-        "title": "ModelInfo"
+        "required": ["id", "label"],
+        "title": "ModelInfo",
+        "description": "An LLM model description as returned by ``BaseProvider.list_models``."
       },
       "Provider": {
         "type": "string",
-        "enum": [
-          "openai",
-          "anthropic",
-          "mistral",
-          "google"
-        ],
-        "title": "Provider"
+        "enum": ["openai", "anthropic", "mistral", "google"],
+        "title": "Provider",
+        "description": "Identifier for an LLM vendor. Each value maps to one ``BaseProvider``."
       },
       "ValidationError": {
         "properties": {
@@ -650,11 +621,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
+        "required": ["loc", "msg", "type"],
         "title": "ValidationError"
       }
     }

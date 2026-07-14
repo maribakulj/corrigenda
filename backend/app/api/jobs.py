@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -221,7 +222,10 @@ async def create_job(
     # extraction/parsing/validation, so any failure in that window must
     # roll both back. Historically a parse failure left a QUEUED job with
     # files on disk forever (never terminal -> never TTL-evicted).
-    job_id = store.create_job(provider_enum, model)
+    # Audit-F21 — store.create_job runs an opportunistic eviction whose
+    # shutil.rmtree would otherwise block the event loop; offload it (the
+    # store is thread-safe via its RLock).
+    job_id = await asyncio.to_thread(store.create_job, provider_enum, model)
     # P1-7 — capability token: shown once in the response; only its hash
     # is stored. Every job endpoint requires it from now on.
     job_token = secrets.token_urlsafe(32)
@@ -232,8 +236,12 @@ async def create_job(
         # Save and extract files (also extracts images from ZIPs).
         # ValueError = bounded/refused input (zip bomb, name collision,
         # too many members) — a client error, not a server fault (P1-9).
+        # Audit-F19 — ZIP decompression + per-member disk writes are
+        # synchronous and CPU/IO-bound; offload so a large upload can't
+        # freeze the single-worker event loop (SSE keepalives, health
+        # probes, in-flight downloads).
         try:
-            saved, image_files = save_uploaded_files(job_id, file_tuples)
+            saved, image_files = await asyncio.to_thread(save_uploaded_files, job_id, file_tuples)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -247,7 +255,11 @@ async def create_job(
         pairing_policy = PairingPolicy(geometric_checks=geometric_pairing)
         file_pairs = [(path, name) for name, path in saved.items()]
         try:
-            doc_manifest = build_document_manifest(file_pairs, pairing_policy=pairing_policy)
+            # Audit-F19 — lxml parse + manifest build over up to 200 MiB of
+            # XML is synchronous and CPU-bound; offload off the event loop.
+            doc_manifest = await asyncio.to_thread(
+                build_document_manifest, file_pairs, pairing_policy=pairing_policy
+            )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Failed to parse files: {exc}") from exc
 
@@ -311,7 +323,12 @@ async def create_job(
     except BaseException:
         # P1-10 — rollback: no half-created QUEUED job may survive a
         # failed creation (they are never terminal, hence never evicted).
-        store.delete_job(job_id)
+        # Wave-3 review — the rmtree inside delete_job can span a
+        # multi-hundred-MB extraction: offloaded like every other heavy
+        # call in this handler, and SHIELDED so a client abort
+        # (CancelledError can land right here) can't skip the cleanup —
+        # the thread runs to completion even if the await is cancelled.
+        await asyncio.shield(asyncio.to_thread(store.delete_job, job_id))
         raise
 
     return CreateJobResponse(job_id=job_id, job_token=job_token)
@@ -369,6 +386,17 @@ async def job_events(
 # ---------------------------------------------------------------------------
 
 
+def _build_zip_archive(tmp_path: str, out_files: list[Path]) -> None:
+    """Write a DEFLATE ZIP of ``out_files`` to ``tmp_path`` (Audit-F19).
+
+    Extracted so the CPU-bound compression can run under
+    ``asyncio.to_thread`` off the event loop.
+    """
+    with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in out_files:
+            zf.write(p, arcname=p.name)
+
+
 @router.get("/{job_id}/download")
 async def download_job(
     job_id: str,
@@ -415,9 +443,11 @@ async def download_job(
     # The `with` block closed the file handle but `delete=False` means
     # the file persists on disk for `FileResponse` to read.
     try:
-        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for p in out_files:
-                zf.write(p, arcname=p.name)
+        # Audit-F19 — DEFLATE compression of a multi-file job (up to the
+        # 500 MB extraction budget) is CPU-bound; running it inline on the
+        # async handler froze every other coroutine on the single-worker
+        # loop for the whole build. Offload it.
+        await asyncio.to_thread(_build_zip_archive, tmp_path, out_files)
     except Exception:
         # If we crash building the ZIP, the BackgroundTask hasn't been
         # attached yet — clean up by hand so we don't leak the tempfile.
@@ -449,7 +479,10 @@ async def get_job_trace(job: JobManifest = Depends(get_completed_job)) -> dict:
     if job.report is None or not job.report.lines:
         raise HTTPException(status_code=404, detail="No traces available for this job.")
 
-    return job.report.model_dump(exclude_none=True)
+    # Wave-3 review — serialising a full report (one entry per corpus
+    # line) is CPU-bound; keep it off the event loop like every other
+    # heavy call in this router.
+    return await asyncio.to_thread(job.report.model_dump, exclude_none=True)
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +501,8 @@ async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
     """
     if job.document_manifest is None:
         raise HTTPException(status_code=500, detail="Job has no document_manifest.")
-    return build_diff(job.job_id, job.document_manifest)
+    # Wave-3 review — a full-manifest projection is CPU-bound: offload.
+    return await asyncio.to_thread(build_diff, job.job_id, job.document_manifest)
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +518,8 @@ async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
     """
     if job.document_manifest is None:
         raise HTTPException(status_code=500, detail="Job has no document_manifest.")
-    return build_layout(job.job_id, job.document_manifest, job.images)
+    # Wave-3 review — same offload rationale as /diff.
+    return await asyncio.to_thread(build_layout, job.job_id, job.document_manifest, job.images)
 
 
 # ---------------------------------------------------------------------------

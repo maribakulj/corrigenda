@@ -77,7 +77,9 @@ class IdentityProvider:
 
 async def main(out_dir: Path) -> None:
     doc = build_document_manifest([(SAMPLE, SAMPLE.name)])
-    print(f"Parsed {doc.total_lines} lines / {doc.total_pages} page(s) from {SAMPLE.name}")
+    print(
+        f"Parsed {doc.total_lines} lines / {doc.total_pages} page(s) from {SAMPLE.name}"
+    )
 
     # ------------------------------------------------------------------
     # 1. Deterministic rules pass (§5.3) — replace_span ops, exact offsets

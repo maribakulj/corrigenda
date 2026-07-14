@@ -8,8 +8,10 @@ honnêtes appliquées, invariants géométrie/césure intacts, et le mock
 intégralement intercepté par les gardes (7 retries, 2 fallbacks,
 `completed_with_fallbacks`, lignes sabotées revenues à l'OCR).
 
-La vague 0 du plan (`docs/audit/PLAN-CORRECTIONS.md`) transforme ce
-harnais en tests pytest + job CI ; en attendant, usage manuel :
+**Vague 0 exécutée** : le gate permanent vit dans
+`backend/tests/e2e/` (scénarios pytest, marqueur `e2e`) et tourne en CI
+dans le job `backend-e2e` (`pytest tests/e2e` depuis `backend/`). Les
+scripts de ce dossier restent pour l'exploration manuelle :
 
 ```bash
 # 1. Mock vendeur (honnête) — ou mock_vendor_sabotage:app pour l'adversarial

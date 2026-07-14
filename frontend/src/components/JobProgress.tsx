@@ -10,6 +10,10 @@ const STATUS_COLORS: Record<string, string> = {
   started: 'text-amber-400',
   running: 'text-amber-400',
   completed: 'text-green-400',
+  // Audit-F24 — degraded terminal success rendered a blank badge with a
+  // literal `undefined` class before this key existed. Amber signals
+  // "done, but review the fallbacks".
+  completed_with_fallbacks: 'text-amber-300',
   failed: 'text-red-400',
 }
 
@@ -18,15 +22,20 @@ const STATUS_LABELS: Record<string, string> = {
   started: 'STARTED',
   running: 'RUNNING',
   completed: 'COMPLETED',
+  completed_with_fallbacks: 'COMPLETED (WITH FALLBACKS)',
   failed: 'FAILED',
 }
+
+// Defensive fallbacks so a status the maps don't know about (a future
+// backend value) never yields an empty label or an `undefined` class.
+const FALLBACK_COLOR = 'text-slate-400'
 
 export function JobProgressPanel({ progress, status }: JobProgressProps) {
   const pct =
     progress.lines_total > 0 ? Math.round((progress.lines_done / progress.lines_total) * 100) : 0
 
-  const statusColor = status ? STATUS_COLORS[status] : 'text-slate-400'
-  const statusLabel = status ? STATUS_LABELS[status] : '—'
+  const statusColor = (status && STATUS_COLORS[status]) || FALLBACK_COLOR
+  const statusLabel = status ? (STATUS_LABELS[status] ?? status.toUpperCase()) : '—'
 
   return (
     <div className="space-y-3">

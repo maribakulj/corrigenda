@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from app.providers.base import call_llm, extract_chat_text, extract_usage, get_json
 from app.schemas import ModelInfo, Usage
 
+logger = logging.getLogger(__name__)
+
 _BASE = "https://api.openai.com"
 
-_ALLOWLIST_PREFIXES = ("gpt-4", "gpt-3.5", "o1", "o3", "o4")
+# Wave-2 review — gpt-5 was missing: the family was invisible in
+# list_models AND paid a wasted 400 + strip retry per chunk (it rejects
+# non-default temperature like the o-series).
+_ALLOWLIST_PREFIXES = ("gpt-4", "gpt-3.5", "gpt-5", "o1", "o3", "o4")
 _DENYLIST_PATTERNS = (
     "instruct",
     "embedding",
@@ -30,6 +36,19 @@ def _keep_model(model_id: str) -> bool:
     if any(d in mid for d in _DENYLIST_PATTERNS):
         return False
     return True
+
+
+# Audit-F15 — OpenAI's o-series reasoning models (and the gpt-5 family,
+# wave-2 review) only accept the DEFAULT temperature (1) and return a
+# hard 400 for any explicit value (our ramp is 0.0/0.3/0.5). The
+# allowlist advertises them, so omit the parameter for the family;
+# unknown future families are covered by the generic strip-param-on-400
+# fallback in base.call_llm.
+_NO_TEMPERATURE_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+
+
+def _supports_temperature(model: str) -> bool:
+    return not model.lower().startswith(_NO_TEMPERATURE_PREFIXES)
 
 
 class OpenAIProvider:
@@ -60,9 +79,8 @@ class OpenAIProvider:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        body = {
+        body: dict[str, Any] = {
             "model": model,
-            "temperature": temperature,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
@@ -72,6 +90,18 @@ class OpenAIProvider:
                 "json_schema": json_schema,
             },
         }
+        # Audit-F15 — only send temperature to families that accept it.
+        if _supports_temperature(model):
+            body["temperature"] = temperature
+        elif temperature:
+            # Wave-2 review — make the disabled retry ramp visible.
+            logger.info(
+                "temperature=%s requested but omitted for %s — the family "
+                "rejects sampling params, so the retry ramp does not "
+                "diversify attempts",
+                temperature,
+                model,
+            )
         # Audit P2 — the allowlist admits gpt-4-0613 / gpt-3.5-turbo, which
         # do NOT support response_format:{type:'json_schema'} and return a
         # hard 400. Every other provider passes a fallback_body so a

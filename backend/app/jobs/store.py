@@ -56,6 +56,15 @@ class JobStore:
     # poll `/api/jobs/{id}` instead.
     MAX_SUBSCRIBERS_PER_JOB: int = 10
 
+    #: SSE keepalive cadence. On each timeout the stream re-checks the
+    #: job's terminal status (Audit-F20) so a terminal event dropped
+    #: under queue backpressure cannot leave the stream running forever.
+    KEEPALIVE_TIMEOUT_SECONDS: float = 30.0
+
+    #: Terminal SSE event names — delivery of these is GUARANTEED by
+    #: emit() even when the subscriber queue is full (Audit-F20).
+    _TERMINAL_EVENTS: frozenset[str] = frozenset({"completed", "failed"})
+
     def __init__(self, ttl_seconds: int = _DEFAULT_TTL_SECONDS) -> None:
         self._jobs: dict[str, JobManifest] = {}
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
@@ -180,13 +189,32 @@ class JobStore:
         # a list that a concurrent subscribe/unsubscribe is mutating.
         with self._lock:
             queues = list(self._subscribers.get(job_id, []))
+        is_terminal = event in self._TERMINAL_EVENTS
         for q in queues:
             try:
                 q.put_nowait(sse)
             except asyncio.QueueFull:
-                # Slow consumer — drop the event. Logged at debug so an
-                # operator inspecting why a client missed updates can see
-                # the back-pressure rather than diagnose it blindly.
+                if is_terminal:
+                    # Audit-F20 — a dropped TERMINAL event leaves the
+                    # stream_events poll loop yielding keepalives forever
+                    # (the SSE client only closes on completed/failed).
+                    # Guarantee delivery: evict the oldest buffered event
+                    # to make room, then enqueue the terminal. The
+                    # keepalive re-check is the second line of defence.
+                    try:
+                        q.get_nowait()
+                        q.put_nowait(sse)
+                    except (asyncio.QueueEmpty, asyncio.QueueFull):  # pragma: no cover
+                        logger.debug(
+                            "SSE queue full for job %s; could not force terminal %r",
+                            job_id,
+                            event,
+                        )
+                    continue
+                # Slow consumer — drop the (non-terminal) event. Logged at
+                # debug so an operator inspecting why a client missed
+                # updates can see the back-pressure rather than diagnose
+                # it blindly.
                 logger.debug(
                     "SSE subscriber queue full for job %s; dropping event %r",
                     job_id,
@@ -288,46 +316,95 @@ class JobStore:
                 while not queue.empty():
                     buffered = queue.get_nowait()
                     yield buffered
-                    if buffered.event in ("completed", "failed"):
+                    if buffered.event in self._TERMINAL_EVENTS:
                         return
-                # Synthetic terminal. The event NAME must be one the
-                # client listens for ("completed"/"failed"), NOT the raw
-                # status value ("completed_with_fallbacks" is not a
-                # listener) — and it must carry the full payload the live
-                # 'completed' event does, so the client doesn't read
-                # undefined fields. hyphen_pairs_total isn't stored on the
-                # manifest; 0 is a safe default the client tolerates.
-                if job.status == JobStatus.FAILED:
-                    yield SSEEvent(
-                        event="failed",
-                        data={"job_id": job_id, "error": job.error or "job failed"},
-                    )
-                else:
-                    yield SSEEvent(
-                        event="completed",
-                        data={
-                            "job_id": job_id,
-                            "total_lines": job.total_lines,
-                            "lines_modified": job.lines_modified,
-                            "hyphen_pairs_total": 0,
-                            "chunks_total": job.chunks_total,
-                            "duration_seconds": job.duration_seconds or 0.0,
-                            "status": job.status.value,
-                            "fallbacks": job.fallbacks,
-                        },
-                    )
+                yield self._synthetic_terminal(job_id, job)
                 return
 
             while True:
                 try:
-                    event: SSEEvent = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    event: SSEEvent = await asyncio.wait_for(
+                        queue.get(), timeout=self.KEEPALIVE_TIMEOUT_SECONDS
+                    )
                     yield event
-                    if event.event in ("completed", "failed"):
+                    if event.event in self._TERMINAL_EVENTS:
                         break
                 except TimeoutError:
+                    # Audit-F20 — the terminal event may have been dropped
+                    # under backpressure (or emit's force-delivery raced a
+                    # just-freed slot). Re-check the authoritative status
+                    # on every keepalive: if the job is terminal, drain
+                    # and synthesise the terminal instead of streaming
+                    # keepalives forever.
+                    job = self._jobs.get(job_id)
+                    if job is None:
+                        # Wave-3 review — the job was EVICTED mid-stream:
+                        # terminal by definition, but this used to fall
+                        # through and keepalive forever. Tell the client
+                        # the job is gone (same shape as the subscribe-
+                        # time refusal) and end the stream.
+                        #
+                        # Wave-6 review — drain first, exactly like the
+                        # sibling terminal branch below: if a REAL terminal
+                        # (emit landed it right as delete_job evicted the
+                        # job) is buffered in this subscriber's queue, it
+                        # must be delivered, not masked by a generic
+                        # job_not_found. Only a truly empty queue yields the
+                        # eviction error.
+                        while not queue.empty():
+                            buffered = queue.get_nowait()
+                            yield buffered
+                            if buffered.event in self._TERMINAL_EVENTS:
+                                return
+                        yield SSEEvent(
+                            event="error",
+                            data={
+                                "reason": "job_not_found",
+                                "message": "job evicted while streaming",
+                            },
+                        )
+                        return
+                    if job.status in _TERMINAL_STATES:
+                        while not queue.empty():
+                            buffered = queue.get_nowait()
+                            yield buffered
+                            if buffered.event in self._TERMINAL_EVENTS:
+                                return
+                        yield self._synthetic_terminal(job_id, job)
+                        return
                     yield SSEEvent(event=PipelineEventType.KEEPALIVE, data={})
         finally:
             self.unsubscribe(job_id, queue)
+
+    @staticmethod
+    def _synthetic_terminal(job_id: str, job: JobManifest) -> SSEEvent:
+        """Build the terminal SSE event for an already-terminal job.
+
+        The event NAME must be one the client listens for
+        ("completed"/"failed"), NOT the raw status value
+        ("completed_with_fallbacks" is not a listener) — and it must
+        carry the full payload the live 'completed' event does, so the
+        client doesn't read undefined fields. hyphen_pairs_total isn't
+        stored on the manifest; 0 is a safe default the client tolerates.
+        """
+        if job.status == JobStatus.FAILED:
+            return SSEEvent(
+                event="failed",
+                data={"job_id": job_id, "error": job.error or "job failed"},
+            )
+        return SSEEvent(
+            event="completed",
+            data={
+                "job_id": job_id,
+                "total_lines": job.total_lines,
+                "lines_modified": job.lines_modified,
+                "hyphen_pairs_total": 0,
+                "chunks_total": job.chunks_total,
+                "duration_seconds": job.duration_seconds or 0.0,
+                "status": job.status.value,
+                "fallbacks": job.fallbacks,
+            },
+        )
 
     # ------------------------------------------------------------------
     # Eviction

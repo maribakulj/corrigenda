@@ -503,8 +503,25 @@ class CorrectionPipeline:
         # several, e.g. one replace_span per occurrence) and the text those
         # ops produced (pre-guard, pre-reconcile). Consumed by
         # _build_final_edit_script to emit the ops the run ACTUALLY applied
+        # (reset in run()). Audit-F4 — keyed by (page_id, line_id): bare
+        # line_ids may legitimately repeat across FILES (only page_ids are
+        # unique document-wide), and a bare-id key let the last file's ops
+        # overwrite an earlier file's, corrupting the dry-run edit_script.
+        self._producer_ops: dict[tuple[str, str], tuple[list[EditOp], str]] = {}
+        # Audit-F3 — per-line PRE-REVERT accepted correction, keyed by
+        # _trace_key. The cross-chunk boundary pass and the page-seam
+        # pass compare against THIS snapshot (like the intra-chunk pass
+        # already does via its local `accepted_lines`): reading the live
+        # corrected_text after an earlier revert masked the third line
+        # of an identical-correction run straddling a chunk/page seam
         # (reset in run()).
-        self._producer_ops: dict[str, tuple[list[EditOp], str]] = {}
+        self._accepted_snapshot: dict[str, str] = {}
+        # Wave-1 review — which finalization pass ACTUALLY owned each line
+        # (keyed by _trace_key). Granularity descent spawns sub-chunks the
+        # plan never listed, so the boundary pass must derive its seams
+        # from these owners, not from plan.chunks (reset in run()).
+        self._finalized_owner: dict[str, int] = {}
+        self._finalize_seq = 0
         # §4.1 vision envelope — populated per-run from run(source_images=…).
         self._image_ref_by_page_id: dict[str, ImageRef] = {}
         self._page_dims: dict[str, tuple[int, int]] = {}
@@ -649,6 +666,9 @@ class CorrectionPipeline:
         self._reconcile_metrics = ReconcileMetrics()
         self._usage = Usage()
         self._producer_ops = {}
+        self._accepted_snapshot = {}
+        self._finalized_owner = {}
+        self._finalize_seq = 0
 
         # §5.1 — a vision producer without its images is a start-up error,
         # never a silent image-less call.
@@ -774,14 +794,21 @@ class CorrectionPipeline:
             if len(seam_map) != len(prev_page.lines) + len(next_page.lines):
                 continue  # cross-file line_id reuse → ambiguous, skip
             a, b = prev_page.lines[-1], next_page.lines[0]
+            # Audit-F3 (twin branch) — same pre-revert snapshot basis as
+            # the cross-chunk boundary pass: an intra-page revert of the
+            # seam line otherwise masked the third member of a run
+            # straddling the page seam.
             seam_reverts = check_adjacent_duplicates(
                 [
                     (
                         lm.line_id,
                         lm.ocr_text,
-                        lm.corrected_text
-                        if lm.corrected_text is not None
-                        else lm.ocr_text,
+                        self._accepted_snapshot.get(
+                            _trace_key(lm),
+                            lm.corrected_text
+                            if lm.corrected_text is not None
+                            else lm.ocr_text,
+                        ),
                     )
                     for lm in (a, b)
                 ],
@@ -798,7 +825,7 @@ class CorrectionPipeline:
                 cross_page_partners=all_lines_global,
             )
 
-        self._write_outputs(
+        await self._write_outputs(
             document_manifest=document_manifest,
             source_files=source_files,
             traces=traces,
@@ -856,7 +883,7 @@ class CorrectionPipeline:
             for lm in page.lines:
                 if lm.status is not LineStatus.CORRECTED or lm.corrected_text is None:
                     continue
-                captured = self._producer_ops.get(lm.line_id)
+                captured = self._producer_ops.get((lm.page_id, lm.line_id))
                 if captured is None:
                     # An accepted line the producer left untouched (no op) —
                     # e.g. a rules producer's uncovered line. Nothing applied.
@@ -864,12 +891,23 @@ class CorrectionPipeline:
                 line_ops, produced_text = captured
                 if produced_text == lm.corrected_text:
                     # The producer's output survived every guard unchanged —
-                    # keep its original ops (and their TYPE, e.g. span).
-                    ops.extend(line_ops)
+                    # keep its original ops (and their TYPE, e.g. span),
+                    # stamped with the page_id so a consumer can attribute
+                    # them per file (wave-1 review, F4 residual: bare
+                    # line_ids repeat across files).
+                    ops.extend(
+                        op.model_copy(update={"page_id": lm.page_id}) for op in line_ops
+                    )
                 else:
                     # A guard / the reconciler rewrote the final text; the
                     # original ops no longer describe it.
-                    ops.append(ReplaceLine(line_id=lm.line_id, text=lm.corrected_text))
+                    ops.append(
+                        ReplaceLine(
+                            line_id=lm.line_id,
+                            text=lm.corrected_text,
+                            page_id=lm.page_id,
+                        )
+                    )
         return EditScript(ops=ops)
 
     def run_sync(
@@ -999,31 +1037,46 @@ class CorrectionPipeline:
         # straddling a chunk boundary escaped the guard entirely. Only
         # the boundary pairs are new — intra-chunk pairs were already
         # checked with the same function and config — so the pass is
-        # restricted to adjacent pairs whose target owners differ
-        # (review fix: re-checking whole pages re-ran SequenceMatcher
-        # over every already-checked pair for nothing).
-        if len(plan.chunks) > 1:
-            owner_by_line: dict[str, int] = {}
-            for ci, chunk in enumerate(plan.chunks):
-                for lid in chunk.targets():
-                    owner_by_line[lid] = ci
-            boundary_reverts: dict[str, str] = {}
-            for a, b in zip(page.lines, page.lines[1:]):
-                if owner_by_line.get(a.line_id) == owner_by_line.get(b.line_id):
-                    continue
-                pair = [
-                    (
-                        lm.line_id,
-                        lm.ocr_text,
+        # restricted to adjacent pairs whose owners differ (review fix:
+        # re-checking whole pages re-ran SequenceMatcher over every
+        # already-checked pair for nothing).
+        #
+        # Wave-1 review — the owners are the finalization passes that
+        # ACTUALLY ran (self._finalized_owner), not the planned chunks:
+        # granularity descent finalizes a planned chunk as many
+        # sub-chunks, whose seams the plan-derived map could not see —
+        # and a single-chunk plan (`len(plan.chunks) > 1` gate) skipped
+        # the pass outright. Lines that never finalized (full-chunk OCR
+        # fallback) share owner None; such pairs sit at source text on
+        # both sides, where a revert would be a no-op anyway.
+        boundary_reverts: dict[str, str] = {}
+        for a, b in zip(page.lines, page.lines[1:]):
+            if self._finalized_owner.get(_trace_key(a)) == self._finalized_owner.get(
+                _trace_key(b)
+            ):
+                continue
+            # Audit-F3 — compare the PRE-REVERT accepted corrections
+            # (snapshotted in _finalize_chunk_traces), not the live
+            # corrected_text: an intra-chunk revert of the boundary
+            # line otherwise masked the third member of an
+            # identical-correction run straddling the boundary.
+            pair = [
+                (
+                    lm.line_id,
+                    lm.ocr_text,
+                    self._accepted_snapshot.get(
+                        _trace_key(lm),
                         lm.corrected_text
                         if lm.corrected_text is not None
                         else lm.ocr_text,
-                    )
-                    for lm in (a, b)
-                ]
-                boundary_reverts.update(
-                    check_adjacent_duplicates(pair, config=self.guard_config)
+                    ),
                 )
+                for lm in (a, b)
+            ]
+            boundary_reverts.update(
+                check_adjacent_duplicates(pair, config=self.guard_config)
+            )
+        if boundary_reverts:
             self._apply_duplicate_reverts(
                 reverts=boundary_reverts,
                 traces=traces,
@@ -1457,7 +1510,9 @@ class CorrectionPipeline:
                     if op.line_id in target_ids and op.line_id in produced_by_line:
                         ops_by_line.setdefault(op.line_id, []).append(op)
                 for line_id, line_ops in ops_by_line.items():
-                    self._producer_ops[line_id] = (
+                    # Audit-F4 — chunks are page-scoped, so chunk.page_id
+                    # qualifies every target line unambiguously.
+                    self._producer_ops[(chunk.page_id, line_id)] = (
                         line_ops,
                         produced_by_line[line_id],
                     )
@@ -1746,10 +1801,19 @@ class CorrectionPipeline:
             lm = line_by_id.get(lid)
             if lm is not None:
                 _enroll(lm, reason)
-        for lid in list(reverts):
-            lm = line_by_id.get(lid)
-            if lm is None:
-                continue
+        # Audit-F2 — walk the partner extension to a FIXED POINT: enrolled
+        # partners are themselves iterated so whole 3+-line hyphen chains
+        # (PART1→BOTH→…→PART2) revert atomically. The previous single pass
+        # over the original flags was one-hop, so a chain neighbour two
+        # hops from any flagged line kept its corrected text — the mixed
+        # OCR+corrected pair state that reconcile_hyphen_pair's contract
+        # and this function's own docstring forbid.
+        worklist: list[LineManifest] = [
+            lm for lm in (line_by_id.get(lid) for lid in reverts) if lm is not None
+        ]
+        visited: set[int] = {id(lm) for lm in worklist}
+        while worklist:
+            lm = worklist.pop()
             for is_forward in (False, True):
                 partner = _resolve_partner(
                     lm,
@@ -1759,6 +1823,9 @@ class CorrectionPipeline:
                 )
                 if partner is not None:
                     _enroll(partner, "adjacent_duplicate_pair_atomicity")
+                    if id(partner) not in visited:
+                        visited.add(id(partner))
+                        worklist.append(partner)
 
         for lm, reason in to_revert.values():
             lm.corrected_text = lm.ocr_text
@@ -1796,6 +1863,16 @@ class CorrectionPipeline:
             (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text)
             for lm in chunk_lines
         ]
+        # Audit-F3 — persist the pre-revert snapshot for the boundary and
+        # page-seam passes (same comparison basis as this pass). Wave-1
+        # review — also record the ACTUAL finalization owner: downgrade
+        # sub-chunks create seams the planned chunk list never had.
+        self._finalize_seq += 1
+        for lm in chunk_lines:
+            self._accepted_snapshot[_trace_key(lm)] = (
+                lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
+            )
+            self._finalized_owner[_trace_key(lm)] = self._finalize_seq
         dup_reverts = check_adjacent_duplicates(
             accepted_lines, config=self.guard_config
         )
@@ -1822,7 +1899,7 @@ class CorrectionPipeline:
     # Output writing (rewriter + trace assembly)
     # ------------------------------------------------------------------
 
-    def _write_outputs(
+    async def _write_outputs(
         self,
         *,
         document_manifest: DocumentManifest,
@@ -1837,6 +1914,14 @@ class CorrectionPipeline:
         ``rewriter_path`` / ``output_alto_text`` are populated, but when
         ``apply`` is ``False`` the injected ``OutputWriter`` is never
         called: nothing is persisted.
+
+        Wave-3 review — the heavy calls (``rewrite_file``: a full lxml
+        parse/rewrite/serialize of the source file; ``write_corrected``:
+        disk IO; ``extract_texts``: another parse) run in worker threads
+        so a ~100 MiB rewrite no longer freezes the host's event loop
+        (SSE keepalives, /health). Observer events stay ON the loop —
+        emit sites must never run from a thread (the store's queues are
+        not thread-safe).
         """
         # §11 — provenance stamped into every corrected file's processingStep.
         from corrigenda import __version__ as _lib_version
@@ -1851,7 +1936,8 @@ class CorrectionPipeline:
             if not pages_for_file:
                 continue
 
-            xml_bytes, metrics, rewriter_paths = adapter.rewrite_file(
+            xml_bytes, metrics, rewriter_paths = await asyncio.to_thread(
+                adapter.rewrite_file,
                 xml_path,
                 pages_for_file,
                 # §11 provenance labels — constructor state since the §5.1
@@ -1862,7 +1948,8 @@ class CorrectionPipeline:
                 config_fingerprint=config_fingerprint,
             )
             if apply:
-                self.output_writer.write_corrected(
+                await asyncio.to_thread(
+                    self.output_writer.write_corrected,
                     source_stem=xml_path.stem,
                     xml_bytes=xml_bytes,
                 )
@@ -1893,7 +1980,9 @@ class CorrectionPipeline:
                         t.rewriter_path = rpath
 
             file_line_ids = {lm.line_id for p in pages_for_file for lm in p.lines}
-            output_texts = adapter.extract_texts(xml_bytes, file_line_ids)
+            output_texts = await asyncio.to_thread(
+                adapter.extract_texts, xml_bytes, file_line_ids
+            )
             for lid, otxt in output_texts.items():
                 tkey = lid_to_tkey.get(lid)
                 if tkey:

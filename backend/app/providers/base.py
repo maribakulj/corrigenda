@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -129,6 +130,68 @@ async def aclose_shared_client() -> None:
     _shared_client_loop_id = None
 
 
+# Audit-F13/F15 — sampling parameters some model generations reject with
+# a hard 400 (Anthropic removed them on Opus 4.7/4.8, Sonnet 5, Fable 5;
+# OpenAI's o-series only accepts the default temperature). The provider
+# capability tables omit them for KNOWN families; this generic fallback
+# covers FUTURE/unknown models: when a 400/422 error message cites one of
+# these parameters and the body carries it, strip it and retry once.
+#
+# Wave-2 review — each entry is an ALIAS GROUP: Gemini's request body is
+# camelCase (generationConfig.topK), so a snake_case-only list stripped
+# nothing there. A citation of ANY alias strips EVERY alias present in
+# the body, covering cross-notation citations both ways.
+_STRIPPABLE_PARAM_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("temperature",),
+    ("top_p", "topP"),
+    ("top_k", "topK"),
+)
+
+
+def _strip_param(body: dict[str, Any], name: str) -> dict[str, Any]:
+    """Return a copy of ``body`` without ``name`` — at the top level and
+    inside top-level dict values (e.g. Gemini's ``generationConfig``).
+    Deliberately does NOT recurse into lists (tool ``input_schema``
+    properties may legitimately be named like a sampling param)."""
+    out: dict[str, Any] = {}
+    for k, v in body.items():
+        if k == name:
+            continue
+        if isinstance(v, dict) and name in v:
+            v = {vk: vv for vk, vv in v.items() if vk != name}
+        out[k] = v
+    return out
+
+
+def _cited_strippable_params(resp: httpx.Response, body: dict[str, Any]) -> list[str]:
+    """Strippable params present in ``body`` that the 4xx error cites.
+
+    Matching is word-bounded (``topk`` must not fire on "stopped"-style
+    substrings) and alias-group based: an error citing ``top_k`` strips a
+    body's ``topK`` and vice versa.
+    """
+
+    def _present(name: str) -> bool:
+        return name in body or any(isinstance(v, dict) and name in v for v in body.values())
+
+    try:
+        message = resp.text.lower()
+    except Exception:  # pragma: no cover — defensive: unreadable body
+        return []
+
+    def _cited(alias: str) -> bool:
+        return (
+            re.search(rf"(?<![a-z0-9_]){re.escape(alias.lower())}(?![a-z0-9_])", message)
+            is not None
+        )
+
+    names: list[str] = []
+    for group in _STRIPPABLE_PARAM_GROUPS:
+        if any(_cited(alias) for alias in group):
+            names.extend(alias for alias in group if _present(alias))
+    return names
+
+
 async def call_llm(
     *,
     url: str,
@@ -138,13 +201,14 @@ async def call_llm(
     params: dict[str, str] | None = None,
     timeout: int = 120,
 ) -> dict[str, Any]:
-    """Send a structured LLM request with optional 400/422 fallback.
+    """Send a structured LLM request with optional 400/422 fallbacks.
 
     Centralises the httpx client lifecycle, the fallback-on-schema-
-    rejection pattern, and status-code handling that every provider
-    needs. Transient transport failures are re-raised as
-    :class:`ProviderTransientError` so the pipeline's retry classifier
-    routes them to exponential backoff.
+    rejection pattern, the strip-unsupported-param retry (Audit-F13/F15)
+    and status-code handling that every provider needs. Transient
+    transport failures are re-raised as :class:`ProviderTransientError`
+    so the pipeline's retry classifier routes them to exponential
+    backoff.
     """
     try:
         client = get_shared_client()
@@ -155,6 +219,30 @@ async def call_llm(
             params=params,
             timeout=timeout,
         )
+
+        # Audit-F13/F15 — a 400 citing an unsupported sampling parameter
+        # is retried once without it (and the schema fallback below is
+        # stripped too, so the two fallbacks compose instead of the
+        # second reintroducing the rejected param).
+        if resp.status_code in (400, 422):
+            cited = _cited_strippable_params(resp, body)
+            if cited:
+                logger.info(
+                    "Unsupported parameter(s) %s rejected (%s) — retrying without",
+                    cited,
+                    resp.status_code,
+                )
+                for name in cited:
+                    body = _strip_param(body, name)
+                    if fallback_body is not None:
+                        fallback_body = _strip_param(fallback_body, name)
+                resp = await client.post(
+                    url,
+                    headers=headers,
+                    json=body,
+                    params=params,
+                    timeout=timeout,
+                )
 
         if resp.status_code in (400, 422) and fallback_body is not None:
             logger.info("Schema rejected (%s) — retrying with fallback body", resp.status_code)

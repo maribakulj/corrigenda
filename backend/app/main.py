@@ -25,6 +25,7 @@ from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
 from app.api.providers import router as providers_router
 from app.api.rate_limit import limiter
+from app.api.upload_guard import UploadSizeLimitMiddleware
 from app.jobs.store import JobStore
 from app.jobs.task_registry import BackgroundTaskRegistry
 from app.observability.logging_config import setup_json_logging
@@ -170,6 +171,12 @@ def create_app() -> FastAPI:
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
     app.add_middleware(SlowAPIMiddleware)
+
+    # 1b. Upload size guard (Audit-F18) — reject over-cap / no-Content-
+    # Length POSTs to /api/jobs BEFORE Starlette spools the multipart
+    # body to disk. Placed inside CORS (so a 413 still carries CORS
+    # headers) but outside form parsing. See app/api/upload_guard.py.
+    app.add_middleware(UploadSizeLimitMiddleware)
 
     # 2. ProxyHeaders (middle) — translate X-Forwarded-For into
     # request.client.host so slowapi keys on the real caller IP.

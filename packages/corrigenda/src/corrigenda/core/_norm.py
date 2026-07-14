@@ -26,6 +26,36 @@ def ncfold(s: str) -> str:
     return unicodedata.normalize("NFC", s).casefold()
 
 
+#: Every line boundary ``str.splitlines`` recognises (Audit-F10). A
+#: single-line ALTO/PAGE CONTENT attribute must contain NONE of them:
+#: the validator and the editing gate used to reject only "\n"/"\r",
+#: letting U+2028/U+2029 (and \x0b \x0c \x85 \x1c-\x1e) survive
+#: clean_content into a "single-line" attribute — any consumer that
+#: splits on Unicode line boundaries then sees two lines.
+LINE_SEPARATORS = (
+    "\n",
+    "\r",
+    "\x0b",  # LINE TABULATION
+    "\x0c",  # FORM FEED
+    "\x1c",  # FILE SEPARATOR
+    "\x1d",  # GROUP SEPARATOR
+    "\x1e",  # RECORD SEPARATOR
+    "\x85",  # NEXT LINE (C1)
+    "\u2028",  # LINE SEPARATOR
+    "\u2029",  # PARAGRAPH SEPARATOR
+)
+
+
+def has_line_separator(text: str) -> bool:
+    """True if ``text`` contains ANY ``str.splitlines`` boundary.
+
+    Shared by the LLM-response validator and the editing gate so the
+    two never drift (they are twin enforcement points of the same
+    single-line-CONTENT invariant).
+    """
+    return any(sep in text for sep in LINE_SEPARATORS)
+
+
 _INVISIBLE_CHARS = (
     # Soft hyphen — some OCR engines emit it as a hyphen variant; ALTO
     # CONTENT must not carry it (the hyphenation layer reconstructs it
@@ -103,4 +133,6 @@ __all__ = [
     "nfc",
     "ncfold",
     "clean_content",
+    "LINE_SEPARATORS",
+    "has_line_separator",
 ]

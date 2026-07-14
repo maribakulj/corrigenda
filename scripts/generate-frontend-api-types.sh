@@ -32,11 +32,14 @@ print(json.dumps(create_app().openapi(), indent=2))
 echo "    wrote ${SNAPSHOT} ($(wc -l < "${SNAPSHOT}") lines)"
 
 echo "==> Generating TypeScript types"
-(cd "${REPO_ROOT}/frontend" && npx --no openapi-typescript openapi.snapshot.json -o src/types/api.generated.ts)
+# The `--` separator is load-bearing: without it npm swallows flags meant
+# for the tool (`npx --no prettier --write f` ran `prettier f`, printing
+# to stdout and silently skipping the write — the reformat was a no-op).
+(cd "${REPO_ROOT}/frontend" && npx --no -- openapi-typescript openapi.snapshot.json -o src/types/api.generated.ts)
 echo "    wrote ${TYPES} ($(wc -l < "${TYPES}") lines)"
 
 echo "==> Reformatting with Prettier"
-(cd "${REPO_ROOT}/frontend" && npx --no prettier --write src/types/api.generated.ts openapi.snapshot.json)
+(cd "${REPO_ROOT}/frontend" && npx --no -- prettier --write --log-level warn src/types/api.generated.ts openapi.snapshot.json)
 
 echo "==> Done. Review the diff before committing:"
 echo "    git diff -- frontend/openapi.snapshot.json frontend/src/types/api.generated.ts"

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from app.providers.base import call_llm, extract_usage, get_json
 from app.schemas import ModelInfo, Usage
+
+logger = logging.getLogger(__name__)
 
 _BASE = "https://generativelanguage.googleapis.com"
 _EXCLUDE_KEYWORDS = ("embed", "aqa", "attribute")
@@ -41,19 +44,37 @@ def _keep_model(model: dict[str, Any]) -> bool:
 
 class GoogleProvider:
     async def list_models(self, api_key: str) -> list[ModelInfo]:
-        data = await get_json(
-            url=f"{_BASE}/v1beta/models",
-            headers=_auth_headers(api_key),
-        )
-
+        # Audit-F16 — the ListModels endpoint is PAGINATED (default page
+        # size 50 + nextPageToken); reading only the first response
+        # silently hid every model past page one. Follow the token with
+        # a safety bound so a misbehaving vendor can't loop us forever.
         models = []
-        for m in data.get("models", []):
-            if not _keep_model(m):
-                continue
-            name: str = m.get("name", "")
-            mid = name.split("/")[-1] if "/" in name else name
-            label = m.get("displayName") or mid
-            models.append(ModelInfo(id=mid, label=label))
+        page_token: str | None = None
+        for _ in range(10):
+            params = {"pageToken": page_token} if page_token else None
+            data = await get_json(
+                url=f"{_BASE}/v1beta/models",
+                headers=_auth_headers(api_key),
+                params=params,
+            )
+            for m in data.get("models", []):
+                if not _keep_model(m):
+                    continue
+                name: str = m.get("name", "")
+                mid = name.split("/")[-1] if "/" in name else name
+                label = m.get("displayName") or mid
+                models.append(ModelInfo(id=mid, label=label))
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        if page_token:
+            # Wave-2 review — hitting the safety bound with pages still
+            # pending must be LOUD: models past the bound simply never
+            # appear in the UI otherwise.
+            logger.warning(
+                "Gemini model list truncated at the 10-page safety bound "
+                "(nextPageToken still present) — some models are not shown"
+            )
         models.sort(key=lambda m: m.id)
         return models
 
