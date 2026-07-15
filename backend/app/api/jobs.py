@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import tempfile
 import zipfile
 from collections.abc import AsyncGenerator
@@ -37,6 +38,7 @@ from app.storage import (
     get_output_files,
     images_dir,
     init_job_dirs,
+    job_dir,
     link_alto_to_images,
     output_dir,
     save_uploaded_files,
@@ -70,6 +72,21 @@ _MAX_TOTAL_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MiB per request
 # spend). active_count existed but gated nothing. Refusals are explicit
 # 503s with Retry-After — an overload policy, not a silent queue.
 _MAX_ACTIVE_JOBS = int(os.environ.get("MAX_ACTIVE_JOBS", "4"))
+
+# Plan V2.1 — upload-phase reservation, SEPARATE from the running-jobs
+# cap: the job cap only bounds spawned pipelines, so N concurrent
+# requests could all buffer their payload before the authoritative
+# check let 4 spawn. This counter is reserved at handler entry (before
+# any body read) and released when the handler exits. Repeat the limit
+# at the reverse proxy in institutional deployments — this guard is the
+# app's own last line, not the only one.
+_MAX_CONCURRENT_UPLOADS = int(
+    os.environ.get("MAX_CONCURRENT_UPLOADS", str(_MAX_ACTIVE_JOBS))
+)
+
+# Plan V2.1 — uploads stream to disk in chunks this size; peak RAM per
+# request drops from the 200 MiB request cap to one chunk.
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +154,55 @@ def get_completed_job(
 # ---------------------------------------------------------------------------
 
 
+async def _stream_uploads_to_staging(
+    files: list[UploadFile], staging: Path
+) -> list[tuple[str, Path]]:
+    """Plan V2.1 — copy each upload to disk in bounded chunks.
+
+    Enforces the per-file and cumulative caps INCREMENTALLY (the request
+    413s as soon as the running total crosses a cap, not after buffering
+    everything). Staged names are index-prefixed so duplicate upload
+    names can't collide before ``save_uploaded_files`` applies its own
+    collision policy. Returns ``(original_filename, staged_path)`` pairs.
+    """
+    cap = _MAX_UPLOAD_FILE_BYTES
+    total_cap = _MAX_TOTAL_UPLOAD_BYTES
+    total_bytes = 0
+    staged: list[tuple[str, Path]] = []
+    for idx, f in enumerate(files):
+        original = f.filename or "upload.xml"
+        target = staging / f"{idx:04d}_{Path(original).name}"
+        file_bytes = 0
+        with target.open("wb") as out:
+            while True:
+                chunk = await f.read(_UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                file_bytes += len(chunk)
+                if file_bytes > cap:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Uploaded file {original!r} exceeds the per-file "
+                            f"limit ({cap} bytes). Split the upload or reduce its size."
+                        ),
+                    )
+                # P0-3 — cumulative bound: reject as soon as the running
+                # total crosses the request cap.
+                total_bytes += len(chunk)
+                if total_bytes > total_cap:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Upload exceeds the total request limit "
+                            f"({total_cap} bytes). Split the job into smaller batches."
+                        ),
+                    )
+                out.write(chunk)
+        staged.append((original, target))
+    return staged
+
+
 @router.post("", response_model=CreateJobResponse)
 # Rate limited to throttle file uploads + spawned background tasks
 # against a single-worker server with bounded disk/CPU budget.
@@ -154,6 +220,47 @@ async def create_job(
     store: JobStore = Depends(get_job_store),
 ) -> CreateJobResponse:
     """Upload ALTO files and start a correction job."""
+    # Plan V2.1 — reserve an upload slot BEFORE touching any body byte.
+    # The job cap below only bounds spawned pipelines; without this
+    # reservation N concurrent requests could all stage their payload
+    # while active_count was still low. Check-and-increment is atomic on
+    # the single-threaded event loop (no await between them).
+    app_state = request.app.state
+    if app_state.uploads_in_progress >= _MAX_CONCURRENT_UPLOADS:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Server is at upload capacity ({_MAX_CONCURRENT_UPLOADS} "
+                "concurrent uploads). Retry shortly."
+            ),
+            headers={"Retry-After": "10"},
+        )
+    app_state.uploads_in_progress += 1
+    try:
+        return await _create_job_reserved(
+            request=request,
+            files=files,
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            geometric_pairing=geometric_pairing,
+            store=store,
+        )
+    finally:
+        app_state.uploads_in_progress -= 1
+
+
+async def _create_job_reserved(
+    *,
+    request: Request,
+    files: list[UploadFile],
+    provider: str,
+    api_key: str,
+    model: str,
+    geometric_pairing: bool,
+    store: JobStore,
+) -> CreateJobResponse:
+    """The body of ``create_job``, running inside an upload reservation."""
     # P1-5 — admission control before reading a single byte: the task
     # registry's live count is the source of truth for running pipelines.
     if request.app.state.tasks.active_count >= _MAX_ACTIVE_JOBS:
@@ -187,37 +294,6 @@ async def create_job(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider!r}") from exc
 
-    # Read all file bytes. Bounded by `_MAX_UPLOAD_FILE_BYTES` per file
-    # so a 100 GB upload yields a fast 413 instead of OOMing the
-    # process. We read `cap + 1` bytes and reject if the result is
-    # longer than `cap` (i.e. there was at least one more byte to read).
-    cap = _MAX_UPLOAD_FILE_BYTES
-    total_cap = _MAX_TOTAL_UPLOAD_BYTES
-    total_bytes = 0
-    file_tuples: list[tuple[str, bytes]] = []
-    for f in files:
-        content = await f.read(cap + 1)
-        if len(content) > cap:
-            raise HTTPException(
-                status_code=413,
-                detail=(
-                    f"Uploaded file {f.filename!r} exceeds the per-file "
-                    f"limit ({cap} bytes). Split the upload or reduce its size."
-                ),
-            )
-        # P0-3 — cumulative bound: reject as soon as the running total
-        # crosses the request cap, before buffering the remaining files.
-        total_bytes += len(content)
-        if total_bytes > total_cap:
-            raise HTTPException(
-                status_code=413,
-                detail=(
-                    f"Upload exceeds the total request limit "
-                    f"({total_cap} bytes). Split the job into smaller batches."
-                ),
-            )
-        file_tuples.append((f.filename or "upload.xml", content))
-
     # Create job and dirs. P1-10 — everything from here to the spawn is
     # TRANSACTIONAL: the job record and its directories exist before
     # extraction/parsing/validation, so any failure in that window must
@@ -234,6 +310,15 @@ async def create_job(
     try:
         init_job_dirs(job_id)
 
+        # Plan V2.1 — stream the uploads to a staging dir under the job
+        # in 1 MiB chunks (per-file and cumulative caps enforced
+        # incrementally): peak RAM per request is one chunk, not the
+        # 200 MiB request cap. The staging dir lives inside the job dir
+        # so the transactional rollback below reclaims it too.
+        staging = job_dir(job_id) / "upload-staging"
+        staging.mkdir(parents=True, exist_ok=True)
+        staged_files = await _stream_uploads_to_staging(files, staging)
+
         # Save and extract files (also extracts images from ZIPs).
         # ValueError = bounded/refused input (zip bomb, name collision,
         # too many members) — a client error, not a server fault (P1-9).
@@ -242,9 +327,15 @@ async def create_job(
         # freeze the single-worker event loop (SSE keepalives, health
         # probes, in-flight downloads).
         try:
-            saved, image_files = await asyncio.to_thread(save_uploaded_files, job_id, file_tuples)
+            saved, image_files = await asyncio.to_thread(save_uploaded_files, job_id, staged_files)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            # XML files were MOVED out of staging; only ZIP payloads (and
+            # rejected leftovers) remain — reclaim them now, not at TTL.
+            await asyncio.shield(
+                asyncio.to_thread(shutil.rmtree, staging, ignore_errors=True)
+            )
 
         if not saved:
             raise HTTPException(

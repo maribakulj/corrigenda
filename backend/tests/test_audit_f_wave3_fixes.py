@@ -235,12 +235,14 @@ def test_f18_normal_upload_still_reaches_handler(client):
 
 
 def _create_job_source() -> ast.FunctionDef:
+    # Plan V2.1 — create_job became a thin slot-reservation wrapper; the
+    # offload-sensitive body lives in _create_job_reserved.
     src = Path("app/api/jobs.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "create_job":
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_create_job_reserved":
             return node
-    raise AssertionError("create_job not found")
+    raise AssertionError("_create_job_reserved not found")
 
 
 def _download_source() -> ast.AsyncFunctionDef:

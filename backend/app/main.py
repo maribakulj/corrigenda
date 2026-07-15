@@ -147,6 +147,9 @@ def create_app() -> FastAPI:
     # Plan V2.2 — per-job cancellation events; POST /api/jobs/{id}/cancel
     # sets them, the runner's should_abort probe reads them.
     app.state.cancellations = CancellationRegistry()
+    # Plan V2.1 — upload-phase reservation counter, separate from the
+    # running-jobs cap (see api/jobs.py). Exposed by /health/ready.
+    app.state.uploads_in_progress = 0
 
     # ------------------------------------------------------------------
     # Middleware stack (Starlette applies LIFO, so the LAST middleware
