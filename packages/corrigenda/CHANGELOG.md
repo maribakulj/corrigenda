@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [1.0.0] — 2026-07-15
+
+First public release. Everything below shipped together as **the** 1.0 of
+`corrigenda` — nothing was ever published under an earlier name or number,
+so there is no deprecation layer anywhere: final import paths and final
+schemas from day one. The public surface is pinned by an executable
+snapshot test (`tests/test_public_api_snapshot.py`) and governed by strict
+SemVer from here on (see `docs/versioning.md`).
+
+Highlights: ALTO **and PAGE XML** backends producing one common
+`DocumentManifest`; the §4 span edit protocol (`EditScript`,
+`ReplaceLine`/`ReplaceSpan`, `MatchAnchor`→`RangeAnchor`); producers as
+first-class citizens (`EditProducer`, deterministic `RulesProducer`, LLM
+adapter, vision envelope with zero pixel I/O); the versioned
+`CorrectionReport` as the single trace artefact; four frozen, fingerprinted
+policies; byte-parity golden gates over a real BnF/Transkribus corpus.
+
+
+### Audit remediation — 37 findings + per-wave adversarial reviews (2026-07-12 → 15)
+
+The exhaustive audit (`docs/audit/AUDIT-2026-07-13.md`) and its
+wave-by-wave remediation (`docs/audit/PLAN-CORRECTIONS.md`) landed as part
+of 1.0 — each fix reproduced by a failing test first, each wave reviewed
+adversarially with its findings treated before the next.
+
 ### Fixed (audit F1-F12 + adversarial-review follow-ups, 2026-07-13)
 
 - **Lines-never-merge, heuristic mode (Audit-F1).** The PART2 word-growth
@@ -296,23 +323,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Duplicate IDs across *different* source files remain legitimate (every
   downstream lookup is scoped to one file). Additive change: existing
   `except ParseError` / `except CorrectionError` call sites keep working.
-
-## [1.0.0] — 2026-07-06
-
-First public release. Everything below shipped together as **the** 1.0 of
-`corrigenda` — nothing was ever published under an earlier name or number,
-so there is no deprecation layer anywhere: final import paths and final
-schemas from day one. The public surface is pinned by an executable
-snapshot test (`tests/test_public_api_snapshot.py`) and governed by strict
-SemVer from here on (see `docs/versioning.md`).
-
-Highlights: ALTO **and PAGE XML** backends producing one common
-`DocumentManifest`; the §4 span edit protocol (`EditScript`,
-`ReplaceLine`/`ReplaceSpan`, `MatchAnchor`→`RangeAnchor`); producers as
-first-class citizens (`EditProducer`, deterministic `RulesProducer`, LLM
-adapter, vision envelope with zero pixel I/O); the versioned
-`CorrectionReport` as the single trace artefact; four frozen, fingerprinted
-policies; byte-parity golden gates over a real BnF/Transkribus corpus.
 
 ### v1.0 normative corrections (SPECS_LIB_V2 §7)
 
