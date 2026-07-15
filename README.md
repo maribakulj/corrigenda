@@ -20,28 +20,25 @@ Upload one or more ALTO XML files, choose a provider and model, and get correcte
 
 ## Documentation map
 
-The correction engine has been extracted into a standalone library
-(`packages/corrigenda/`); this repo is that library **plus** a FastAPI +
-React app around it. Start with the authoritative docs; the rest are design
-history kept for provenance.
+The correction engine is a standalone library (`packages/corrigenda/`);
+this repo is that library **plus** a FastAPI + React app around it.
 
-**Authoritative (kept current):**
+**Normative (kept current — everything else is history):**
 
 | Doc | Scope |
 |---|---|
 | `README.md` (this file) | The app: what it does, how to run and deploy it |
-| `packages/corrigenda/docs/` | The library: `quickstart`, `formats`, `edit-protocol`, `versioning` |
-| `packages/corrigenda/CHANGELOG.md` | The library's released changes (SemVer) |
 | `SPECS_LIB_V2.md` | Normative spec for the `corrigenda` library |
-| `SPECS_API.md` / `SPECS_JOBS.md` / `SPECS_FRONTEND.md` | Backend / jobs / frontend specs |
+| `packages/corrigenda/docs/` | Library guides: `quickstart`, `formats`, `edit-protocol`, `versioning` |
+| `packages/corrigenda/CHANGELOG.md` | The library's released changes (SemVer) |
+| [`docs/API.md`](docs/API.md) | Backend HTTP API map (the OpenAPI schema is the contract) |
+| [`SECURITY.md`](SECURITY.md) | Deployment profiles, threat model, vulnerability reporting |
 | `CONTRIBUTING.md`, `CLAUDE.md` | Contributor + assistant guidance |
 
-**Historical (design & audit trail — non-normative; may name modules that
-have since moved, e.g. the pre-extraction `backend/app/alto/*` layout):**
-`SPECS.md` (original app spec), `ARCHITECTURE.md`, `MIGRATION.md`,
-`AUDIT.md`, `ISSUE_LEDGER.md`, `REMEDIATION_STATUS.md`, `PLAN_V2.md`,
-`PROGRESS_V1.md`, `ROADMAP.md`, and the topic `SPECS_*` drafts. Read them for
-*why* a decision was made, not for *where* code lives today.
+**Historical:** everything under [`docs/history/`](docs/history/) is
+frozen design & audit trail (original specs, migration and audit logs).
+It contradicts the current code in places by design — read it for *why*
+a decision was made, never for *where* code lives today.
 
 ---
 
@@ -98,13 +95,18 @@ The container writes uploads and corrected outputs to `/tmp/app-jobs/<job_id>/`.
 - The `trace.json` and corrected XML are gone after a restart even if the job completed — download them immediately.
 - A user revisiting the Space after a restart will get a `404` on `/api/jobs/{id}/download` for any previous job_id.
 
-The frontend shows a yellow warning banner above the upload zone. If you need persistence, mount a persistent volume (paid HF Spaces feature) and point `JOB_STORAGE_DIR` to it:
+The frontend shows a yellow warning banner above the upload zone.
 
-```
-ENV JOB_STORAGE_DIR=/data/app-jobs
-```
-
-(or set the env var in the Space settings UI).
+**A persistent volume does NOT make jobs persistent.** Job records
+(status, capability-token hashes, eviction timestamps) live in process
+memory only. If you mount a volume and point `JOB_STORAGE_DIR` at it,
+the files survive a restart but the API has no record of them: every
+endpoint returns `404` for pre-restart job_ids, the old tokens are
+gone, and the results are unreachable. The server therefore deletes
+such orphan directories at startup rather than letting them accumulate
+as dead weight. Real persistence (a database holding job records that
+survive restarts) is a planned institutional-profile feature, not a
+mount-a-volume option.
 
 Single-worker on purpose — see Dockerfile comments. A multi-worker setup would need a shared `JobStore` (Redis, Postgres) since the current one is in-process.
 
@@ -116,6 +118,10 @@ Single-worker on purpose — see Dockerfile comments. A multi-worker setup would
 |---|---|---|
 | `JOB_STORAGE_DIR` | `/tmp/app-jobs` | Base directory for job files (input + output) |
 | `CORS_ORIGINS` | `*` | Comma-separated list of allowed CORS origins, or `*` |
+| `DEPLOYMENT_PROFILE` | `demo` | `demo` (public Space stance) or `institutional` (behind SSO/proxy; refuses wildcard CORS). See [SECURITY.md](SECURITY.md) |
+| `MAX_ACTIVE_JOBS` | `4` | Concurrent correction pipelines |
+| `MAX_CONCURRENT_UPLOADS` | = `MAX_ACTIVE_JOBS` | Concurrent upload slots (reserved before reading any body byte) |
+| `JOB_TIMEOUT_SECONDS` | `1800` | Per-job wall-clock budget (0 disables) |
 
 ---
 

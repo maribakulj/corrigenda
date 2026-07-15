@@ -26,10 +26,10 @@ def ncfold(s: str) -> str:
     return unicodedata.normalize("NFC", s).casefold()
 
 
-#: Every line boundary ``str.splitlines`` recognises (Audit-F10). A
-#: single-line ALTO/PAGE CONTENT attribute must contain NONE of them:
-#: the validator and the editing gate used to reject only "\n"/"\r",
-#: letting U+2028/U+2029 (and \x0b \x0c \x85 \x1c-\x1e) survive
+#: Every line boundary ``str.splitlines`` recognises. A single-line
+#: ALTO/PAGE CONTENT attribute must contain NONE of them: rejecting
+#: only "\n"/"\r" would let U+2028/U+2029 (and \x0b \x0c \x85
+#: \x1c-\x1e) survive
 #: clean_content into a "single-line" attribute — any consumer that
 #: splits on Unicode line boundaries then sees two lines.
 LINE_SEPARATORS = (
@@ -85,7 +85,7 @@ def clean_content(s: str) -> str:
 
     Three responsibilities:
 
-    1. **NFC normalisation** (L10/R1). The parser NFC-normalises every
+    1. **NFC normalisation.** The parser NFC-normalises every
        CONTENT it READS; the rewriter must do the same on WRITE so the
        on-disk bytes are symmetric across the round-trip. Without this,
        an LLM returning `café` in NFD form (`cafe\\u0301`) would land
@@ -93,7 +93,7 @@ def clean_content(s: str) -> str:
        index, byte-snapshot tests) would diverge from anything that
        re-parses through `parser.py`.
 
-    2. **Invisible-character stripping** (L10/R2):
+    2. **Invisible-character stripping**:
          - U+00AD (SOFT HYPHEN) — emitted by some OCR engines as a
            hyphen variant; the hyphenation reconciler reconstructs it
            from manifest state, so the raw CONTENT must not carry it.
@@ -105,7 +105,7 @@ def clean_content(s: str) -> str:
            ``\\n`` / ``\\r`` in ``corrected_text``, but a CONTENT
            attribute with one would silently corrupt re-parsing.
 
-    3. **C0 / C1 control-char stripping** (L10/R2). U+0000..U+001F and
+    3. **C0 / C1 control-char stripping.** U+0000..U+001F and
        U+007F..U+009F have no legitimate semantics in an OCR text node.
 
     Order matters: NFC first so the translate table sees fully
@@ -128,7 +128,7 @@ def clean_content(s: str) -> str:
     )
 
 
-# --- __all__ (Stage 3 audit remediation) ---
+# --- public surface ---
 __all__ = [
     "nfc",
     "ncfold",

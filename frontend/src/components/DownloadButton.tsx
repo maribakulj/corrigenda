@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { downloadJob } from '../api/client'
 import type { JobStats } from '../types'
 
@@ -7,6 +8,25 @@ interface DownloadButtonProps {
 }
 
 export function DownloadButton({ jobId, stats }: DownloadButtonProps) {
+  // Plan V2.4 — the download is a fetch (token in a header, blob to the
+  // browser): it can fail like any request, so surface that instead of
+  // a dead click.
+  const [downloading, setDownloading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleDownload() {
+    if (downloading) return
+    setDownloading(true)
+    setError(null)
+    try {
+      await downloadJob(jobId)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Download failed')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   return (
     <div className="bg-slate-800 border border-green-800/50 rounded-lg p-4 space-y-3">
       {/* Stats */}
@@ -29,11 +49,20 @@ export function DownloadButton({ jobId, stats }: DownloadButtonProps) {
         </div>
       )}
 
+      {/* Download error */}
+      {error && (
+        <p className="font-mono text-xs text-red-400 bg-red-900/20 border border-red-800/40 rounded px-3 py-2">
+          {error}
+        </p>
+      )}
+
       {/* Download button */}
       <button
-        onClick={() => downloadJob(jobId)}
+        onClick={handleDownload}
+        disabled={downloading}
         className="w-full flex items-center justify-center gap-2 py-3 px-6
-                   bg-amber-500 hover:bg-amber-400 text-slate-900 font-mono font-bold
+                   bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-500
+                   text-slate-900 font-mono font-bold
                    text-sm rounded transition-colors uppercase tracking-wider"
       >
         <svg

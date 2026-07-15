@@ -7,7 +7,6 @@ import contextlib
 import logging
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,14 +25,13 @@ from app.api.jobs import router as jobs_router
 from app.api.providers import router as providers_router
 from app.api.rate_limit import limiter
 from app.api.upload_guard import UploadSizeLimitMiddleware
+from app.frontend_static import INDEX_HTML as _INDEX_HTML
+from app.frontend_static import STATIC_DIR as _STATIC_DIR
+from app.frontend_static import frontend_expected
+from app.jobs.cancellation import CancellationRegistry
 from app.jobs.store import JobStore
 from app.jobs.task_registry import BackgroundTaskRegistry
 from app.observability.logging_config import setup_json_logging
-
-# Resolved once at import time — same process for the lifetime of the container
-_STATIC_DIR = Path(__file__).parent.parent / "static"
-_INDEX_HTML = _STATIC_DIR / "index.html"
-
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -70,6 +68,19 @@ async def lifespan(app: FastAPI):
     to drain in-flight correction jobs so we don't leave half-written
     output files when Docker/HF Spaces sends SIGTERM during a redeploy.
     """
+    # Plan V3.2 — the store is in-memory: any job directory found on
+    # disk at startup belongs to a pre-restart job the API no longer
+    # knows and the TTL sweep can never reclaim. Delete them before
+    # serving (best effort — never blocks startup).
+    try:
+        from app import storage as _storage
+
+        reclaimed = await asyncio.to_thread(app.state.job_store.reclaim_orphans, _storage._BASE_DIR)
+        if reclaimed:
+            logger.info("startup: reclaimed %d orphan job directorie(s)", reclaimed)
+    except Exception:
+        logger.exception("startup orphan reclaim failed (continuing)")
+
     sweep_task = asyncio.create_task(_periodic_sweep(app), name="job-sweep")
     try:
         yield
@@ -145,6 +156,12 @@ def create_app() -> FastAPI:
     # (correction runs spawned from POST /api/jobs). Drained on
     # shutdown by the lifespan handler above.
     app.state.tasks = BackgroundTaskRegistry()
+    # Plan V2.2 — per-job cancellation events; POST /api/jobs/{id}/cancel
+    # sets them, the runner's should_abort probe reads them.
+    app.state.cancellations = CancellationRegistry()
+    # Plan V2.1 — upload-phase reservation counter, separate from the
+    # running-jobs cap (see api/jobs.py). Exposed by /health/ready.
+    app.state.uploads_in_progress = 0
 
     # ------------------------------------------------------------------
     # Middleware stack (Starlette applies LIFO, so the LAST middleware
@@ -190,11 +207,26 @@ def create_app() -> FastAPI:
     trusted_proxies = [h.strip() for h in trusted_proxies_raw.split(",") if h.strip()]
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_proxies)
 
+    # Plan V3.3 — explicit deployment profile. "demo" (default) is the
+    # public HF Space stance: no auth, wildcard CORS allowed, in-memory
+    # jobs — documented as such in SECURITY.md. "institutional" asserts
+    # the deployment sits behind SSO/reverse-proxy and REFUSES the
+    # demo-grade defaults instead of silently running with them.
+    profile = os.environ.get("DEPLOYMENT_PROFILE", "demo").strip().lower()
+    if profile not in ("demo", "institutional"):
+        raise RuntimeError(f"DEPLOYMENT_PROFILE must be 'demo' or 'institutional', got {profile!r}")
+
     # 3. CORS (outermost) — origins configurable via CORS_ORIGINS env
     # var (comma-separated). Default: wildcard. No credentials —
     # NEVER combine allow_credentials with allow_origins=["*"]
     # (Starlette raises ValueError).
     cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+    if profile == "institutional" and "*" in cors_origins:
+        raise RuntimeError(
+            "DEPLOYMENT_PROFILE=institutional requires an explicit CORS_ORIGINS "
+            "allowlist — refusing to start with the wildcard default. Set "
+            "CORS_ORIGINS to the frontend origin(s)."
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
@@ -230,11 +262,24 @@ def create_app() -> FastAPI:
     if assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
-    @app.get("/", include_in_schema=False)
-    async def root():
+    def _spa_response() -> FileResponse | JSONResponse:
+        # Plan V1.3 — a deployment that PROMISES the SPA (SERVE_FRONTEND=1,
+        # single-container image) but lacks index.html is broken and must
+        # say so. The old unconditional {"status":"ok"} 200 made the
+        # historical wrong-COPY regression invisible to every probe.
         if _INDEX_HTML.exists():
             return FileResponse(str(_INDEX_HTML))
+        if frontend_expected():
+            return JSONResponse(
+                {"detail": "frontend build missing (index.html not found)"},
+                status_code=503,
+            )
+        # Backend-only deployment (docker-compose dev): no SPA promised.
         return JSONResponse({"status": "ok"})
+
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return _spa_response()
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
@@ -245,9 +290,7 @@ def create_app() -> FastAPI:
         reserved = reserved or full_path == "health" or full_path.startswith("health/")
         if reserved:
             return JSONResponse({"detail": "Not Found"}, status_code=404)
-        if _INDEX_HTML.exists():
-            return FileResponse(str(_INDEX_HTML))
-        return JSONResponse({"status": "ok"})
+        return _spa_response()
 
     return app
 

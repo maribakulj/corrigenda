@@ -1,12 +1,17 @@
 # EXACT pins (==) — the versions this tree was actually tested against
 # (audit fix: this file used to SAY "pinned / reproducible builds" while
 # every entry was a version RANGE, so two builds a week apart could ship
-# different dependency sets). Regenerate deliberately:
+# different dependency sets).
 #
-#   pip install -U <pkg> && pytest && pip freeze | grep -i <pkg>  # then update here
+# Plan V4.3 — direct pins alone don't lock TRANSITIVE deps. The Docker
+# images install from requirements-lock.txt (full resolution, --require-
+# hashes); this file stays the human-readable source for dev installs.
+# To bump a dependency:
 #
-# Full hash-locking (pip-compile --generate-hashes) is tracked in the
-# roadmap; exact pins already make builds version-reproducible.
+#   1. update the pin here AND in requirements.in
+#   2. pip-compile --generate-hashes --strip-extras \
+#        -o requirements-lock.txt requirements.in
+#   3. pytest
 #
 # NOTE: corrigenda is a sibling package in this monorepo, NOT listed here.
 # Install it separately before backend (so the cwd-relative path doesn't

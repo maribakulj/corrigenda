@@ -249,7 +249,7 @@ def _forward_subs_target(
     """Return the String that carries a BOTH line's forward (HypPart1)
     subs, or None when no distinct element exists for them.
 
-    Audit-F5 — shared by ``_apply_subs`` AND ``_subs_need_update`` so the
+    Shared by ``_apply_subs`` AND ``_subs_need_update`` so the
     writer and the change-detection predicate agree. When the line has a
     single String, ``strings[-1]`` IS the element carrying the BACKWARD
     (HypPart2) subs. Writing the forward HypPart1 onto it would clobber
@@ -294,7 +294,7 @@ def _subs_need_update(
         return True
 
     # Check forward subs for BOTH lines — only on the distinct last
-    # String _apply_subs would actually write (Audit-F5, see
+    # String _apply_subs would actually write (see
     # _forward_subs_target).
     last = _forward_subs_target(el, manifest, ns)
     if last is not None:
@@ -333,7 +333,7 @@ def _apply_subs(
         _set_subs_on_element(target, want_type, want_content)
 
     # Forward subs for BOTH lines — only on a DISTINCT last String
-    # (Audit-F5: guard shared with _subs_need_update, see
+    # (guard shared with _subs_need_update, see
     # _forward_subs_target for the single-String rationale).
     last = _forward_subs_target(el, manifest, ns)
     if last is not None:
@@ -405,14 +405,12 @@ def _emit_sp(
 ) -> None:
     """Append a fresh SP child with RECOMPUTED geometry.
 
-    Post-audit fix (doctrine §6.1) — the slow path used to recycle the nth
-    original SP's attributes verbatim, keeping OLD HPOS/WIDTH from the
-    pre-correction layout while the surrounding Strings got recomputed
-    positions: the interleaved SP/String geometry contradicted itself
-    (worse after F6 rebalanced the token widths). SPs are pure spacing —
-    they carry no confidences and no identity worth recycling — so their
-    geometry is now always derived from the same ``_compute_geometry``
-    pass as the Strings around them. ``orig_sp_attribs`` is still received
+    §6.1 — SP geometry must agree with the recomputed String geometry
+    around it: recycling an original SP's HPOS/WIDTH verbatim would make
+    the interleaved SP/String layout contradict itself. SPs are pure
+    spacing — they carry no confidences and no identity worth recycling —
+    so their geometry is always derived from the same
+    ``_compute_geometry`` pass as the Strings around them. ``orig_sp_attribs`` is still received
     so any non-geometric attribute an exotic producer set (none in the
     ALTO corpus at hand) survives; the geometric trio is overwritten.
     """
@@ -451,8 +449,8 @@ def _emit_string(
     ``WC``/``CC`` onto the rebuilt String.
 
     ``STYLE`` (inline bold/italics/…) is part of the §6.1 whitelist
-    (ratified 2026-07-07, initially a post-audit extension): the F2
-    doctrine targets data INVALIDATED by the text change, and styling —
+    (ratified 2026-07-07): the §6.1 doctrine
+    targets data INVALIDATED by the text change, and styling —
     like ``STYLEREFS``, its reference-based twin — is not. Dropping it
     destroyed real formatting on the non-regression corpus (45 of the 47
     styled Strings in X0000002, mostly press headlines whose garbled OCR
@@ -528,11 +526,11 @@ def _rebuild_line(
         deep-copied and restored verbatim after the rebuild (defensive —
         production ALTO rarely has HYPs on non-hyphenated lines).
     """
-    # Audit-F6 — trim leading/trailing whitespace before tokenizing: the
-    # validator accepts corrected text with edge whitespace, and a
-    # trailing SP token used to be emitted while last_word_hpos/width
-    # tracked only String tokens, so the trailing HYP landed ON TOP of
-    # the SP's HPOS range (overlap, children no longer tiling the line).
+    # Trim leading/trailing whitespace before tokenizing: the validator
+    # accepts corrected text with edge whitespace, and an edge SP token
+    # would land the trailing HYP ON TOP of the SP's HPOS range (overlap,
+    # children no longer tiling the line) since last_word_hpos/width
+    # track only String tokens.
     # Trimming matches the fast path, where split() drops edge
     # whitespace implicitly.
     corrected = corrected.strip()
@@ -584,11 +582,10 @@ def _rebuild_line(
         # verbatim WIDTH made the children sum to width + original_hyp_width
         # and overlapped the last String. Fall back to the 4% estimate only
         # when synthesising a HYP (explicit line with no HYP element).
-        # Wave-1 review — parse via the shared tolerant policy: a bare
-        # ``int(float(...))`` guarded by ``except (TypeError, ValueError)``
-        # let ``WIDTH="1e999"`` escape as an uncaught OverflowError and
-        # abort the whole rewrite (the F7 class; HYP attributes are never
-        # pre-parsed by ``_int_attr`` upstream). Unusable → 0 → 4% estimate.
+        # Parse via the shared tolerant policy: HYP attributes are never
+        # pre-parsed by ``_int_attr`` upstream, and a bare
+        # ``int(float(...))`` would let ``WIDTH="1e999"`` escape as an
+        # uncaught OverflowError. Unusable → 0 → 4% estimate.
         orig_hyp_w = parse_int_tolerant(orig_hyp_attribs.get("WIDTH"), 0)
         hyp_width = orig_hyp_w if orig_hyp_w > 0 else max(1, round(width * 0.04))
         hyp_width = min(hyp_width, max(1, width - 1))  # keep room for text
@@ -690,12 +687,12 @@ def rewrite_alto_file(
     metrics = RewriterMetrics()
     line_paths: dict[str, str] = {}
 
-    # P0-5 — a bare line_id keys every correction-to-element association
-    # below. A duplicate (in the manifests OR on the XML elements) would
-    # silently apply one line's correction to another physical line, so
-    # both sides fail loudly instead. Parsers enforce the same invariant
-    # up front; this guards direct calls with hand-built manifests via
-    # the canonical shared check (review fix: no third hand-rolled copy).
+    # ADR-007 — a bare line_id keys every correction-to-element
+    # association below. A duplicate (in the manifests OR on the XML
+    # elements) would silently apply one line's correction to another
+    # physical line, so both sides fail loudly instead. Parsers enforce
+    # the same invariant up front; this guards direct calls with
+    # hand-built manifests via the canonical shared check.
     ensure_unique_identities(page_manifests, xml_path.name)
     line_by_id: dict[str, LineManifest] = {
         lm.line_id: lm for page in page_manifests for lm in page.lines
@@ -710,7 +707,7 @@ def rewrite_alto_file(
         if line_id in seen_element_ids:
             raise DuplicateIdError(
                 f"duplicate TextLine ID {line_id!r} in {xml_path.name!r} — "
-                "two physical lines would receive the same correction (P0-5)."
+                "two physical lines would receive the same correction (ADR-007)."
             )
         seen_element_ids.add(line_id)
         lm = line_by_id[line_id]
@@ -775,11 +772,11 @@ def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]
         line_id = tl_el.get("ID")
         if line_id in line_ids:
             if line_id in result:
-                # P0-5 — a repeated ID would silently collapse two physical
-                # lines into one trace entry.
+                # ADR-007 — a repeated ID would silently collapse two
+                # physical lines into one trace entry.
                 raise DuplicateIdError(
                     f"duplicate TextLine ID {line_id!r} in rewritten ALTO — "
-                    "output-text extraction would be ambiguous (P0-5)."
+                    "output-text extraction would be ambiguous (ADR-007)."
                 )
             result[line_id] = reconstruct_textline(tl_el, ns)
     return result
@@ -821,7 +818,7 @@ def _add_processing_entry(
     )
 
 
-# --- __all__ (Stage 3 audit remediation) ---
+# --- public surface ---
 __all__ = [
     "RewriterMetrics",
     "rewrite_alto_file",

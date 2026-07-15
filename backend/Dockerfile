@@ -1,17 +1,20 @@
 # Stand-alone backend image used by docker-compose.
 #
-# Build context: repository root (see docker-compose.yml). Two-step
-# Python install: corrigenda editable from the sibling path, then the
-# backend's own requirements.txt (which no longer references corrigenda
-# — see Stage 6 of the audit remediation).
+# Build context: repository root (see docker-compose.yml). Plan V4.3 —
+# the full environment installs from the hash-locked file, then the
+# corrigenda WHEEL installs with --no-deps (its dependencies can only
+# come from the verified lock; the image ships the artefact users would
+# get from PyPI, not an editable checkout).
 FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3
 WORKDIR /app
 
-COPY packages/corrigenda /app/packages/corrigenda
-RUN pip install --no-cache-dir -e /app/packages/corrigenda
+COPY backend/requirements-lock.txt /app/backend/requirements-lock.txt
+RUN pip install --no-cache-dir --require-hashes -r /app/backend/requirements-lock.txt
 
-COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+COPY packages/corrigenda /app/packages/corrigenda
+RUN pip wheel --no-cache-dir --no-deps -w /tmp/wheels /app/packages/corrigenda \
+    && pip install --no-cache-dir --no-deps /tmp/wheels/corrigenda-*.whl \
+    && rm -rf /tmp/wheels
 
 COPY backend/app/ /app/backend/app/
 

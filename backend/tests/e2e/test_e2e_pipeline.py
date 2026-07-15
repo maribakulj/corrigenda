@@ -75,7 +75,7 @@ def test_honest_job_end_to_end(backend_server, use_honest_vendor):
     progress = [n for n in names[:-1] if n not in ("keepalive",)]
     assert progress, f"no live progress events before terminal: {names}"
 
-    status = httpx.get(f"{base_url}/api/jobs/{job_id}", params={"token": token}, timeout=30)
+    status = httpx.get(f"{base_url}/api/jobs/{job_id}", headers={"X-Job-Token": token}, timeout=30)
     assert status.status_code == 200
     assert status.json()["status"] == "completed"
 
@@ -176,7 +176,9 @@ def test_absorption_only_is_refused_by_the_line_guard(backend_server, use_absorp
     assert "nationale" in _line_text(out_lines["TL8"])
 
     # The trace pins WHICH guard fired.
-    trace = httpx.get(f"{base_url}/api/jobs/{job_id}/trace", params={"token": token}, timeout=30)
+    trace = httpx.get(
+        f"{base_url}/api/jobs/{job_id}/trace", headers={"X-Job-Token": token}, timeout=30
+    )
     assert trace.status_code == 200
     tl2 = next(ln for ln in trace.json()["lines"] if ln["line_id"] == "TL2")
     assert tl2["fallback_reason"] == "absorbs_next_line", tl2
@@ -200,13 +202,23 @@ def test_job_endpoints_are_404_without_token(backend_server, use_honest_vendor):
     for path in (f"/api/jobs/{job_id}", f"/api/jobs/{job_id}/download"):
         no_token = httpx.get(f"{base_url}{path}", timeout=30)
         assert no_token.status_code == 404, path
-        bad_token = httpx.get(f"{base_url}{path}", params={"token": "wrong-token"}, timeout=30)
+        bad_token = httpx.get(
+            f"{base_url}{path}", headers={"X-Job-Token": "wrong-token"}, timeout=30
+        )
         assert bad_token.status_code == 404, path
+        # Plan V2.4 — the query-param transport is dead: a valid token in
+        # the URL must be refused too (it would leak into proxy logs).
+        query_token = httpx.get(f"{base_url}{path}", params={"token": token}, timeout=30)
+        assert query_token.status_code == 404, path
 
-    # SSE endpoint too (EventSource surface, token via query param only).
+    # SSE endpoint too (EventSource surface — uses ?sig=, see below).
     with httpx.stream("GET", f"{base_url}/api/jobs/{job_id}/events", timeout=30) as resp:
         assert resp.status_code == 404
+    # The signed events_url from creation must open the stream.
+    events_url = created["events_url"]
+    with httpx.stream("GET", f"{base_url}{events_url}", timeout=30) as resp:
+        assert resp.status_code == 200
 
     # With the token, the same endpoints answer.
-    ok = httpx.get(f"{base_url}/api/jobs/{job_id}", params={"token": token}, timeout=30)
+    ok = httpx.get(f"{base_url}/api/jobs/{job_id}", headers={"X-Job-Token": token}, timeout=30)
     assert ok.status_code == 200

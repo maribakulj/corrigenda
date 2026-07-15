@@ -28,7 +28,7 @@ import json
 import re
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from pathlib import Path
 
@@ -87,7 +87,7 @@ from corrigenda.core.schemas import (
     Usage,
 )
 
-# Audit P3 — genuine programming-error types that must FAIL the run rather
+# ADR-008 — genuine programming-error types that must FAIL the run rather
 # than degrade silently to OCR fallback on the producer-attempt path.
 # Deliberately EXCLUDES ValueError (JSON/validation/parse errors are
 # expected producer-output failures) and any provider transport error
@@ -443,12 +443,64 @@ class CorrectionResult:
     edit_script: EditScript
 
 
+@dataclass
+class RunContext:
+    """All mutable state of ONE pipeline execution (ADR-005).
+
+    Created fresh at the top of every :meth:`CorrectionPipeline.run` and
+    threaded through the internal methods, so ``CorrectionPipeline``
+    itself carries only immutable configuration and injected
+    dependencies. Nothing here survives the run: the public outcome is
+    copied into :class:`CorrectionResult` before returning.
+
+    Not exported: this is internal orchestration state, not API surface.
+    """
+
+    #: Retries consumed across every chunk's attempt loop.
+    retry_count: int = 0
+    #: Chunks (or descent sub-chunks) that fell back to OCR source text.
+    fallback_count: int = 0
+    #: Per-pair reconciliation outcomes (coherent / fallback / neutralised).
+    reconcile_metrics: ReconcileMetrics = field(default_factory=ReconcileMetrics)
+    #: Aggregate token consumption across every producer call of the run.
+    usage: Usage = field(default_factory=Usage)
+    #: §4 — per target line, the producer's ops (a line may carry several,
+    #: e.g. one replace_span per occurrence) and the text those ops
+    #: produced (pre-guard, pre-reconcile). Consumed by
+    #: _build_final_edit_script to emit the ops the run ACTUALLY applied.
+    #: Keyed by (page_id, line_id): bare line_ids may legitimately repeat
+    #: across FILES (only page_ids are unique document-wide), and a
+    #: bare-id key would let the last file's ops overwrite an earlier
+    #: file's, corrupting the dry-run edit_script.
+    producer_ops: dict[tuple[str, str], tuple[list[EditOp], str]] = field(
+        default_factory=dict
+    )
+    #: Per-line PRE-REVERT accepted correction, keyed by _trace_key. The
+    #: cross-chunk boundary pass and the page-seam pass compare against
+    #: THIS snapshot (like the intra-chunk pass does via its local
+    #: `accepted_lines`): reading the live corrected_text after an
+    #: earlier revert would mask the third line of an identical-
+    #: correction run straddling a chunk/page seam.
+    accepted_snapshot: dict[str, str] = field(default_factory=dict)
+    #: Which finalization pass ACTUALLY owned each line (keyed by
+    #: _trace_key). Granularity descent spawns sub-chunks the plan never
+    #: listed, so the boundary pass must derive its seams from these
+    #: owners, not from plan.chunks.
+    finalized_owner: dict[str, int] = field(default_factory=dict)
+    finalize_seq: int = 0
+    #: §4.1 vision envelope — resolved once per run from run(source_images=…).
+    image_ref_by_page_id: dict[str, ImageRef] = field(default_factory=dict)
+    page_dims: dict[str, tuple[int, int]] = field(default_factory=dict)
+
+
 class CorrectionPipeline:
     """Pure orchestration of the correction pipeline over an EditProducer.
 
     Dependencies are injected via the constructor; the pipeline never
-    reaches for global state. Counters track stats locally and are
-    exposed in the final `CorrectionResult` for the caller to persist.
+    reaches for global state. The instance holds only immutable
+    configuration (ADR-005): every run creates a fresh :class:`RunContext`
+    for its mutable state, and the stats it accumulates are exposed in
+    the final `CorrectionResult` for the caller to persist.
 
     §5.1 resorption — the pipeline is constructed around an
     :class:`EditProducer`; there is no ``api_key``/``model`` anywhere on
@@ -494,37 +546,13 @@ class CorrectionPipeline:
         # processingStep. Pure strings: the pipeline never dials a vendor.
         self.provider_name = provider_name
         self.model = model
-        # Counters reset on every call to run()
-        self._retry_count = 0
-        self._fallback_count = 0
-        self._reconcile_metrics = ReconcileMetrics()
-        self._usage = Usage()
-        # §4 — per target line, the producer's ops (a line may carry
-        # several, e.g. one replace_span per occurrence) and the text those
-        # ops produced (pre-guard, pre-reconcile). Consumed by
-        # _build_final_edit_script to emit the ops the run ACTUALLY applied
-        # (reset in run()). Audit-F4 — keyed by (page_id, line_id): bare
-        # line_ids may legitimately repeat across FILES (only page_ids are
-        # unique document-wide), and a bare-id key let the last file's ops
-        # overwrite an earlier file's, corrupting the dry-run edit_script.
-        self._producer_ops: dict[tuple[str, str], tuple[list[EditOp], str]] = {}
-        # Audit-F3 — per-line PRE-REVERT accepted correction, keyed by
-        # _trace_key. The cross-chunk boundary pass and the page-seam
-        # pass compare against THIS snapshot (like the intra-chunk pass
-        # already does via its local `accepted_lines`): reading the live
-        # corrected_text after an earlier revert masked the third line
-        # of an identical-correction run straddling a chunk/page seam
-        # (reset in run()).
-        self._accepted_snapshot: dict[str, str] = {}
-        # Wave-1 review — which finalization pass ACTUALLY owned each line
-        # (keyed by _trace_key). Granularity descent spawns sub-chunks the
-        # plan never listed, so the boundary pass must derive its seams
-        # from these owners, not from plan.chunks (reset in run()).
-        self._finalized_owner: dict[str, int] = {}
-        self._finalize_seq = 0
-        # §4.1 vision envelope — populated per-run from run(source_images=…).
-        self._image_ref_by_page_id: dict[str, ImageRef] = {}
-        self._page_dims: dict[str, tuple[int, int]] = {}
+        # Reentrancy guard (ADR-005). Per-run state lives in RunContext,
+        # but the injected observer and output_writer are shared instance
+        # dependencies: two concurrent runs would interleave their events
+        # and overwrite each other's outputs (write_trace has no run
+        # discriminator). One instance therefore still means one run at
+        # a time; concurrent callers build one pipeline per run.
+        self._running = False
 
     @classmethod
     def for_provider(
@@ -602,14 +630,15 @@ class CorrectionPipeline:
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
-    def _record_reconcile_outcome(self, outcome: str) -> None:
-        """Bump the per-job ReconcileMetrics counter for a single pair."""
+    @staticmethod
+    def _record_reconcile_outcome(ctx: RunContext, outcome: str) -> None:
+        """Bump the run's ReconcileMetrics counter for a single pair."""
         if outcome == "coherent":
-            self._reconcile_metrics.coherent += 1
+            ctx.reconcile_metrics.coherent += 1
         elif outcome == "fallback":
-            self._reconcile_metrics.fallback += 1
+            ctx.reconcile_metrics.fallback += 1
         elif outcome == "neutralised":
-            self._reconcile_metrics.neutralised += 1
+            ctx.reconcile_metrics.neutralised += 1
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -626,6 +655,20 @@ class CorrectionPipeline:
         source_images: dict[str, ImageRef] | None = None,
     ) -> CorrectionResult:
         """Run the full pipeline. Mutates `document_manifest.pages` in place.
+
+        **Concurrency contract (ADR-005)** — one instance, one run at
+        a time. All per-run state lives in a fresh :class:`RunContext`
+        created here (the pipeline instance itself carries only
+        immutable configuration), but the injected ``observer`` and
+        ``output_writer`` are shared instance dependencies: two
+        concurrent runs would interleave their events and overwrite each
+        other's outputs. Guarded: a concurrent call raises
+        :class:`RuntimeError` immediately. Instances are not
+        thread-safe; concurrent callers build one pipeline per run.
+        The input manifest is CONSUMED (mutated in place); re-running on
+        the same manifest starts from the previous run's corrected
+        state, not from the original OCR text. Sequential re-use of one
+        instance on fresh manifests is supported.
 
         §5.1 resorption — there is no ``api_key``/``model``/``provider_name``
         here anymore: credentials and the vendor call live inside the
@@ -660,21 +703,46 @@ class CorrectionPipeline:
         (and its :class:`CorrectionReport`) is the whole deliverable —
         useful for preview or for a consumer benchmarking without writing.
         """
+        if self._running:
+            raise RuntimeError(
+                "CorrectionPipeline.run() is already executing on this instance — "
+                "one instance supports one run at a time (per-run state lives on "
+                "the instance). Create a separate pipeline per concurrent run."
+            )
+        self._running = True
+        try:
+            return await self._run_exclusive(
+                document_manifest=document_manifest,
+                source_files=source_files,
+                run_id=run_id,
+                should_abort=should_abort,
+                apply=apply,
+                source_images=source_images,
+            )
+        finally:
+            self._running = False
+
+    async def _run_exclusive(
+        self,
+        *,
+        document_manifest: DocumentManifest,
+        source_files: dict[str, Path],
+        run_id: str | None,
+        should_abort: Callable[[], bool] | None,
+        apply: bool,
+        source_images: dict[str, ImageRef] | None,
+    ) -> CorrectionResult:
+        """Body of :meth:`run`, executing under the reentrancy guard."""
         run_id = run_id or str(uuid.uuid4())
-        self._retry_count = 0
-        self._fallback_count = 0
-        self._reconcile_metrics = ReconcileMetrics()
-        self._usage = Usage()
-        self._producer_ops = {}
-        self._accepted_snapshot = {}
-        self._finalized_owner = {}
-        self._finalize_seq = 0
+        # ADR-005 — one fresh context per execution; no per-run state
+        # remains on the instance.
+        ctx = RunContext()
 
         # §5.1 — a vision producer without its images is a start-up error,
         # never a silent image-less call.
         require_source_images(self.producer, list(source_files.keys()), source_images)
 
-        # P0-5 — identity-uniqueness invariant, enforced at the pipeline
+        # ADR-007 — identity-uniqueness invariant, enforced at the pipeline
         # door so hand-built manifests get the same guarantee as
         # parser-built ones: within one source file every page/block/line
         # ID must be unique (correction-to-line association is keyed by
@@ -689,12 +757,12 @@ class CorrectionPipeline:
         # §4.1 — per-page vision envelope lookups, resolved once. Pure
         # copying: the ImageRef stays an opaque string end to end.
         images = source_images or {}
-        self._image_ref_by_page_id = {
+        ctx.image_ref_by_page_id = {
             page.page_id: images[page.source_file]
             for page in document_manifest.pages
             if page.source_file in images
         }
-        self._page_dims = {
+        ctx.page_dims = {
             page.page_id: (page.page_width, page.page_height)
             for page in document_manifest.pages
         }
@@ -761,6 +829,7 @@ class CorrectionPipeline:
                         cross_page[(partner_page, partner_id)] = partner
 
             page_chunks, page_reconciled = await self._process_page(
+                ctx=ctx,
                 page=page,
                 document_id=document_manifest.document_id,
                 traces=traces,
@@ -770,40 +839,38 @@ class CorrectionPipeline:
             total_chunks += page_chunks
             total_reconciled += page_reconciled
 
-        # Review fix (P2-6, one level up): a duplication straddling a PAGE
-        # boundary was still invisible — chunk plans and the page-level
-        # pass are both page-scoped, while page-boundary lines DO see each
-        # other through cross-page hyphen context. Check each page seam
+        # Page-seam duplicate pass: chunk plans and the page-level pass
+        # are both page-scoped, yet page-boundary lines DO see each other
+        # through cross-page hyphen context — so each page seam is checked
         # explicitly (O(#pages), one pair per seam). The lookup is built
         # per seam, never document-wide: bare line_ids may legitimately
         # repeat across FILES, and a global bare-id dict is the exact
-        # ambiguity P0-5 bans — an ambiguous seam is skipped instead.
+        # ambiguity ADR-007 bans — an ambiguous seam is skipped instead.
         for prev_page, next_page in zip(
             document_manifest.pages, document_manifest.pages[1:]
         ):
             if not prev_page.lines or not next_page.lines:
                 continue
-            # Audit P2 — only compare a seam WITHIN one source file. Pages
-            # of different files are concatenated in document_manifest,
-            # so without this guard the last physical line of file A was
-            # compared against the first line of file B as if adjacent,
-            # and could be spuriously reverted as a "duplicate".
+            # Only compare a seam WITHIN one source file: pages of
+            # different files are concatenated in document_manifest, and
+            # the last physical line of file A is NOT adjacent to the
+            # first line of file B — comparing them could spuriously
+            # revert either as a "duplicate".
             if prev_page.source_file != next_page.source_file:
                 continue
             seam_map = {lm.line_id: lm for lm in (*prev_page.lines, *next_page.lines)}
             if len(seam_map) != len(prev_page.lines) + len(next_page.lines):
                 continue  # cross-file line_id reuse → ambiguous, skip
             a, b = prev_page.lines[-1], next_page.lines[0]
-            # Audit-F3 (twin branch) — same pre-revert snapshot basis as
-            # the cross-chunk boundary pass: an intra-page revert of the
-            # seam line otherwise masked the third member of a run
-            # straddling the page seam.
+            # Same pre-revert snapshot basis as the cross-chunk boundary
+            # pass: an intra-page revert of the seam line would otherwise
+            # mask the third member of a run straddling the page seam.
             seam_reverts = check_adjacent_duplicates(
                 [
                     (
                         lm.line_id,
                         lm.ocr_text,
-                        self._accepted_snapshot.get(
+                        ctx.accepted_snapshot.get(
                             _trace_key(lm),
                             lm.corrected_text
                             if lm.corrected_text is not None
@@ -848,17 +915,17 @@ class CorrectionPipeline:
         return CorrectionResult(
             total_chunks=total_chunks,
             total_reconciled=total_reconciled,
-            retry_count=self._retry_count,
-            fallback_count=self._fallback_count,
+            retry_count=ctx.retry_count,
+            fallback_count=ctx.fallback_count,
             traces=traces,
-            reconcile_metrics=self._reconcile_metrics,
-            usage=self._usage,
+            reconcile_metrics=ctx.reconcile_metrics,
+            usage=ctx.usage,
             report=report,
-            edit_script=self._build_final_edit_script(document_manifest),
+            edit_script=self._build_final_edit_script(document_manifest, ctx),
         )
 
     def _build_final_edit_script(
-        self, document_manifest: DocumentManifest
+        self, document_manifest: DocumentManifest, ctx: RunContext
     ) -> EditScript:
         """§4 — the EditScript the run *actually applied*, in document order.
 
@@ -866,7 +933,7 @@ class CorrectionPipeline:
         state, after reconciliation, the acceptance guard, and every
         duplicate/seam revert have run. It therefore never carries an op
         for a line that was reverted to OCR or reconciled to different text
-        (Audit P2 — a dry-run consumer replaying it would otherwise diverge
+        (a dry-run consumer replaying it would otherwise diverge
         from the pipeline's own corrected XML):
 
         - line not ``CORRECTED`` (fallback / failed / pending) → no op;
@@ -883,7 +950,7 @@ class CorrectionPipeline:
             for lm in page.lines:
                 if lm.status is not LineStatus.CORRECTED or lm.corrected_text is None:
                     continue
-                captured = self._producer_ops.get((lm.page_id, lm.line_id))
+                captured = ctx.producer_ops.get((lm.page_id, lm.line_id))
                 if captured is None:
                     # An accepted line the producer left untouched (no op) —
                     # e.g. a rules producer's uncovered line. Nothing applied.
@@ -893,8 +960,8 @@ class CorrectionPipeline:
                     # The producer's output survived every guard unchanged —
                     # keep its original ops (and their TYPE, e.g. span),
                     # stamped with the page_id so a consumer can attribute
-                    # them per file (wave-1 review, F4 residual: bare
-                    # line_ids repeat across files).
+                    # them per file (bare line_ids repeat across
+                    # files — ADR-001).
                     ops.extend(
                         op.model_copy(update={"page_id": lm.page_id}) for op in line_ops
                     )
@@ -946,6 +1013,7 @@ class CorrectionPipeline:
     async def _process_page(
         self,
         *,
+        ctx: RunContext,
         page: PageManifest,
         document_id: str,
         traces: dict[str, LineTrace],
@@ -996,6 +1064,7 @@ class CorrectionPipeline:
             page_chunks += 1
             try:
                 n = await self._run_chunk(
+                    ctx=ctx,
                     chunk=chunk,
                     page=page,
                     line_by_id=line_by_id,
@@ -1006,7 +1075,7 @@ class CorrectionPipeline:
                 page_reconciled += n
             except (CorrectionAborted, ProviderPermanentError):
                 # F10 — cancellation must propagate, never be downgraded
-                # to a chunk_error event. P0-1 — a permanent provider
+                # to a chunk_error event. ADR-008 — a permanent provider
                 # rejection (401/403/404) is fatal for the whole run: it
                 # would hit every remaining chunk identically, and
                 # converting it into per-chunk OCR fallbacks would let the
@@ -1023,7 +1092,7 @@ class CorrectionPipeline:
                         "exception_type": type(exc).__name__,
                     },
                 )
-                # P0-2 — only RECOVERABLE domain errors may be absorbed as
+                # ADR-008 — only RECOVERABLE domain errors may be absorbed as
                 # a chunk_error + continue. Anything else (KeyError,
                 # AttributeError, a pydantic bug, a broken invariant) is a
                 # programming error: continuing would let the run complete
@@ -1031,18 +1100,18 @@ class CorrectionPipeline:
                 if not isinstance(exc, CorrectionError):
                     raise
 
-        # P2-6 — cross-chunk adjacency pass. Per-chunk finalization only
-        # sees that chunk's TARGET lines, so two document-adjacent lines
-        # owned by different chunks were never compared: a duplication
-        # straddling a chunk boundary escaped the guard entirely. Only
-        # the boundary pairs are new — intra-chunk pairs were already
-        # checked with the same function and config — so the pass is
-        # restricted to adjacent pairs whose owners differ (review fix:
-        # re-checking whole pages re-ran SequenceMatcher over every
-        # already-checked pair for nothing).
+        # Cross-chunk adjacency pass. Per-chunk finalization only sees
+        # that chunk's TARGET lines, so two document-adjacent lines owned
+        # by different chunks are never compared there — a duplication
+        # straddling a chunk boundary needs this pass. Only the boundary
+        # pairs are new — intra-chunk pairs were already checked with the
+        # same function and config — so the pass is restricted to
+        # adjacent pairs whose owners differ (re-checking whole pages
+        # would re-run SequenceMatcher over every already-checked pair
+        # for nothing).
         #
-        # Wave-1 review — the owners are the finalization passes that
-        # ACTUALLY ran (self._finalized_owner), not the planned chunks:
+        # The owners are the finalization passes that
+        # ACTUALLY ran (ctx.finalized_owner), not the planned chunks:
         # granularity descent finalizes a planned chunk as many
         # sub-chunks, whose seams the plan-derived map could not see —
         # and a single-chunk plan (`len(plan.chunks) > 1` gate) skipped
@@ -1051,20 +1120,20 @@ class CorrectionPipeline:
         # both sides, where a revert would be a no-op anyway.
         boundary_reverts: dict[str, str] = {}
         for a, b in zip(page.lines, page.lines[1:]):
-            if self._finalized_owner.get(_trace_key(a)) == self._finalized_owner.get(
+            if ctx.finalized_owner.get(_trace_key(a)) == ctx.finalized_owner.get(
                 _trace_key(b)
             ):
                 continue
-            # Audit-F3 — compare the PRE-REVERT accepted corrections
-            # (snapshotted in _finalize_chunk_traces), not the live
-            # corrected_text: an intra-chunk revert of the boundary
-            # line otherwise masked the third member of an
-            # identical-correction run straddling the boundary.
+            # Compare the PRE-REVERT accepted corrections (snapshotted
+            # in _finalize_chunk_traces), not the live corrected_text: an
+            # intra-chunk revert of the boundary line would otherwise mask
+            # the third member of an identical-correction run straddling
+            # the boundary.
             pair = [
                 (
                     lm.line_id,
                     lm.ocr_text,
-                    self._accepted_snapshot.get(
+                    ctx.accepted_snapshot.get(
                         _trace_key(lm),
                         lm.corrected_text
                         if lm.corrected_text is not None
@@ -1108,6 +1177,7 @@ class CorrectionPipeline:
     async def _run_chunk(
         self,
         *,
+        ctx: RunContext,
         chunk: ChunkRequest,
         page: PageManifest,
         line_by_id: dict[str, LineManifest],
@@ -1164,6 +1234,7 @@ class CorrectionPipeline:
             last_msg,
             usage,
         ) = await self._attempt_chunk(
+            ctx=ctx,
             chunk=chunk,
             chunk_lines=chunk_lines,
             hyphen_pairs=hyphen_pairs,
@@ -1175,6 +1246,7 @@ class CorrectionPipeline:
 
         if response is not None:
             return self._finish_successful_chunk(
+                ctx=ctx,
                 chunk=chunk,
                 chunk_lines=chunk_lines,
                 response=response,
@@ -1231,9 +1303,10 @@ class CorrectionPipeline:
                         traces=traces,
                         sanitised_msg=last_msg or "per_chunk_budget exhausted",
                     )
-                    self._fallback_count += 1
+                    ctx.fallback_count += 1
                     continue
                 total += await self._run_chunk(
+                    ctx=ctx,
                     chunk=sub,
                     page=page,
                     line_by_id=line_by_id,
@@ -1251,12 +1324,13 @@ class CorrectionPipeline:
             traces=traces,
             sanitised_msg=last_msg or "all_attempts_exhausted",
         )
-        self._fallback_count += 1
+        ctx.fallback_count += 1
         return 0
 
     def _finish_successful_chunk(
         self,
         *,
+        ctx: RunContext,
         chunk: ChunkRequest,
         chunk_lines: list[LineManifest],
         response: LLMResponse,
@@ -1283,6 +1357,7 @@ class CorrectionPipeline:
         target_lines = [lm for lm in chunk_lines if lm.line_id in target_ids]
 
         reconciled_count = self._reconcile_chunk_hyphens(
+            ctx=ctx,
             chunk_id=chunk.chunk_id,
             chunk_lines=target_lines,
             text_by_id=text_by_id,
@@ -1296,6 +1371,7 @@ class CorrectionPipeline:
             traces=traces,
         )
         self._finalize_chunk_traces(
+            ctx=ctx,
             chunk_lines=target_lines,
             traces=traces,
             line_by_id=line_by_id,
@@ -1362,6 +1438,7 @@ class CorrectionPipeline:
     async def _attempt_chunk(
         self,
         *,
+        ctx: RunContext,
         chunk: ChunkRequest,
         chunk_lines: list[LineManifest],
         hyphen_pairs: dict[str, str],
@@ -1420,7 +1497,7 @@ class CorrectionPipeline:
                 chunk_lines,
                 all_lines_by_id,
                 include_geometry=getattr(self.producer, "wants_geometry", False),
-                page_dims=self._page_dims,
+                page_dims=ctx.page_dims,
             )
 
             enriched_by_id = {e.line_id: e for e in enriched}
@@ -1436,7 +1513,7 @@ class CorrectionPipeline:
                 block_id=chunk.block_id,
                 lines=enriched,
                 image_ref=(
-                    self._image_ref_by_page_id.get(chunk.page_id)
+                    ctx.image_ref_by_page_id.get(chunk.page_id)
                     if getattr(self.producer, "wants_image", False)
                     else None
                 ),
@@ -1455,7 +1532,7 @@ class CorrectionPipeline:
                 )
                 raw = self._script_to_raw(script, chunk_lines)
                 if usage is not None:
-                    self._usage = self._usage + usage
+                    ctx.usage = ctx.usage + usage
                     chunk_usage = chunk_usage + usage
 
                 lm_by_id = {lm.line_id: lm for lm in chunk_lines}
@@ -1497,8 +1574,8 @@ class CorrectionPipeline:
                 # text that op produced (pre-guard, pre-reconcile). The final
                 # EditScript is NOT emitted from here: a line later reverted
                 # (duplicate / rejected by check_line) or reconciled to
-                # different text must not leave a stale op behind (Audit P2 —
-                # a dry-run consumer replaying it would diverge from the
+                # different text must not leave a stale op behind (a
+                # dry-run consumer replaying it would diverge from the
                 # pipeline's own corrected XML). _build_final_edit_script
                 # reconciles these captured ops against the FINAL per-line
                 # state, preserving the producer's op TYPE (e.g. a rules
@@ -1510,20 +1587,20 @@ class CorrectionPipeline:
                     if op.line_id in target_ids and op.line_id in produced_by_line:
                         ops_by_line.setdefault(op.line_id, []).append(op)
                 for line_id, line_ops in ops_by_line.items():
-                    # Audit-F4 — chunks are page-scoped, so chunk.page_id
-                    # qualifies every target line unambiguously.
-                    self._producer_ops[(chunk.page_id, line_id)] = (
+                    # Chunks are page-scoped, so chunk.page_id qualifies
+                    # every target line unambiguously.
+                    ctx.producer_ops[(chunk.page_id, line_id)] = (
                         line_ops,
                         produced_by_line[line_id],
                     )
                 return response, attempts_used, False, "", chunk_usage
 
             except ProviderPermanentError:
-                # P0-1 — credentials/model rejected: retrying is pointless
+                # ADR-008 — credentials/model rejected: retrying is pointless
                 # and falling back would fake success. Fatal for the run.
                 raise
             except Exception as exc:
-                # Audit P3 (same class as P0-2, on the attempt path): a
+                # ADR-008 (attempt-path branch): a
                 # genuine PROGRAMMING error — a bug in _script_to_raw /
                 # validation, or a broken invariant — must FAIL the run, not
                 # be silently masked as uncorrected OCR text (which would
@@ -1566,7 +1643,7 @@ class CorrectionPipeline:
                             "error": decision.error_tag,
                         },
                     )
-                    self._retry_count += 1
+                    ctx.retry_count += 1
                     continue
 
                 # Attempts exhausted (or non-retryable error class). Do NOT
@@ -1622,12 +1699,13 @@ class CorrectionPipeline:
         return {"lines": entries}
 
     # ------------------------------------------------------------------
-    # Chunk helpers extracted from _run_chunk (audit A3)
+    # Chunk helpers extracted from _run_chunk
     # ------------------------------------------------------------------
 
     def _reconcile_chunk_hyphens(
         self,
         *,
+        ctx: RunContext,
         chunk_id: str,
         chunk_lines: list[LineManifest],
         text_by_id: dict[str, str],
@@ -1670,7 +1748,7 @@ class CorrectionPipeline:
             outcome = _reconcile_one_pair(
                 lm, part2, text_by_id, is_forward=False, config=self.guard_config
             )
-            self._record_reconcile_outcome(outcome)
+            self._record_reconcile_outcome(ctx, outcome)
             processed_part2.add(part2_key)
             reconciled_count += 1
 
@@ -1701,7 +1779,7 @@ class CorrectionPipeline:
             outcome = _reconcile_one_pair(
                 lm, part2, text_by_id, is_forward=True, config=self.guard_config
             )
-            self._record_reconcile_outcome(outcome)
+            self._record_reconcile_outcome(ctx, outcome)
             processed_part2.add(part2_key)
             reconciled_count += 1
 
@@ -1773,19 +1851,18 @@ class CorrectionPipeline:
         """Revert duplicate-flagged lines to OCR — atomically with their
         hyphen partner.
 
-        Shared by the chunk-level sweep, the page-level cross-chunk pass
-        and the page-boundary pass (review fix: the revert logic used to
-        be duplicated and none of the copies preserved pair atomicity —
-        reverting one member of a reconciled pair left a mixed
-        OCR+corrected pair, the exact state ``reconcile_hyphen_pair``
-        guarantees can never survive). A flagged line's partner is
+        ONE shared implementation for the chunk-level sweep, the
+        page-level cross-chunk pass and the page-boundary pass: a mixed
+        OCR+corrected pair is the exact state ``reconcile_hyphen_pair``
+        guarantees can never survive, so every copy of the revert logic
+        must preserve pair atomicity — a flagged line's partner is
         reverted too, with its own trace reason.
 
-        Audit P1 — partner extension resolves through ``_resolve_partner``
-        so a *cross-page* partner (living on another page, absent from the
-        page-local ``line_by_id``) is reverted too. The old page-local
-        ``pid in line_by_id`` guard silently skipped it, leaving the
-        reconciled cross-page pair half OCR / half corrected.
+        Partner extension resolves through ``_resolve_partner`` so a
+        *cross-page* partner (living on another page, absent from the
+        page-local ``line_by_id``) is reverted too — a page-local guard
+        would silently skip it and leave the reconciled cross-page pair
+        half OCR / half corrected.
         """
         if not reverts:
             return
@@ -1801,13 +1878,12 @@ class CorrectionPipeline:
             lm = line_by_id.get(lid)
             if lm is not None:
                 _enroll(lm, reason)
-        # Audit-F2 — walk the partner extension to a FIXED POINT: enrolled
-        # partners are themselves iterated so whole 3+-line hyphen chains
-        # (PART1→BOTH→…→PART2) revert atomically. The previous single pass
-        # over the original flags was one-hop, so a chain neighbour two
-        # hops from any flagged line kept its corrected text — the mixed
-        # OCR+corrected pair state that reconcile_hyphen_pair's contract
-        # and this function's own docstring forbid.
+        # Walk the partner extension to a FIXED POINT: enrolled partners
+        # are themselves iterated so whole 3+-line hyphen chains
+        # (PART1→BOTH→…→PART2) revert atomically. A one-hop pass would
+        # leave a chain neighbour two hops from any flagged line with its
+        # corrected text — the mixed OCR+corrected pair state that
+        # reconcile_hyphen_pair's contract and this docstring forbid.
         worklist: list[LineManifest] = [
             lm for lm in (line_by_id.get(lid) for lid in reverts) if lm is not None
         ]
@@ -1846,6 +1922,7 @@ class CorrectionPipeline:
     def _finalize_chunk_traces(
         self,
         *,
+        ctx: RunContext,
         chunk_lines: list[LineManifest],
         traces: dict[str, LineTrace] | None,
         line_by_id: dict[str, LineManifest],
@@ -1863,16 +1940,16 @@ class CorrectionPipeline:
             (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text)
             for lm in chunk_lines
         ]
-        # Audit-F3 — persist the pre-revert snapshot for the boundary and
-        # page-seam passes (same comparison basis as this pass). Wave-1
-        # review — also record the ACTUAL finalization owner: downgrade
-        # sub-chunks create seams the planned chunk list never had.
-        self._finalize_seq += 1
+        # Persist the pre-revert snapshot for the boundary and page-seam
+        # passes (same comparison basis as this pass), and record the
+        # ACTUAL finalization owner: downgrade sub-chunks create seams
+        # the planned chunk list never had.
+        ctx.finalize_seq += 1
         for lm in chunk_lines:
-            self._accepted_snapshot[_trace_key(lm)] = (
+            ctx.accepted_snapshot[_trace_key(lm)] = (
                 lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
             )
-            self._finalized_owner[_trace_key(lm)] = self._finalize_seq
+            ctx.finalized_owner[_trace_key(lm)] = ctx.finalize_seq
         dup_reverts = check_adjacent_duplicates(
             accepted_lines, config=self.guard_config
         )
@@ -1915,7 +1992,7 @@ class CorrectionPipeline:
         ``apply`` is ``False`` the injected ``OutputWriter`` is never
         called: nothing is persisted.
 
-        Wave-3 review — the heavy calls (``rewrite_file``: a full lxml
+        The heavy calls (``rewrite_file``: a full lxml
         parse/rewrite/serialize of the source file; ``write_corrected``:
         disk IO; ``extract_texts``: another parse) run in worker threads
         so a ~100 MiB rewrite no longer freezes the host's event loop
@@ -1994,7 +2071,7 @@ class CorrectionPipeline:
         # CorrectionReport — one §9 artefact, not a parallel JobTrace shape.
 
 
-# --- __all__ (Stage 3 audit remediation) ---
+# --- public surface ---
 __all__ = [
     "sanitize_error",
     "CorrectionResult",

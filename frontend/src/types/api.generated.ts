@@ -64,6 +64,32 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/jobs/{job_id}/cancel': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Cancel Job
+     * @description Plan V2.2 — request cooperative cancellation. Idempotent.
+     *
+     *     Sets the job's cancellation event; the pipeline's ``should_abort``
+     *     probe (polled between pages and chunks) trips on the next check and
+     *     the runner lands the job in CANCELLED with no output promoted. A
+     *     request on an already-settled job acknowledges without effect —
+     *     the response body always carries the CURRENT status.
+     */
+    post: operations['cancel_job_api_jobs__job_id__cancel_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/jobs/{job_id}/events': {
     parameters: {
       query?: never
@@ -73,8 +99,9 @@ export interface paths {
     }
     /**
      * Job Events
-     * @description SSE stream of correction job events. P1-7 — EventSource cannot set
-     *     headers, so the capability token arrives as ``?token=``.
+     * @description SSE stream of correction job events. Plan V2.4 — EventSource
+     *     cannot set headers, so access uses the events-scoped ``?sig=``
+     *     credential minted at job creation (never the capability token).
      */
     get: operations['job_events_api_jobs__job_id__events_get']
     put?: never
@@ -186,8 +213,9 @@ export interface paths {
     }
     /**
      * Get Job Image
-     * @description Serve a source scan image for a job. P1-7 — <img> tags cannot set
-     *     headers, so the capability token arrives as ``?token=``.
+     * @description Serve a source scan image for a job. Plan V2.4 — <img> tags cannot
+     *     set headers, so access uses the images-scoped ``?sig=`` credential
+     *     appended by the layout endpoint (never the capability token).
      */
     get: operations['get_job_image_api_jobs__job_id__images__image_name__get']
     put?: never
@@ -224,6 +252,8 @@ export interface components {
       job_id: string
       /** Job Token */
       job_token?: string | null
+      /** Events Url */
+      events_url?: string | null
     }
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -242,6 +272,8 @@ export interface components {
       | 'completed'
       | 'completed_with_fallbacks'
       | 'failed'
+      | 'cancel_requested'
+      | 'cancelled'
     /** JobStatusResponse */
     JobStatusResponse: {
       /** Job Id */
@@ -413,6 +445,37 @@ export interface operations {
     responses: {
       /** @description Successful Response */
       200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['JobStatusResponse']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  cancel_job_api_jobs__job_id__cancel_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        job_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      202: {
         headers: {
           [name: string]: unknown
         }

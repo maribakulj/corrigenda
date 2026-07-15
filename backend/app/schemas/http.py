@@ -33,9 +33,14 @@ class CreateJobResponse(BaseModel):
     job_id: str
     # P1-7 — capability token, shown ONCE at creation. Only its SHA-256
     # hash is stored server-side; every subsequent job endpoint requires
-    # it (X-Job-Token header, or ?token= for EventSource/img/download
-    # links that cannot carry headers).
+    # it via the X-Job-Token header. Plan V2.4 — the token is never
+    # placed in URLs any more (query strings leak into proxy logs).
     job_token: str | None = None
+    # Plan V2.4 — ready-to-use SSE URL carrying an events-scoped signed
+    # credential (?sig=), valid for the job's whole run. EventSource
+    # cannot set headers; this replaces ?token=. A leaked events_url can
+    # only watch progress events — never download outputs or read data.
+    events_url: str | None = None
 
 
 class JobStatusResponse(BaseModel):

@@ -24,10 +24,11 @@ import asyncio
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from app.api.deps import get_job_store
+from app.frontend_static import INDEX_HTML, frontend_expected
 from app.protocols import JobStore
 
 router = APIRouter()
@@ -52,6 +53,7 @@ def _storage_writable(path: Path) -> bool:
 
 @router.get("/health/ready", include_in_schema=False)
 async def ready(
+    request: Request,
     store: JobStore = Depends(get_job_store),
 ) -> JSONResponse:
     """Readiness probe — JobStore reachable AND job dir writable."""
@@ -77,8 +79,23 @@ async def ready(
     else:
         checks["storage_dir"] = "ok" if is_writable else "error: not writable"
 
+    # Plan V1.3 — a deployment that PROMISES the SPA (SERVE_FRONTEND=1)
+    # but lacks the built index.html is not ready: the historical
+    # wrong-COPY regression kept /health green while the frontend was
+    # gone. Backend-only deployments (variable unset) skip the check.
+    if frontend_expected():
+        exists = await asyncio.to_thread(INDEX_HTML.exists)
+        checks["frontend"] = "ok" if exists else "error: index.html missing"
+
     healthy = all(v == "ok" for v in checks.values())
+    # Plan V2.1 — separate load gauges: uploads being staged vs
+    # pipelines running. Informational (never flips readiness); lets
+    # operators see which capacity pool is saturated.
+    load = {
+        "uploads_in_progress": getattr(request.app.state, "uploads_in_progress", 0),
+        "jobs_running": request.app.state.tasks.active_count,
+    }
     return JSONResponse(
-        {"status": "ok" if healthy else "degraded", "checks": checks},
+        {"status": "ok" if healthy else "degraded", "checks": checks, "load": load},
         status_code=200 if healthy else 503,
     )

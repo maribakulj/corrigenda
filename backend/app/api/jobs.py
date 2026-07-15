@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import tempfile
 import zipfile
 from collections.abc import AsyncGenerator
@@ -22,6 +23,7 @@ from starlette.background import BackgroundTask
 from app.api.deps import get_job_store
 from app.api.rate_limit import limiter
 from app.api.read_models import build_diff, build_layout
+from app.api.signed_urls import sign_url_credential, verify_url_credential
 from app.jobs import runner as _runner_module
 from app.jobs.runner import JobRunner
 from app.protocols import JobStore
@@ -29,6 +31,7 @@ from app.schemas import (
     TERMINAL_SUCCESS_STATES,
     CreateJobResponse,
     JobManifest,
+    JobStatus,
     JobStatusResponse,
     Provider,
 )
@@ -36,6 +39,7 @@ from app.storage import (
     get_output_files,
     images_dir,
     init_job_dirs,
+    job_dir,
     link_alto_to_images,
     output_dir,
     save_uploaded_files,
@@ -70,6 +74,19 @@ _MAX_TOTAL_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MiB per request
 # 503s with Retry-After — an overload policy, not a silent queue.
 _MAX_ACTIVE_JOBS = int(os.environ.get("MAX_ACTIVE_JOBS", "4"))
 
+# Plan V2.1 — upload-phase reservation, SEPARATE from the running-jobs
+# cap: the job cap only bounds spawned pipelines, so N concurrent
+# requests could all buffer their payload before the authoritative
+# check let 4 spawn. This counter is reserved at handler entry (before
+# any body read) and released when the handler exits. Repeat the limit
+# at the reverse proxy in institutional deployments — this guard is the
+# app's own last line, not the only one.
+_MAX_CONCURRENT_UPLOADS = int(os.environ.get("MAX_CONCURRENT_UPLOADS", str(_MAX_ACTIVE_JOBS)))
+
+# Plan V2.1 — uploads stream to disk in chunks this size; peak RAM per
+# request drops from the 200 MiB request cap to one chunk.
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
 
 # ---------------------------------------------------------------------------
 # Shared dependencies: capability-token access + completed-job resolution
@@ -94,12 +111,15 @@ def require_job_access(
     operator logs, browser history and referrers gave full read access
     to a stranger's OCR text, corrections and images. Every job created
     through the public API now carries a token (only its SHA-256 hash is
-    stored); callers present it via the ``X-Job-Token`` header, or via
-    ``?token=`` for the surfaces that cannot set headers (EventSource,
-    <img>, download links). Jobs created OUTSIDE the HTTP layer (direct
-    store access — tests, embedding consumers) have no hash and are not
-    gated. Missing/wrong token → 404, not 403: an unauthenticated caller
-    must not be able to distinguish "job exists" from "job doesn't".
+    stored); callers present it via the ``X-Job-Token`` header. Plan
+    V2.4 — the token is NEVER accepted in the URL any more: query
+    strings leak into reverse-proxy/ingress/APM logs. The surfaces that
+    cannot set headers (EventSource, <img>) use short-lived signed
+    credentials instead — see ``require_job_access_signed``. Jobs
+    created OUTSIDE the HTTP layer (direct store access — tests,
+    embedding consumers) have no hash and are not gated. Missing/wrong
+    token → 404, not 403: an unauthenticated caller must not be able to
+    distinguish "job exists" from "job doesn't".
 
     Deployment model (decided): the app runs behind the institution's
     SSO/reverse-proxy for authentication; this token provides per-job
@@ -109,10 +129,38 @@ def require_job_access(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
     if job.token_hash is not None:
-        presented = request.headers.get("x-job-token") or request.query_params.get("token")
+        presented = request.headers.get("x-job-token")
         if not _token_matches(job, presented):
             raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
     return job
+
+
+def require_job_access_signed(purpose: str):
+    """Dependency factory for header-less surfaces (Plan V2.4).
+
+    Accepts the full capability token via header (curl, tests), OR a
+    ``?sig=`` credential signed for THIS job and THIS purpose with a
+    bounded lifetime (see ``app.api.signed_urls``). The signed
+    credential can never reach any other endpoint.
+    """
+
+    def dependency(
+        job_id: str,
+        request: Request,
+        store: JobStore = Depends(get_job_store),
+    ) -> JobManifest:
+        job = store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+        if job.token_hash is None:
+            return job
+        if _token_matches(job, request.headers.get("x-job-token")):
+            return job
+        if verify_url_credential(job_id, purpose, request.query_params.get("sig")):
+            return job
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+
+    return dependency
 
 
 def get_completed_job(
@@ -136,6 +184,55 @@ def get_completed_job(
 # ---------------------------------------------------------------------------
 
 
+async def _stream_uploads_to_staging(
+    files: list[UploadFile], staging: Path
+) -> list[tuple[str, Path]]:
+    """Plan V2.1 — copy each upload to disk in bounded chunks.
+
+    Enforces the per-file and cumulative caps INCREMENTALLY (the request
+    413s as soon as the running total crosses a cap, not after buffering
+    everything). Staged names are index-prefixed so duplicate upload
+    names can't collide before ``save_uploaded_files`` applies its own
+    collision policy. Returns ``(original_filename, staged_path)`` pairs.
+    """
+    cap = _MAX_UPLOAD_FILE_BYTES
+    total_cap = _MAX_TOTAL_UPLOAD_BYTES
+    total_bytes = 0
+    staged: list[tuple[str, Path]] = []
+    for idx, f in enumerate(files):
+        original = f.filename or "upload.xml"
+        target = staging / f"{idx:04d}_{Path(original).name}"
+        file_bytes = 0
+        with target.open("wb") as out:
+            while True:
+                chunk = await f.read(_UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                file_bytes += len(chunk)
+                if file_bytes > cap:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Uploaded file {original!r} exceeds the per-file "
+                            f"limit ({cap} bytes). Split the upload or reduce its size."
+                        ),
+                    )
+                # P0-3 — cumulative bound: reject as soon as the running
+                # total crosses the request cap.
+                total_bytes += len(chunk)
+                if total_bytes > total_cap:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Upload exceeds the total request limit "
+                            f"({total_cap} bytes). Split the job into smaller batches."
+                        ),
+                    )
+                out.write(chunk)
+        staged.append((original, target))
+    return staged
+
+
 @router.post("", response_model=CreateJobResponse)
 # Rate limited to throttle file uploads + spawned background tasks
 # against a single-worker server with bounded disk/CPU budget.
@@ -153,6 +250,47 @@ async def create_job(
     store: JobStore = Depends(get_job_store),
 ) -> CreateJobResponse:
     """Upload ALTO files and start a correction job."""
+    # Plan V2.1 — reserve an upload slot BEFORE touching any body byte.
+    # The job cap below only bounds spawned pipelines; without this
+    # reservation N concurrent requests could all stage their payload
+    # while active_count was still low. Check-and-increment is atomic on
+    # the single-threaded event loop (no await between them).
+    app_state = request.app.state
+    if app_state.uploads_in_progress >= _MAX_CONCURRENT_UPLOADS:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Server is at upload capacity ({_MAX_CONCURRENT_UPLOADS} "
+                "concurrent uploads). Retry shortly."
+            ),
+            headers={"Retry-After": "10"},
+        )
+    app_state.uploads_in_progress += 1
+    try:
+        return await _create_job_reserved(
+            request=request,
+            files=files,
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            geometric_pairing=geometric_pairing,
+            store=store,
+        )
+    finally:
+        app_state.uploads_in_progress -= 1
+
+
+async def _create_job_reserved(
+    *,
+    request: Request,
+    files: list[UploadFile],
+    provider: str,
+    api_key: str,
+    model: str,
+    geometric_pairing: bool,
+    store: JobStore,
+) -> CreateJobResponse:
+    """The body of ``create_job``, running inside an upload reservation."""
     # P1-5 — admission control before reading a single byte: the task
     # registry's live count is the source of truth for running pipelines.
     if request.app.state.tasks.active_count >= _MAX_ACTIVE_JOBS:
@@ -186,37 +324,6 @@ async def create_job(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider!r}") from exc
 
-    # Read all file bytes. Bounded by `_MAX_UPLOAD_FILE_BYTES` per file
-    # so a 100 GB upload yields a fast 413 instead of OOMing the
-    # process. We read `cap + 1` bytes and reject if the result is
-    # longer than `cap` (i.e. there was at least one more byte to read).
-    cap = _MAX_UPLOAD_FILE_BYTES
-    total_cap = _MAX_TOTAL_UPLOAD_BYTES
-    total_bytes = 0
-    file_tuples: list[tuple[str, bytes]] = []
-    for f in files:
-        content = await f.read(cap + 1)
-        if len(content) > cap:
-            raise HTTPException(
-                status_code=413,
-                detail=(
-                    f"Uploaded file {f.filename!r} exceeds the per-file "
-                    f"limit ({cap} bytes). Split the upload or reduce its size."
-                ),
-            )
-        # P0-3 — cumulative bound: reject as soon as the running total
-        # crosses the request cap, before buffering the remaining files.
-        total_bytes += len(content)
-        if total_bytes > total_cap:
-            raise HTTPException(
-                status_code=413,
-                detail=(
-                    f"Upload exceeds the total request limit "
-                    f"({total_cap} bytes). Split the job into smaller batches."
-                ),
-            )
-        file_tuples.append((f.filename or "upload.xml", content))
-
     # Create job and dirs. P1-10 — everything from here to the spawn is
     # TRANSACTIONAL: the job record and its directories exist before
     # extraction/parsing/validation, so any failure in that window must
@@ -233,6 +340,15 @@ async def create_job(
     try:
         init_job_dirs(job_id)
 
+        # Plan V2.1 — stream the uploads to a staging dir under the job
+        # in 1 MiB chunks (per-file and cumulative caps enforced
+        # incrementally): peak RAM per request is one chunk, not the
+        # 200 MiB request cap. The staging dir lives inside the job dir
+        # so the transactional rollback below reclaims it too.
+        staging = job_dir(job_id) / "upload-staging"
+        staging.mkdir(parents=True, exist_ok=True)
+        staged_files = await _stream_uploads_to_staging(files, staging)
+
         # Save and extract files (also extracts images from ZIPs).
         # ValueError = bounded/refused input (zip bomb, name collision,
         # too many members) — a client error, not a server fault (P1-9).
@@ -241,9 +357,13 @@ async def create_job(
         # freeze the single-worker event loop (SSE keepalives, health
         # probes, in-flight downloads).
         try:
-            saved, image_files = await asyncio.to_thread(save_uploaded_files, job_id, file_tuples)
+            saved, image_files = await asyncio.to_thread(save_uploaded_files, job_id, staged_files)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            # XML files were MOVED out of staging; only ZIP payloads (and
+            # rejected leftovers) remain — reclaim them now, not at TTL.
+            await asyncio.shield(asyncio.to_thread(shutil.rmtree, staging, ignore_errors=True))
 
         if not saved:
             raise HTTPException(
@@ -299,27 +419,40 @@ async def create_job(
                 headers={"Retry-After": "30"},
             )
 
+        # Plan V2.2 — register the cancellation event BEFORE the task
+        # exists so POST /cancel can never race an unregistered run; the
+        # probe (event.is_set) is polled by the pipeline between pages
+        # and chunks.
+        app_state = request.app.state
+        cancel_event = app_state.cancellations.register(job_id)
+
+        async def _run_job() -> None:
+            try:
+                await runner.run(
+                    job_id=job_id,
+                    document_manifest=doc_manifest,
+                    provider_name=provider,
+                    api_key=api_key,
+                    model=model,
+                    output_writer=output_writer_instance,
+                    source_files={name: path for name, path in saved.items()},
+                    provider=provider_instance,
+                    # Lookup is dynamic (not a snapshot) so tests that
+                    # `monkeypatch.setattr("app.jobs.runner.DEFAULT_JOB_TIMEOUT_SECONDS", N)`
+                    # actually see the override at spawn time.
+                    timeout_seconds=_runner_module.DEFAULT_JOB_TIMEOUT_SECONDS,
+                    should_abort=cancel_event.is_set,
+                )
+            finally:
+                # The run settled (any terminal state): the event has no
+                # further reader — drop it so the registry never leaks.
+                app_state.cancellations.discard(job_id)
+
         # Spawn correction through the per-app registry so the task is
         # strongly referenced (prevents GC mid-run) AND so the lifespan
         # handler can drain it on SIGTERM. Crash logging is centralised
         # in BackgroundTaskRegistry._on_done.
-        request.app.state.tasks.spawn(
-            runner.run(
-                job_id=job_id,
-                document_manifest=doc_manifest,
-                provider_name=provider,
-                api_key=api_key,
-                model=model,
-                output_writer=output_writer_instance,
-                source_files={name: path for name, path in saved.items()},
-                provider=provider_instance,
-                # Lookup is dynamic (not a snapshot) so tests that
-                # `monkeypatch.setattr("app.jobs.runner.DEFAULT_JOB_TIMEOUT_SECONDS", N)`
-                # actually see the override at spawn time.
-                timeout_seconds=_runner_module.DEFAULT_JOB_TIMEOUT_SECONDS,
-            ),
-            name=f"run_job:{job_id}",
-        )
+        request.app.state.tasks.spawn(_run_job(), name=f"run_job:{job_id}")
     except BaseException:
         # P1-10 — rollback: no half-created QUEUED job may survive a
         # failed creation (they are never terminal, hence never evicted).
@@ -328,10 +461,21 @@ async def create_job(
         # call in this handler, and SHIELDED so a client abort
         # (CancelledError can land right here) can't skip the cleanup —
         # the thread runs to completion even if the await is cancelled.
+        request.app.state.cancellations.discard(job_id)
         await asyncio.shield(asyncio.to_thread(store.delete_job, job_id))
         raise
 
-    return CreateJobResponse(job_id=job_id, job_token=job_token)
+    # Plan V2.4 — events-scoped signed URL for EventSource (which cannot
+    # set headers). Valid for the whole run: the job's timeout budget
+    # plus a margin for queueing and late reconnections.
+    events_sig = sign_url_credential(
+        job_id, "events", _runner_module.DEFAULT_JOB_TIMEOUT_SECONDS + 600
+    )
+    return CreateJobResponse(
+        job_id=job_id,
+        job_token=job_token,
+        events_url=f"/api/jobs/{job_id}/events?sig={events_sig}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +502,55 @@ async def get_job(
 
 
 # ---------------------------------------------------------------------------
+# POST /api/jobs/{job_id}/cancel
+# ---------------------------------------------------------------------------
+
+
+#: States after which a cancel request is a no-op (job already settled).
+_SETTLED_STATES = frozenset(
+    {
+        JobStatus.COMPLETED,
+        JobStatus.COMPLETED_WITH_FALLBACKS,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+    }
+)
+
+
+@router.post("/{job_id}/cancel", response_model=JobStatusResponse, status_code=202)
+async def cancel_job(
+    request: Request,
+    job: JobManifest = Depends(require_job_access),
+    store: JobStore = Depends(get_job_store),
+) -> JobStatusResponse:
+    """Plan V2.2 — request cooperative cancellation. Idempotent.
+
+    Sets the job's cancellation event; the pipeline's ``should_abort``
+    probe (polled between pages and chunks) trips on the next check and
+    the runner lands the job in CANCELLED with no output promoted. A
+    request on an already-settled job acknowledges without effect —
+    the response body always carries the CURRENT status.
+    """
+    if job.status not in _SETTLED_STATES:
+        requested = request.app.state.cancellations.request(job.job_id)
+        if requested and job.status != JobStatus.CANCEL_REQUESTED:
+            store.update_job(job.job_id, status=JobStatus.CANCEL_REQUESTED)
+
+    fresh = store.get_job(job.job_id) or job
+    return JobStatusResponse(
+        job_id=fresh.job_id,
+        status=fresh.status,
+        total_lines=fresh.total_lines,
+        lines_modified=fresh.lines_modified,
+        chunks_total=fresh.chunks_total,
+        retries=fresh.retries,
+        fallbacks=fresh.fallbacks,
+        duration_seconds=fresh.duration_seconds,
+        error=fresh.error,
+    )
+
+
+# ---------------------------------------------------------------------------
 # GET /api/jobs/{job_id}/events
 # ---------------------------------------------------------------------------
 
@@ -366,10 +559,11 @@ async def get_job(
 async def job_events(
     job_id: str,
     store: JobStore = Depends(get_job_store),
-    _job: JobManifest = Depends(require_job_access),
+    _job: JobManifest = Depends(require_job_access_signed("events")),
 ) -> EventSourceResponse:
-    """SSE stream of correction job events. P1-7 — EventSource cannot set
-    headers, so the capability token arrives as ``?token=``."""
+    """SSE stream of correction job events. Plan V2.4 — EventSource
+    cannot set headers, so access uses the events-scoped ``?sig=``
+    credential minted at job creation (never the capability token)."""
 
     async def generator() -> AsyncGenerator[dict, None]:
         async for sse_event in store.stream_events(job_id):
@@ -510,6 +704,12 @@ async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
 # ---------------------------------------------------------------------------
 
 
+#: Plan V2.4 — lifetime of the images-scoped ``?sig=`` appended to
+#: layout image URLs. Browsers fetch the <img> right after the layout
+#: response; 15 minutes generously covers slow loads and a re-render.
+_IMAGE_SIG_TTL_SECONDS = 15 * 60
+
+
 @router.get("/{job_id}/layout")
 async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
     """Return structural layout data (blocks + lines with ALTO coordinates).
@@ -519,7 +719,15 @@ async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
     if job.document_manifest is None:
         raise HTTPException(status_code=500, detail="Job has no document_manifest.")
     # Wave-3 review — same offload rationale as /diff.
-    return await asyncio.to_thread(build_layout, job.job_id, job.document_manifest, job.images)
+    data = await asyncio.to_thread(build_layout, job.job_id, job.document_manifest, job.images)
+    # Plan V2.4 — <img> cannot set headers: append a short-lived,
+    # images-scoped signed credential to each URL (this response is
+    # itself token-gated, so only the job owner receives them).
+    sig = sign_url_credential(job.job_id, "images", _IMAGE_SIG_TTL_SECONDS)
+    for page in data.get("pages", []):
+        if page.get("image_url"):
+            page["image_url"] = f"{page['image_url']}?sig={sig}"
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -539,10 +747,11 @@ _IMAGE_MIME: dict[str, str] = {
 async def get_job_image(
     job_id: str,
     image_name: str,
-    _job: JobManifest = Depends(require_job_access),
+    _job: JobManifest = Depends(require_job_access_signed("images")),
 ) -> Response:
-    """Serve a source scan image for a job. P1-7 — <img> tags cannot set
-    headers, so the capability token arrives as ``?token=``."""
+    """Serve a source scan image for a job. Plan V2.4 — <img> tags cannot
+    set headers, so access uses the images-scoped ``?sig=`` credential
+    appended by the layout endpoint (never the capability token)."""
 
     # Sanitise: only allow plain filenames (no path traversal)
     if "/" in image_name or "\\" in image_name or image_name.startswith("."):

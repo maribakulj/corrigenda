@@ -22,8 +22,11 @@ vi.mock('./api/client', () => ({
   fetchTrace: vi.fn(),
   listModels: vi.fn(),
   downloadJob: vi.fn(),
+  cancelJob: vi.fn(),
   setJobToken: vi.fn(),
-  withToken: (u: string) => u,
+  setEventsUrl: vi.fn(),
+  eventsUrlFor: (jobId: string) => `/api/jobs/${jobId}/events`,
+  fetchJobStatus: vi.fn(),
 }))
 vi.mock('./api/retry', () => ({
   retryFetch: vi.fn(),

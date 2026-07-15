@@ -14,9 +14,10 @@ import logging
 import os
 import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 
-from corrigenda import CorrectionPipeline, CorrectionResult, sanitize_error
+from corrigenda import CorrectionAborted, CorrectionPipeline, CorrectionResult, sanitize_error
 from corrigenda.core.protocols import ProviderPermanentError
 
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
@@ -81,6 +82,7 @@ class JobRunner:
         source_files: dict[str, Path],
         provider: BaseProvider | None = None,
         timeout_seconds: int = 1800,
+        should_abort: Callable[[], bool] | None = None,
     ) -> None:
         """Run a job end-to-end. Updates the JobStore as side effect.
 
@@ -91,6 +93,9 @@ class JobRunner:
         `provider`: injected provider (for testing); if None, resolved
         from the global registry via `app.providers.get_provider`.
         `timeout_seconds`: 0 disables the timeout.
+        `should_abort`: Plan V2.2 — cooperative cancellation probe,
+        forwarded to the pipeline (polled between pages and chunks).
+        When it trips, the job lands in CANCELLED with no output promoted.
         """
         if provider is None:
             from app.providers import get_provider
@@ -112,6 +117,7 @@ class JobRunner:
                     provider_name=provider_name,
                     output_writer=output_writer,
                     source_files=source_files,
+                    should_abort=should_abort,
                 ),
                 timeout=timeout,
             )
@@ -194,6 +200,20 @@ class JobRunner:
             self.job_store.emit(
                 job_id, PipelineEventType.FAILED, {"job_id": job_id, "error": safe_error}
             )
+
+        except CorrectionAborted:
+            # Plan V2.2 — the user's cancel request tripped the pipeline's
+            # should_abort probe. This is a REQUESTED outcome, not a
+            # failure: distinct terminal state, no output promoted.
+            self._discard_outputs(output_writer)
+            logger.info("Job %s cancelled on user request", job_id)
+            elapsed = round(time.monotonic() - start_time, 2)
+            self.job_store.update_job(
+                job_id,
+                status=JobStatus.CANCELLED,
+                duration_seconds=elapsed,
+            )
+            self.job_store.emit(job_id, PipelineEventType.CANCELLED, {"job_id": job_id})
 
         except asyncio.CancelledError:
             self._discard_outputs(output_writer)
@@ -283,6 +303,7 @@ class JobRunner:
         provider_name: str,
         output_writer: OutputWriter,
         source_files: dict[str, Path],
+        should_abort: Callable[[], bool] | None = None,
     ) -> CorrectionResult:
         """Drive the pure pipeline and persist its counters back."""
         self.job_store.update_job(job_id, status=JobStatus.STARTED)
@@ -318,6 +339,9 @@ class JobRunner:
             document_manifest=document_manifest,
             source_files=source_files,
             run_id=job_id,
+            # Plan V2.2 — the cancel endpoint's event, polled by the
+            # pipeline between pages and chunks.
+            should_abort=should_abort,
         )
 
         self.job_store.update_job(

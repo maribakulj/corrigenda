@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { lineKey } from '../lib/lineKey'
 import type { DiffData, DiffLine } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -135,11 +136,13 @@ function DiffRow({
 
 interface DiffViewerProps {
   data: DiffData
-  selectedLineId?: string | null
-  onSelectLine?: (lineId: string) => void
+  // Selection is keyed on (page_id, line_id) — line_id alone is NOT
+  // unique across pages (see src/lib/lineKey.ts).
+  selectedLineKey?: string | null
+  onSelectLine?: (pageId: string, lineId: string) => void
 }
 
-export function DiffViewer({ data, selectedLineId, onSelectLine }: DiffViewerProps) {
+export function DiffViewer({ data, selectedLineKey, onSelectLine }: DiffViewerProps) {
   const [pageIdx, setPageIdx] = useState(0)
   // Guard against empty result sets — without this, currentPage.lines below crashes.
   if (data.pages.length === 0) {
@@ -203,8 +206,10 @@ export function DiffViewer({ data, selectedLineId, onSelectLine }: DiffViewerPro
           <DiffRow
             key={line.line_id}
             line={line}
-            selected={selectedLineId === line.line_id}
-            onSelect={onSelectLine ? () => onSelectLine(line.line_id) : undefined}
+            selected={selectedLineKey === lineKey(currentPage.page_id, line.line_id)}
+            onSelect={
+              onSelectLine ? () => onSelectLine(currentPage.page_id, line.line_id) : undefined
+            }
           />
         ))}
       </div>

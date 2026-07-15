@@ -1,4 +1,4 @@
-"""Identity-uniqueness validation shared by format parsers and pipeline (P0-5).
+"""Identity-uniqueness validation shared by format parsers and pipeline (ADR-007).
 
 Every association between a correction and its physical line — the
 rewriters' ``line_by_id`` lookup, the trace projection, hyphen partner
@@ -49,7 +49,7 @@ def _raise_if_duplicates(source_name: str, problems: list[str | None]) -> None:
         raise DuplicateIdError(
             f"duplicate identities in {source_name!r} — {'; '.join(real)}. "
             "IDs must be unique within their scope: correction-to-line "
-            "association would be ambiguous (P0-5). Fix the document's IDs "
+            "association would be ambiguous (ADR-007). Fix the document's IDs "
             "and retry."
         )
 
@@ -70,8 +70,8 @@ def ensure_unique_identities(pages: Iterable[PageManifest], source_name: str) ->
         page_ids[page.page_id] += 1
         # Block lookups are page-scoped everywhere downstream — validate
         # per page so per-page OCR exports reusing block_0/block_1 on
-        # every page keep parsing (review fix: the per-file scope was
-        # over-broad and refused legitimate documents).
+        # every page keep parsing (a per-file scope would refuse
+        # legitimate documents).
         block_ids: Counter[str] = Counter(b.block_id for b in page.blocks)
         block_problems.append(
             _format_duplicates(f"block ID(s) on page {page.page_id!r}", block_ids)

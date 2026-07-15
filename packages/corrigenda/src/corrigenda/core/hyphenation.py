@@ -333,7 +333,7 @@ def reconcile_hyphen_pair(
     if not tokens1 or not tokens2:
         return _fallback
 
-    # --- PART2 absorption guard (Audit-F1) ---
+    # --- PART2 absorption guard ---
     # PART2 can absorb trailing words from the NEXT physical line (e.g.
     # "saires" → "saires du roi") while every downstream check passes:
     # the explicit-mode boundary join only inspects the first fragment,
@@ -343,8 +343,8 @@ def reconcile_hyphen_pair(
     # not grow — otherwise a merged line survives, violating the "lines
     # never merge" invariant (the Stage-C absorption guard never re-runs
     # on a reconciled member). Hoisted here so ALL accept paths share it
-    # (explicit-with-subs, explicit-without-subs, heuristic) — the fix
-    # that preceded Audit-F1 guarded only the explicit-with-subs branch.
+    # (explicit-with-subs, explicit-without-subs, heuristic) — guarding a
+    # single branch would leave the others open to absorption.
     if len(tokens2) > len(part2.ocr_text.split()):
         return _fallback
 
@@ -434,7 +434,7 @@ def should_stay_in_same_chunk(
     )
 
 
-# --- __all__ (Stage 3 audit remediation) ---
+# --- public surface ---
 __all__ = [
     "ReconcileMetrics",
     "enrich_chunk_lines",

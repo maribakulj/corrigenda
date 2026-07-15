@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -120,10 +121,17 @@ def _register_flat_name(saved: dict[str, Path], seen_stems: dict[str, str], flat
 
 def save_uploaded_files(
     job_id: str,
-    files: list[tuple[str, bytes]],
+    files: Sequence[tuple[str, bytes | Path]],
 ) -> tuple[dict[str, Path], dict[str, Path]]:
     """
     Persist uploaded files to input_dir(job_id).
+
+    Each entry is ``(original_filename, payload)`` where the payload is
+    either raw ``bytes`` (legacy/tests) or a ``Path`` to a staged file on
+    disk (Plan V2.1 — the API streams uploads to disk in 1 MiB chunks
+    instead of buffering up to 200 MiB per request in memory). Path
+    payloads are MOVED into place (same filesystem) and ZIPs are opened
+    directly from disk.
 
     Handles ZIP archives: members whose extension is in _ALLOWED_EXTENSIONS
     are extracted with only their basename (no subdirectory structure).
@@ -154,7 +162,8 @@ def save_uploaded_files(
         if suffix == ".zip":
             import io
 
-            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            zip_source = content if isinstance(content, Path) else io.BytesIO(content)
+            with zipfile.ZipFile(zip_source) as zf:
                 members = zf.infolist()
 
                 # Member-count guard: prevents inode exhaustion and pathological
@@ -220,7 +229,12 @@ def save_uploaded_files(
             flat_name = Path(filename).name
             _register_flat_name(saved, seen_stems, flat_name)
             out_path = dest / flat_name
-            out_path.write_bytes(content)
+            if isinstance(content, Path):
+                # Staged on disk by the API — same volume, so this is a
+                # rename, never a copy of the payload through memory.
+                shutil.move(str(content), out_path)
+            else:
+                out_path.write_bytes(content)
             saved[flat_name] = out_path
         # Silently ignore files with other extensions
 

@@ -30,6 +30,12 @@ class JobStatus(str, Enum):
     #: their OCR text". COMPLETED now strictly means zero fallbacks.
     COMPLETED_WITH_FALLBACKS = "completed_with_fallbacks"
     FAILED = "failed"
+    #: Plan V2.2 — cooperative cancellation. CANCEL_REQUESTED is set by
+    #: the cancel endpoint; the pipeline's `should_abort` probe trips
+    #: between chunks/pages and the runner lands the job in CANCELLED
+    #: (terminal — no output is ever promoted).
+    CANCEL_REQUESTED = "cancel_requested"
+    CANCELLED = "cancelled"
 
 
 #: The two terminal states whose outputs are valid and downloadable.

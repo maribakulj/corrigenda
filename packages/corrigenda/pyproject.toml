@@ -67,6 +67,16 @@ target-version = "py311"
 "tests/**/*.py" = ["E402", "E741", "F841"]
 
 # ---------------------------------------------------------------------------
+# pytest — the external_corpus marker gates tests that need the fetched
+# Gallica corpus (V4.2 phase 3): they self-skip when the corpus cache is
+# absent, and only the dedicated non-blocking CI job fetches it.
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+markers = [
+    "external_corpus: needs the fetched external ALTO corpus (tests/external_corpus/fetch.py)",
+]
+
+# ---------------------------------------------------------------------------
 # coverage — the package now carries the algorithm tests (F11) and gates its
 # own coverage (~85% DoD; currently ~91%). The `corrigenda-tests` CI job runs
 # pytest with --cov=corrigenda.

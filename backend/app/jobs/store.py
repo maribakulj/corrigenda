@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import threading
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any
 
 from app.schemas import (
@@ -39,7 +41,12 @@ _MAX_COMPLETED_JOBS = 200
 
 #: Every state after which a job never changes again (eviction-eligible).
 _TERMINAL_STATES = frozenset(
-    {JobStatus.COMPLETED, JobStatus.COMPLETED_WITH_FALLBACKS, JobStatus.FAILED}
+    {
+        JobStatus.COMPLETED,
+        JobStatus.COMPLETED_WITH_FALLBACKS,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+    }
 )
 
 
@@ -63,7 +70,7 @@ class JobStore:
 
     #: Terminal SSE event names — delivery of these is GUARANTEED by
     #: emit() even when the subscriber queue is full (Audit-F20).
-    _TERMINAL_EVENTS: frozenset[str] = frozenset({"completed", "failed"})
+    _TERMINAL_EVENTS: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
 
     def __init__(self, ttl_seconds: int = _DEFAULT_TTL_SECONDS) -> None:
         self._jobs: dict[str, JobManifest] = {}
@@ -392,6 +399,8 @@ class JobStore:
                 event="failed",
                 data={"job_id": job_id, "error": job.error or "job failed"},
             )
+        if job.status == JobStatus.CANCELLED:
+            return SSEEvent(event="cancelled", data={"job_id": job_id})
         return SSEEvent(
             event="completed",
             data={
@@ -453,6 +462,36 @@ class JobStore:
         for jid in stale:
             self._cleanup_disk(jid)
         return len(stale)
+
+    def reclaim_orphans(self, base_dir: Path, grace_seconds: float = 0.0) -> int:
+        """Plan V3.2 — delete job directories that no in-memory record owns.
+
+        The store is in-memory: after a restart, directories left on a
+        mounted volume belong to job_ids the API no longer knows (every
+        endpoint 404s on them) and the TTL sweep can never reclaim them
+        (it only iterates ``_completed_at``, lost with the process).
+        Called once at startup from the lifespan handler; directories
+        younger than ``grace_seconds`` are kept as a safety margin.
+        Returns the number of directories reclaimed.
+        """
+        if not base_dir.is_dir():
+            return 0
+        with self._lock:
+            known = set(self._jobs)
+        now = time.time()
+        reclaimed = 0
+        for entry in base_dir.iterdir():
+            if not entry.is_dir() or entry.name in known:
+                continue
+            try:
+                age = now - entry.stat().st_mtime
+            except OSError:
+                continue
+            if age < grace_seconds:
+                continue
+            shutil.rmtree(entry, ignore_errors=True)
+            reclaimed += 1
+        return reclaimed
 
     def delete_job(self, job_id: str) -> None:
         """Remove a job's record, subscribers and disk artefacts.

@@ -223,7 +223,9 @@ def collect_sse_until_terminal(
     with httpx.stream(
         "GET",
         f"{base_url}/api/jobs/{job_id}/events",
-        params={"token": token},
+        # Plan V2.4 — the capability token travels in a HEADER only (httpx
+        # can set one, unlike a browser EventSource which uses ?sig=).
+        headers={"X-Job-Token": token},
         # Per-read gap bound: keepalives arrive every 30 s, so 60 s of
         # silence means the stream itself is dead.
         timeout=60.0,
@@ -247,7 +249,7 @@ def collect_sse_until_terminal(
 def download_xml(base_url: str, job_id: str, token: str) -> bytes:
     resp = httpx.get(
         f"{base_url}/api/jobs/{job_id}/download",
-        params={"token": token},
+        headers={"X-Job-Token": token},
         timeout=60,
     )
     assert resp.status_code == 200, resp.text

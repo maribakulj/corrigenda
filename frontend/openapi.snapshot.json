@@ -127,11 +127,52 @@
         }
       }
     },
+    "/api/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": ["jobs"],
+        "summary": "Cancel Job",
+        "description": "Plan V2.2 \u2014 request cooperative cancellation. Idempotent.\n\nSets the job's cancellation event; the pipeline's ``should_abort``\nprobe (polled between pages and chunks) trips on the next check and\nthe runner lands the job in CANCELLED with no output promoted. A\nrequest on an already-settled job acknowledges without effect \u2014\nthe response body always carries the CURRENT status.",
+        "operationId": "cancel_job_api_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/events": {
       "get": {
         "tags": ["jobs"],
         "summary": "Job Events",
-        "description": "SSE stream of correction job events. P1-7 \u2014 EventSource cannot set\nheaders, so the capability token arrives as ``?token=``.",
+        "description": "SSE stream of correction job events. Plan V2.4 \u2014 EventSource\ncannot set headers, so access uses the events-scoped ``?sig=``\ncredential minted at job creation (never the capability token).",
         "operationId": "job_events_api_jobs__job_id__events_get",
         "parameters": [
           {
@@ -338,7 +379,7 @@
       "get": {
         "tags": ["jobs"],
         "summary": "Get Job Image",
-        "description": "Serve a source scan image for a job. P1-7 \u2014 <img> tags cannot set\nheaders, so the capability token arrives as ``?token=``.",
+        "description": "Serve a source scan image for a job. Plan V2.4 \u2014 <img> tags cannot\nset headers, so access uses the images-scoped ``?sig=`` credential\nappended by the layout endpoint (never the capability token).",
         "operationId": "get_job_image_api_jobs__job_id__images__image_name__get",
         "parameters": [
           {
@@ -433,6 +474,17 @@
               }
             ],
             "title": "Job Token"
+          },
+          "events_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events Url"
           }
         },
         "type": "object",
@@ -454,7 +506,16 @@
       },
       "JobStatus": {
         "type": "string",
-        "enum": ["queued", "started", "running", "completed", "completed_with_fallbacks", "failed"],
+        "enum": [
+          "queued",
+          "started",
+          "running",
+          "completed",
+          "completed_with_fallbacks",
+          "failed",
+          "cancel_requested",
+          "cancelled"
+        ],
         "title": "JobStatus",
         "description": "Lifecycle state of a correction job, surfaced to API clients."
       },

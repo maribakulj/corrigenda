@@ -14,16 +14,25 @@ FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0
 WORKDIR /app
 
 # Two-step Python install:
-#   1. corrigenda (sibling package) — editable, absolute path so cwd
-#      doesn't matter.
+#   1. corrigenda (sibling package) — built as a WHEEL and installed
+#      (Plan V4.3): the image ships the same artefact users would get
+#      from PyPI, and packaging regressions (missing files, broken
+#      metadata) fail the build here instead of at release time. An
+#      editable install was a dev convenience, not a distribution.
 #   2. backend requirements.txt — corrigenda no longer lives in there
 #      since Stage 6 of the audit remediation (decoupled to avoid the
 #      cwd-relative `-e ../packages/corrigenda` failure mode).
-COPY packages/corrigenda /app/packages/corrigenda
-RUN pip install --no-cache-dir -e /app/packages/corrigenda
+# Plan V4.3 — the FULL environment installs from the hash-locked file
+# (pip refuses anything whose hash doesn't match); the corrigenda wheel
+# then installs with --no-deps so its dependencies can only come from
+# the verified lock.
+COPY backend/requirements-lock.txt /app/backend/requirements-lock.txt
+RUN pip install --no-cache-dir --require-hashes -r /app/backend/requirements-lock.txt
 
-COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+COPY packages/corrigenda /app/packages/corrigenda
+RUN pip wheel --no-cache-dir --no-deps -w /tmp/wheels /app/packages/corrigenda \
+    && pip install --no-cache-dir --no-deps /tmp/wheels/corrigenda-*.whl \
+    && rm -rf /tmp/wheels
 
 COPY backend/app/ /app/backend/app/
 # Destination must match ``_STATIC_DIR`` in ``backend/app/main.py``:
@@ -39,6 +48,10 @@ COPY --from=frontend-builder /frontend/dist /app/backend/static/
 
 ENV JOB_STORAGE_DIR=/tmp/app-jobs
 ENV PYTHONPATH=/app/backend
+# This image PROMISES the SPA: / and /health/ready return 503 when the
+# built index.html is missing (guards the wrong-COPY regression class
+# documented above — /health alone stayed green through it).
+ENV SERVE_FRONTEND=1
 # TRUSTED_PROXIES — audit fix: the generic image no longer bakes in
 # the dangerous wildcard. Default is the safe baseline (trust only
 # loopback); a deployment behind a proxy that SANITISES

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { createJob, fetchDiff, fetchLayout, fetchTrace } from './api/client'
+import { cancelJob, createJob, fetchDiff, fetchLayout, fetchTrace } from './api/client'
 import { retryFetch } from './api/retry'
 import { ApiKeyInput } from './components/ApiKeyInput'
 import { DiffViewer } from './components/DiffViewer'
@@ -13,6 +13,7 @@ import { ModelSelector } from './components/ModelSelector'
 import { ProviderSelector } from './components/ProviderSelector'
 import { useJobStream } from './hooks/useJobStream'
 import { useModels } from './hooks/useModels'
+import { buildTraceMap, lineKey, type LineKey } from './lib/lineKey'
 import type { DiffData, JobStats, LayoutData, LineTrace, Provider, TraceData } from './types'
 
 export default function App() {
@@ -29,7 +30,6 @@ export default function App() {
   const [jobId, setJobId] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const [finalStats, setFinalStats] = useState<JobStats | null>(null)
   const [diffData, setDiffData] = useState<DiffData | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
   const [diffError, setDiffError] = useState(false)
@@ -42,8 +42,10 @@ export default function App() {
   const [traceData, setTraceData] = useState<TraceData | null>(null)
   const [traceLoading, setTraceLoading] = useState(false)
   const [traceError, setTraceError] = useState(false)
-  const [traceByLineId, setTraceByLineId] = useState<Map<string, LineTrace>>(new Map())
-  const [selectedLineId, setSelectedLineId] = useState<string | null>(null)
+  // Keyed on (page_id, line_id) — line_id alone repeats across pages
+  // and made the last file's trace shadow every homonymous line.
+  const [traceByLineKey, setTraceByLineKey] = useState<Map<LineKey, LineTrace>>(new Map())
+  const [selectedLineKey, setSelectedLineKey] = useState<LineKey | null>(null)
 
   // Models
   const {
@@ -54,14 +56,16 @@ export default function App() {
     reset: resetModels,
   } = useModels()
 
-  // SSE stream
-  const { logs, progress, status, isRunning } = useJobStream(jobId)
+  // SSE stream — streamState is transport-only (Plan V1.2): a lost
+  // stream downgrades to status polling, it never fails the job.
+  const { logs, progress, status, isRunning, streamState, finalStats, reconnect } =
+    useJobStream(jobId)
 
-  // Capture completed stats from the SSE logs
-  // (we pull them from the last 'success' log message via progress state)
-  // Actually we compute stats from progress + last completed event
   const isDone = status === 'completed' || status === 'completed_with_fallbacks'
   const isFailed = status === 'failed'
+  const isCancelled = status === 'cancelled'
+  // Plan V2.2 — true between the user's click and the server's verdict.
+  const [cancelPending, setCancelPending] = useState(false)
 
   // Wave-4 review — staleness guard for the three bounded fetches. A
   // retryFetch in flight (its backoff spans seconds) survives a reset:
@@ -124,27 +128,12 @@ export default function App() {
           return
         }
         setTraceData(data)
-        const map = new Map<string, LineTrace>()
-        for (const lt of data.lines) {
-          map.set(lt.line_id, lt)
-        }
-        setTraceByLineId(map)
+        setTraceByLineKey(buildTraceMap(data.lines))
       })
       .finally(() => {
         if (isCurrent()) setTraceLoading(false)
       })
   }, [debugMode, isDone, jobId, traceData, traceLoading, traceError])
-
-  // Capture stats when completed
-  useEffect(() => {
-    if (isDone && !finalStats && progress.lines_total > 0) {
-      setFinalStats({
-        lines_modified: 0, // will be set via log parsing below
-        hyphen_pairs: progress.hyphen_pairs_reconciled,
-        duration_seconds: 0,
-      })
-    }
-  }, [isDone, finalStats, progress.lines_total, progress.hyphen_pairs_reconciled])
 
   const canPlay =
     files.length > 0 &&
@@ -158,7 +147,7 @@ export default function App() {
     if (!canPlay || !provider || !selectedModel) return
     setSubmitting(true)
     setSubmitError(null)
-    setFinalStats(null)
+    setCancelPending(false)
     try {
       const res = await createJob(files, provider, apiKey, selectedModel)
       setJobId(res.job_id)
@@ -169,11 +158,23 @@ export default function App() {
     }
   }
 
+  async function handleCancel() {
+    if (!jobId || cancelPending) return
+    setCancelPending(true)
+    try {
+      await cancelJob(jobId)
+    } catch {
+      // The cancel endpoint is idempotent; a failed request just
+      // re-enables the button for another attempt.
+      setCancelPending(false)
+    }
+  }
+
   function handleReset() {
     setFiles([])
     setJobId(null)
     setSubmitError(null)
-    setFinalStats(null)
+    setCancelPending(false)
     setDiffData(null)
     setDiffLoading(false)
     setDiffError(false)
@@ -183,29 +184,19 @@ export default function App() {
     setTraceData(null)
     setTraceLoading(false)
     setTraceError(false)
-    setTraceByLineId(new Map())
-    setSelectedLineId(null)
+    setTraceByLineKey(new Map())
+    setSelectedLineKey(null)
     setDebugMode(false)
     resetModels()
     setSelectedModel(null)
     setResetKey((k) => k + 1) // Force FileUpload to remount and clear internal state
   }
 
-  // Extract stats from the success log entry when completed
-  const completedLog = logs.find((l) => l.type === 'success' && l.message.startsWith('Completed'))
-  const displayStats: JobStats | null = completedLog
-    ? (() => {
-        const m = completedLog.message.match(/(\d+) line\(s\) modified.*?(\d+) hyphen.*?([\d.]+)s/)
-        if (m) {
-          return {
-            lines_modified: parseInt(m[1]),
-            hyphen_pairs: parseInt(m[2]),
-            duration_seconds: parseFloat(m[3]),
-          }
-        }
-        return finalStats
-      })()
-    : finalStats
+  // Plan V1.2 — terminal statistics come from the STRUCTURED completed
+  // payload kept by the hook (SSE event or status snapshot). The old
+  // regex over the "Completed …" log sentence silently zeroed the stats
+  // on any rewording.
+  const displayStats: JobStats | null = finalStats
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
@@ -240,7 +231,21 @@ export default function App() {
                 Debug
               </button>
             )}
-            {(isDone || isFailed) && (
+            {isRunning && jobId && (
+              <button
+                onClick={handleCancel}
+                disabled={cancelPending || status === 'cancel_requested'}
+                className={[
+                  'font-mono text-xs border rounded px-3 py-1.5 transition-colors',
+                  cancelPending || status === 'cancel_requested'
+                    ? 'text-slate-500 border-slate-600/40 cursor-not-allowed'
+                    : 'text-red-400 border-red-500/40 hover:bg-red-500/10',
+                ].join(' ')}
+              >
+                {cancelPending || status === 'cancel_requested' ? 'Annulation…' : 'Annuler'}
+              </button>
+            )}
+            {(isDone || isFailed || isCancelled) && (
               <button
                 onClick={handleReset}
                 className="font-mono text-xs text-amber-400 border border-amber-500/40
@@ -349,13 +354,35 @@ export default function App() {
         </section>
 
         {/* 4. Progress — shown once job started */}
-        {jobId && (isRunning || isDone || isFailed) && (
+        {jobId && (isRunning || isDone || isFailed || isCancelled) && (
           <section>
             <h2 className="font-serif text-base font-semibold text-slate-300 mb-3 flex items-center gap-2">
               <span className="font-mono text-amber-500 text-xs">03</span>
               Progress
             </h2>
             <JobProgressPanel progress={progress} status={status} />
+            {/* Plan V1.2 — transport banner: the stream is gone but the
+                job continues server-side; polling keeps the status
+                authoritative and the button retries the live stream. */}
+            {streamState === 'polling' && !isDone && !isFailed && (
+              <div
+                role="status"
+                className="mt-3 flex items-center justify-between gap-3 rounded border
+                           border-amber-700/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-200/80"
+              >
+                <span>
+                  Connexion temps réel perdue — le job continue côté serveur, suivi par sondage du
+                  statut.
+                </span>
+                <button
+                  onClick={reconnect}
+                  className="shrink-0 font-mono text-amber-300 border border-amber-500/40
+                             hover:bg-amber-500/10 rounded px-2 py-1 transition-colors"
+                >
+                  Reconnecter
+                </button>
+              </div>
+            )}
           </section>
         )}
 
@@ -402,8 +429,12 @@ export default function App() {
             {diffData && (
               <DiffViewer
                 data={diffData}
-                selectedLineId={debugMode ? selectedLineId : null}
-                onSelectLine={debugMode ? setSelectedLineId : undefined}
+                selectedLineKey={debugMode ? selectedLineKey : null}
+                onSelectLine={
+                  debugMode
+                    ? (pageId, lineId) => setSelectedLineKey(lineKey(pageId, lineId))
+                    : undefined
+                }
               />
             )}
             {/* Wave-4 review — traceError was latched but never rendered:
@@ -414,7 +445,7 @@ export default function App() {
                 Désactivez puis réactivez le mode debug pour réessayer.
               </p>
             )}
-            {debugMode && selectedLineId && (
+            {debugMode && selectedLineKey && (
               <div className="mt-4">
                 {traceLoading && (
                   <div className="flex items-center gap-2 font-mono text-xs text-slate-500 py-4">
@@ -422,20 +453,20 @@ export default function App() {
                     Loading traces...
                   </div>
                 )}
-                {traceByLineId.has(selectedLineId) && (
+                {traceByLineKey.has(selectedLineKey) && (
                   <LineTracePanel
-                    trace={traceByLineId.get(selectedLineId)!}
-                    onClose={() => setSelectedLineId(null)}
+                    trace={traceByLineKey.get(selectedLineKey)!}
+                    onClose={() => setSelectedLineKey(null)}
                   />
                 )}
-                {!traceLoading && traceData && !traceByLineId.has(selectedLineId) && (
+                {!traceLoading && traceData && !traceByLineKey.has(selectedLineKey) && (
                   <p className="font-mono text-xs text-slate-500 py-2">
-                    No trace found for {selectedLineId}
+                    No trace found for {selectedLineKey}
                   </p>
                 )}
               </div>
             )}
-            {debugMode && !selectedLineId && traceData && (
+            {debugMode && !selectedLineKey && traceData && (
               <p className="font-mono text-xs text-slate-500 mt-3">
                 Click a line above to inspect its trace ({traceData.total_lines} lines loaded)
               </p>
