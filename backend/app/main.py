@@ -75,9 +75,7 @@ async def lifespan(app: FastAPI):
     try:
         from app import storage as _storage
 
-        reclaimed = await asyncio.to_thread(
-            app.state.job_store.reclaim_orphans, _storage._BASE_DIR
-        )
+        reclaimed = await asyncio.to_thread(app.state.job_store.reclaim_orphans, _storage._BASE_DIR)
         if reclaimed:
             logger.info("startup: reclaimed %d orphan job directorie(s)", reclaimed)
     except Exception:
@@ -216,9 +214,7 @@ def create_app() -> FastAPI:
     # demo-grade defaults instead of silently running with them.
     profile = os.environ.get("DEPLOYMENT_PROFILE", "demo").strip().lower()
     if profile not in ("demo", "institutional"):
-        raise RuntimeError(
-            f"DEPLOYMENT_PROFILE must be 'demo' or 'institutional', got {profile!r}"
-        )
+        raise RuntimeError(f"DEPLOYMENT_PROFILE must be 'demo' or 'institutional', got {profile!r}")
 
     # 3. CORS (outermost) — origins configurable via CORS_ORIGINS env
     # var (comma-separated). Default: wildcard. No credentials —

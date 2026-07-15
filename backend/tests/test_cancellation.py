@@ -137,9 +137,7 @@ def test_cancel_requires_the_job_token(slow_client):
     # Missing/wrong token → 404 (existence must not leak), job unharmed.
     assert slow_client.post(f"/api/jobs/{job_id}/cancel").status_code == 404
     assert (
-        slow_client.post(
-            f"/api/jobs/{job_id}/cancel", headers={"X-Job-Token": "wrong"}
-        ).status_code
+        slow_client.post(f"/api/jobs/{job_id}/cancel", headers={"X-Job-Token": "wrong"}).status_code
         == 404
     )
     assert _wait_for_terminal(slow_client, job_id, headers) in (

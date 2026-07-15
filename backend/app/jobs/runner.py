@@ -213,9 +213,7 @@ class JobRunner:
                 status=JobStatus.CANCELLED,
                 duration_seconds=elapsed,
             )
-            self.job_store.emit(
-                job_id, PipelineEventType.CANCELLED, {"job_id": job_id}
-            )
+            self.job_store.emit(job_id, PipelineEventType.CANCELLED, {"job_id": job_id})
 
         except asyncio.CancelledError:
             self._discard_outputs(output_writer)

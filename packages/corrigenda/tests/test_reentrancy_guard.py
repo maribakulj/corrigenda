@@ -33,7 +33,9 @@ class _BlockingProducer:
     async def produce(self, payload: Any, *, policy: Any) -> Any:
         self.entered.set()
         await self.release.wait()
-        raise AssertionError("released without cancellation — not expected in this test")
+        raise AssertionError(
+            "released without cancellation — not expected in this test"
+        )
 
 
 class _NullObserver:

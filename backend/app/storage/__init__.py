@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,7 @@ def _register_flat_name(saved: dict[str, Path], seen_stems: dict[str, str], flat
 
 def save_uploaded_files(
     job_id: str,
-    files: list[tuple[str, bytes | Path]],
+    files: Sequence[tuple[str, bytes | Path]],
 ) -> tuple[dict[str, Path], dict[str, Path]]:
     """
     Persist uploaded files to input_dir(job_id).

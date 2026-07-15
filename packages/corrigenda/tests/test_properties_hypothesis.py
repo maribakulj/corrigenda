@@ -85,14 +85,14 @@ def alto_documents(draw: st.DrawFn) -> str:
             line_no += 1
         blocks_xml.append(
             f'<TextBlock ID="B{b}" HPOS="0" VPOS="0" WIDTH="1000" HEIGHT="900">'
-            f'{"".join(lines_xml)}</TextBlock>'
+            f"{''.join(lines_xml)}</TextBlock>"
         )
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<alto xmlns="http://www.loc.gov/standards/alto/ns-v3#"><Layout>'
         '<Page ID="P1" WIDTH="1000" HEIGHT="1000">'
         '<PrintSpace HPOS="0" VPOS="0" WIDTH="1000" HEIGHT="900">'
-        f'{"".join(blocks_xml)}'
+        f"{''.join(blocks_xml)}"
         "</PrintSpace></Page></Layout></alto>"
     )
 
@@ -103,9 +103,7 @@ _GEOM_ATTRS = ("ID", "HPOS", "VPOS", "WIDTH", "HEIGHT")
 
 def _textline_geometry(xml: bytes) -> list[tuple[str | None, ...]]:
     root = etree.fromstring(xml)
-    return [
-        tuple(el.get(a) for a in _GEOM_ATTRS) for el in root.iter(f"{_NS}TextLine")
-    ]
+    return [tuple(el.get(a) for a in _GEOM_ATTRS) for el in root.iter(f"{_NS}TextLine")]
 
 
 def _string_contents(xml: bytes) -> list[str | None]:

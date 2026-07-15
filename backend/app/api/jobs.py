@@ -12,7 +12,6 @@ import tempfile
 import zipfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import cast
 
 from corrigenda.core.schemas import PairingPolicy
 from corrigenda.formats.alto.parser import build_document_manifest
@@ -82,9 +81,7 @@ _MAX_ACTIVE_JOBS = int(os.environ.get("MAX_ACTIVE_JOBS", "4"))
 # any body read) and released when the handler exits. Repeat the limit
 # at the reverse proxy in institutional deployments — this guard is the
 # app's own last line, not the only one.
-_MAX_CONCURRENT_UPLOADS = int(
-    os.environ.get("MAX_CONCURRENT_UPLOADS", str(_MAX_ACTIVE_JOBS))
-)
+_MAX_CONCURRENT_UPLOADS = int(os.environ.get("MAX_CONCURRENT_UPLOADS", str(_MAX_ACTIVE_JOBS)))
 
 # Plan V2.1 — uploads stream to disk in chunks this size; peak RAM per
 # request drops from the 200 MiB request cap to one chunk.
@@ -360,17 +357,13 @@ async def _create_job_reserved(
         # freeze the single-worker event loop (SSE keepalives, health
         # probes, in-flight downloads).
         try:
-            saved, image_files = await asyncio.to_thread(
-                save_uploaded_files, job_id, cast(list[tuple[str, bytes | Path]], staged_files)
-            )
+            saved, image_files = await asyncio.to_thread(save_uploaded_files, job_id, staged_files)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
             # XML files were MOVED out of staging; only ZIP payloads (and
             # rejected leftovers) remain — reclaim them now, not at TTL.
-            await asyncio.shield(
-                asyncio.to_thread(shutil.rmtree, staging, ignore_errors=True)
-            )
+            await asyncio.shield(asyncio.to_thread(shutil.rmtree, staging, ignore_errors=True))
 
         if not saved:
             raise HTTPException(

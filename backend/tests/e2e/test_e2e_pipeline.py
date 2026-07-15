@@ -176,7 +176,9 @@ def test_absorption_only_is_refused_by_the_line_guard(backend_server, use_absorp
     assert "nationale" in _line_text(out_lines["TL8"])
 
     # The trace pins WHICH guard fired.
-    trace = httpx.get(f"{base_url}/api/jobs/{job_id}/trace", headers={"X-Job-Token": token}, timeout=30)
+    trace = httpx.get(
+        f"{base_url}/api/jobs/{job_id}/trace", headers={"X-Job-Token": token}, timeout=30
+    )
     assert trace.status_code == 200
     tl2 = next(ln for ln in trace.json()["lines"] if ln["line_id"] == "TL2")
     assert tl2["fallback_reason"] == "absorbs_next_line", tl2
@@ -200,7 +202,9 @@ def test_job_endpoints_are_404_without_token(backend_server, use_honest_vendor):
     for path in (f"/api/jobs/{job_id}", f"/api/jobs/{job_id}/download"):
         no_token = httpx.get(f"{base_url}{path}", timeout=30)
         assert no_token.status_code == 404, path
-        bad_token = httpx.get(f"{base_url}{path}", headers={"X-Job-Token": "wrong-token"}, timeout=30)
+        bad_token = httpx.get(
+            f"{base_url}{path}", headers={"X-Job-Token": "wrong-token"}, timeout=30
+        )
         assert bad_token.status_code == 404, path
         # Plan V2.4 — the query-param transport is dead: a valid token in
         # the URL must be refused too (it would leak into proxy logs).

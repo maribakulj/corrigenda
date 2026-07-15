@@ -67,9 +67,7 @@ def test_root_returns_503_when_promised_frontend_is_missing(make_client, monkeyp
         assert client.get("/some/frontend/route").status_code == 503
 
 
-def test_health_ready_fails_when_promised_frontend_is_missing(
-    make_client, monkeypatch, tmp_path
-):
+def test_health_ready_fails_when_promised_frontend_is_missing(make_client, monkeypatch, tmp_path):
     monkeypatch.setenv("SERVE_FRONTEND", "1")
     monkeypatch.setenv("JOB_STORAGE_DIR", str(tmp_path))  # storage check green
     _point_index_html(monkeypatch, tmp_path / "missing" / "index.html")
