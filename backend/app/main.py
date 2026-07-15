@@ -210,11 +210,28 @@ def create_app() -> FastAPI:
     trusted_proxies = [h.strip() for h in trusted_proxies_raw.split(",") if h.strip()]
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_proxies)
 
+    # Plan V3.3 — explicit deployment profile. "demo" (default) is the
+    # public HF Space stance: no auth, wildcard CORS allowed, in-memory
+    # jobs — documented as such in SECURITY.md. "institutional" asserts
+    # the deployment sits behind SSO/reverse-proxy and REFUSES the
+    # demo-grade defaults instead of silently running with them.
+    profile = os.environ.get("DEPLOYMENT_PROFILE", "demo").strip().lower()
+    if profile not in ("demo", "institutional"):
+        raise RuntimeError(
+            f"DEPLOYMENT_PROFILE must be 'demo' or 'institutional', got {profile!r}"
+        )
+
     # 3. CORS (outermost) — origins configurable via CORS_ORIGINS env
     # var (comma-separated). Default: wildcard. No credentials —
     # NEVER combine allow_credentials with allow_origins=["*"]
     # (Starlette raises ValueError).
     cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+    if profile == "institutional" and "*" in cors_origins:
+        raise RuntimeError(
+            "DEPLOYMENT_PROFILE=institutional requires an explicit CORS_ORIGINS "
+            "allowlist — refusing to start with the wildcard default. Set "
+            "CORS_ORIGINS to the frontend origin(s)."
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
