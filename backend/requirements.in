@@ -1,0 +1,10 @@
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+pydantic==2.13.4
+httpx==0.28.1
+lxml==6.1.1  # >=6.1 closes PYSEC-2026-87
+python-multipart==0.0.32
+aiofiles==24.1.0
+sse-starlette==2.4.1
+anyio==4.14.1
+slowapi==0.1.10  # per-IP rate limiting for /api/providers/models
