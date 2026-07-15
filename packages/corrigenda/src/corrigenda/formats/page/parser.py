@@ -39,6 +39,7 @@ from corrigenda.core.schemas import (
     PageManifest,
     PairingPolicy,
 )
+from corrigenda.formats._xml import classified_parse_errors
 from corrigenda.formats.page._ns import (
     _detect_namespace,
     _tag,
@@ -171,7 +172,26 @@ def parse_page_file(
     global_line_offset: int = 0,
     pairing_policy: PairingPolicy = DEFAULT_PAIRING_POLICY,
 ) -> tuple[list[PageManifest], etree._Element]:
-    """Parse one PAGE XML file → (list_of_PageManifest, root_element)."""
+    """Parse one PAGE XML file → (list_of_PageManifest, root_element).
+
+    §8.4 — raises only classified errors: malformed XML, encoding
+    mismatches, unreadable files and non-numeric values all surface as
+    :class:`~corrigenda.errors.ParseError` (V4.2 phase 2), never as a
+    bare lxml/OS/ValueError.
+    """
+    with classified_parse_errors(source_name):
+        return _parse_page_file(
+            xml_path, source_name, page_index_offset, global_line_offset, pairing_policy
+        )
+
+
+def _parse_page_file(
+    xml_path: Path,
+    source_name: str,
+    page_index_offset: int,
+    global_line_offset: int,
+    pairing_policy: PairingPolicy,
+) -> tuple[list[PageManifest], etree._Element]:
     tree = etree.parse(str(xml_path), make_safe_parser())
     root = tree.getroot()
     ns = _detect_namespace(root)

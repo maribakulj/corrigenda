@@ -14,7 +14,12 @@ three under its existing private names, so call sites are unchanged.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from lxml import etree
+
+from corrigenda.errors import CorrectionError, ParseError
 
 
 def detect_namespace(root: object) -> str:
@@ -67,4 +72,34 @@ def make_safe_parser() -> etree.XMLParser:
     )
 
 
-__all__ = ["detect_namespace", "tag", "make_safe_parser"]
+@contextmanager
+def classified_parse_errors(source_name: str) -> Iterator[None]:
+    """§8.4 — a parser may only raise classified :class:`CorrectionError`s.
+
+    Wrap a parser entry point's body in this context manager so hostile or
+    malformed input (fuzzing V4.2 phase 2) can never escape as an
+    unclassified exception:
+
+      - ``etree.XMLSyntaxError`` (malformed XML, encoding mismatches,
+        truncated files) → :class:`ParseError`;
+      - bare ``ValueError`` (e.g. a genuinely non-numeric coordinate under
+        the strict ``parse_int_tolerant`` policy) → :class:`ParseError`;
+      - ``OSError`` (unreadable/missing source file) → :class:`ParseError`.
+
+    Existing classified errors — :class:`ParseError` itself,
+    :class:`DuplicateIdError`, any :class:`CorrectionError` — pass through
+    untouched. Genuine programming errors (``TypeError``,
+    ``AttributeError``, …) are deliberately NOT wrapped: masking a library
+    bug as a bad-input error would hide it from every caller.
+    """
+    try:
+        yield
+    except CorrectionError:
+        raise
+    except (etree.XMLSyntaxError, ValueError) as exc:
+        raise ParseError(f"{source_name}: cannot parse document: {exc}") from exc
+    except OSError as exc:
+        raise ParseError(f"{source_name}: cannot read source file: {exc}") from exc
+
+
+__all__ = ["detect_namespace", "tag", "make_safe_parser", "classified_parse_errors"]
