@@ -1,6 +1,9 @@
 # Plan de remédiation — 15 juillet 2026
 
-Statut : **proposé** · Périmètre : totalité des défauts confirmés par la contre-vérification du 15/07 (audit externe + vérification ligne-à-ligne dans le code).
+Statut : **Vagues 1 et 2 livrées** (V1.1 `bb8b49c`, V1.2 `149f7c1`, V1.3 `84a2d16`, V2.5 `f90e9f1`, V2.3 `b613045`, V2.2 `0038cf4`, V2.1 `2374b92`, V2.4 `bb14a28`) · Vagues 3–5 : proposées.
+Périmètre : totalité des défauts confirmés par la contre-vérification du 15/07 (audit externe + vérification ligne-à-ligne dans le code).
+
+Note V2.4 (choix d'implémentation) : plutôt que le fetch-streaming SSE, les surfaces sans headers utilisent des crédentiels signés HMAC scopés (job + usage + expiration) en `?sig=` — `events_url` minté à la création (durée = budget du run), `?sig=` images 15 min apposé par `/layout`. Le token de capacité ne circule plus jamais en URL (le transport `?token=` est refusé partout) ; le download passe par header + blob. Au passage, ce correctif répare les images du layout, qui ne portaient aucun crédential et étaient donc cassées par le gating.
 
 Chaque défaut cité ici a été **vérifié dans le code** (fichier:ligne dans les fiches ci-dessous). Ce plan remplace toute liste de correctifs antérieure pour les sujets qu'il couvre.
 
