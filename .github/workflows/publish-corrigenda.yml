@@ -130,23 +130,50 @@ jobs:
           /tmp/wheel-smoke/bin/pip install dist/*.whl
           /tmp/wheel-smoke/bin/python _smoke_imports.py
 
-      - name: Publish to TestPyPI (Trusted Publishing OIDC)
+      - name: Generate SBOM (CycloneDX) for the released artefact
+        # Plan V4.3 — a release ships with its bill of materials. The SBOM
+        # is produced from a CLEAN venv holding exactly the wheel and its
+        # resolved dependencies (the smoke-install env above), not the
+        # build runner's polluted site-packages. pip-audit is already the
+        # repo's SCA tool (backend job); no new action to pin.
+        # The SBOM lives OUTSIDE dist/: twine (inside the publish action)
+        # uploads every file in packages-dir and rejects non-distribution
+        # formats, so a .json in dist/ would break the upload.
+        run: |
+          mkdir -p sbom
+          /tmp/wheel-smoke/bin/pip install pip-audit
+          /tmp/wheel-smoke/bin/pip-audit --format cyclonedx-json \
+            --output sbom/corrigenda-sbom.cyclonedx.json
+          test -s sbom/corrigenda-sbom.cyclonedx.json
+
+      - name: Publish to TestPyPI (Trusted Publishing OIDC + PEP 740)
         if: inputs.target == 'testpypi'
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
           packages-dir: packages/corrigenda/dist/
+          # Plan V4.3 — PEP 740 digital attestations: the publish action
+          # signs the distributions with the workflow's OIDC identity and
+          # uploads the provenance alongside; PyPI displays and serves it.
+          # Pinned explicitly (not left to the action's default) so a
+          # future default-flip cannot silently drop provenance.
+          attestations: true
+          verbose: true
 
-      - name: Publish to PyPI (Trusted Publishing OIDC)
+      - name: Publish to PyPI (Trusted Publishing OIDC + PEP 740)
         if: inputs.target == 'pypi'
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
         with:
           packages-dir: packages/corrigenda/dist/
+          attestations: true
+          verbose: true
 
-      - name: Upload distribution artifacts
+      - name: Upload distribution artifacts (+ SBOM)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: corrigenda-dist-${{ inputs.target }}
-          path: packages/corrigenda/dist/
+          path: |
+            packages/corrigenda/dist/
+            packages/corrigenda/sbom/
           if-no-files-found: error
