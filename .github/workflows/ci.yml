@@ -121,6 +121,35 @@ jobs:
       - name: pytest + coverage gate (85%)
         run: pytest tests/ --cov=corrigenda --cov-report=term --cov-report=xml
 
+  corrigenda-external-corpus:
+    # Plan V4.2 phase 3 — invariants over REAL Gallica ALTO never seen
+    # during development (tests/external_corpus/manifest.json). NON-
+    # BLOCKING by design while it builds a track record: the fetch
+    # depends on gallica.bnf.fr availability and the corpus content can
+    # legitimately change under us (BnF re-OCR). Promote to blocking
+    # once it has run green for a while — that promotion is a deliberate
+    # one-line change (drop continue-on-error), not a default.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: packages/corrigenda
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Fetch external corpus from Gallica
+        run: python tests/external_corpus/fetch.py
+      - name: Install corrigenda (editable) + pytest
+        run: |
+          pip install -e .
+          pip install pytest pytest-asyncio
+      - name: pytest (external corpus invariants)
+        run: pytest -m external_corpus tests/test_external_corpus.py -v
+
   corrigenda-build:
     # Catch packaging regressions (broken classifiers, missing files in
     # the wheel/sdist) here, before they bite us at PyPI release time.

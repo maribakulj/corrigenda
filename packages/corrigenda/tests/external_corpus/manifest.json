@@ -1,0 +1,20 @@
+{
+  "_comment": "V4.2 phase 3 — external ALTO corpus, NEVER used during development. Fetched at CI time by fetch.py from Gallica (source: gallica.bnf.fr / Bibliothèque nationale de France). The dev corpus lives in examples/ (ark bpt6k3265015q) and must never appear here.",
+  "documents": [
+    {
+      "ark": "bpt6k2206225",
+      "label": "Histoire naturelle, Paulin Teulières, 1850 (monographie)",
+      "pages": [15, 16, 17]
+    },
+    {
+      "ark": "bpt6k6478860m",
+      "label": "Périodes de l'histoire de la médecine, Ch. Daremberg, 1850 (monographie, mode texte)",
+      "pages": [9, 10]
+    },
+    {
+      "ark": "bpt6k20654036",
+      "label": "La Patrie, 1er janvier 1890 (quotidien multi-colonnes)",
+      "pages": [1, 2]
+    }
+  ]
+}
