@@ -99,8 +99,9 @@ export interface paths {
     }
     /**
      * Job Events
-     * @description SSE stream of correction job events. P1-7 — EventSource cannot set
-     *     headers, so the capability token arrives as ``?token=``.
+     * @description SSE stream of correction job events. Plan V2.4 — EventSource
+     *     cannot set headers, so access uses the events-scoped ``?sig=``
+     *     credential minted at job creation (never the capability token).
      */
     get: operations['job_events_api_jobs__job_id__events_get']
     put?: never
@@ -212,8 +213,9 @@ export interface paths {
     }
     /**
      * Get Job Image
-     * @description Serve a source scan image for a job. P1-7 — <img> tags cannot set
-     *     headers, so the capability token arrives as ``?token=``.
+     * @description Serve a source scan image for a job. Plan V2.4 — <img> tags cannot
+     *     set headers, so access uses the images-scoped ``?sig=`` credential
+     *     appended by the layout endpoint (never the capability token).
      */
     get: operations['get_job_image_api_jobs__job_id__images__image_name__get']
     put?: never
@@ -250,6 +252,8 @@ export interface components {
       job_id: string
       /** Job Token */
       job_token?: string | null
+      /** Events Url */
+      events_url?: string | null
     }
     /** HTTPValidationError */
     HTTPValidationError: {

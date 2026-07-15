@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchJobStatus, withToken } from '../api/client'
+import { eventsUrlFor, fetchJobStatus } from '../api/client'
 import type {
   JobProgress,
   JobStats,
@@ -123,6 +123,8 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
     capBackoffRef.current = false
     capAttemptRef.current = 0
 
+    // Non-null snapshot for closures (TS narrowing doesn't survive them).
+    const jid: string = jobId
     let cancelled = false
     const MAX_RETRIES = 3
     const CAP_BACKOFF_MAX_MS = 30_000
@@ -415,7 +417,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
         if (cancelled) return
         let snap: Awaited<ReturnType<typeof fetchJobStatus>> | undefined
         try {
-          snap = await fetchJobStatus(jobId as string)
+          snap = await fetchJobStatus(jid)
         } catch {
           // Transport failure — keep polling; log it once, not per tick.
           if (!transportErrorLogged) {
@@ -528,7 +530,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
           retryTimeoutRef.current = setTimeout(() => {
             retryTimeoutRef.current = null
             if (cancelled) return
-            const reconnect = new EventSource(withToken(`/api/jobs/${jobId}/events`))
+            const reconnect = new EventSource(eventsUrlFor(jid))
             esRef.current = reconnect
             attach(reconnect)
           }, delay)
@@ -568,14 +570,14 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
         retryTimeoutRef.current = setTimeout(() => {
           retryTimeoutRef.current = null
           if (cancelled) return
-          const reconnect = new EventSource(withToken(`/api/jobs/${jobId}/events`))
+          const reconnect = new EventSource(eventsUrlFor(jid))
           esRef.current = reconnect
           attach(reconnect)
         }, delay)
       }
     }
 
-    const es = new EventSource(withToken(`/api/jobs/${jobId}/events`))
+    const es = new EventSource(eventsUrlFor(jid))
     esRef.current = es
     attach(es)
 
@@ -592,7 +594,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
       retryCountRef.current = 0
       setStreamState('reconnecting')
       setLogs((l) => appendLog(l, makeLog('info', 'Reconnecting to the live stream…')))
-      const fresh = new EventSource(withToken(`/api/jobs/${jobId}/events`))
+      const fresh = new EventSource(eventsUrlFor(jid))
       esRef.current = fresh
       attach(fresh)
     }

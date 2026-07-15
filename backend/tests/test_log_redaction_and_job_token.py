@@ -142,10 +142,12 @@ def test_endpoints_refuse_without_token_as_404(client):
     assert ok.status_code == 200
 
 
-def test_token_accepted_as_query_param_for_headerless_surfaces(client):
+def test_token_rejected_as_query_param(client):
+    # Plan V2.4 — the ?token= transport is dead: query strings leak into
+    # proxy/ingress logs. Header-less surfaces use scoped ?sig= instead.
     job_id, token = _create(client)
     r = client.get(f"/api/jobs/{job_id}?token={token}")
-    assert r.status_code == 200
+    assert r.status_code == 404
 
 
 def test_api_responses_are_no_store(client):

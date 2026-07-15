@@ -572,9 +572,13 @@ def test_zip_with_images():
             image_url = layout["pages"][0].get("image_url")
             assert image_url is not None, "image_url should be set when image matches ALTO stem"
 
-            # Image endpoint should return the PNG bytes. P1-7 — <img> URLs
-            # carry the token as a query param (no headers on <img> tags).
-            img_resp = client.get(f"{image_url}?token={token}")
+            # Plan V2.4 — the layout response appends an images-scoped
+            # ?sig= to each image_url (no headers on <img> tags, and the
+            # capability token never travels in a URL): the URL is
+            # directly fetchable as returned.
+            assert "sig=" in image_url
+            assert f"token={token}" not in image_url
+            img_resp = client.get(image_url)
             assert img_resp.status_code == 200
             assert img_resp.headers["content-type"] == "image/png"
             assert img_resp.content[:8] == b"\x89PNG\r\n\x1a\n"

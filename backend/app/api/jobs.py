@@ -23,6 +23,7 @@ from starlette.background import BackgroundTask
 from app.api.deps import get_job_store
 from app.api.rate_limit import limiter
 from app.api.read_models import build_diff, build_layout
+from app.api.signed_urls import sign_url_credential, verify_url_credential
 from app.jobs import runner as _runner_module
 from app.jobs.runner import JobRunner
 from app.protocols import JobStore
@@ -112,12 +113,15 @@ def require_job_access(
     operator logs, browser history and referrers gave full read access
     to a stranger's OCR text, corrections and images. Every job created
     through the public API now carries a token (only its SHA-256 hash is
-    stored); callers present it via the ``X-Job-Token`` header, or via
-    ``?token=`` for the surfaces that cannot set headers (EventSource,
-    <img>, download links). Jobs created OUTSIDE the HTTP layer (direct
-    store access — tests, embedding consumers) have no hash and are not
-    gated. Missing/wrong token → 404, not 403: an unauthenticated caller
-    must not be able to distinguish "job exists" from "job doesn't".
+    stored); callers present it via the ``X-Job-Token`` header. Plan
+    V2.4 — the token is NEVER accepted in the URL any more: query
+    strings leak into reverse-proxy/ingress/APM logs. The surfaces that
+    cannot set headers (EventSource, <img>) use short-lived signed
+    credentials instead — see ``require_job_access_signed``. Jobs
+    created OUTSIDE the HTTP layer (direct store access — tests,
+    embedding consumers) have no hash and are not gated. Missing/wrong
+    token → 404, not 403: an unauthenticated caller must not be able to
+    distinguish "job exists" from "job doesn't".
 
     Deployment model (decided): the app runs behind the institution's
     SSO/reverse-proxy for authentication; this token provides per-job
@@ -127,10 +131,38 @@ def require_job_access(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
     if job.token_hash is not None:
-        presented = request.headers.get("x-job-token") or request.query_params.get("token")
+        presented = request.headers.get("x-job-token")
         if not _token_matches(job, presented):
             raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
     return job
+
+
+def require_job_access_signed(purpose: str):
+    """Dependency factory for header-less surfaces (Plan V2.4).
+
+    Accepts the full capability token via header (curl, tests), OR a
+    ``?sig=`` credential signed for THIS job and THIS purpose with a
+    bounded lifetime (see ``app.api.signed_urls``). The signed
+    credential can never reach any other endpoint.
+    """
+
+    def dependency(
+        job_id: str,
+        request: Request,
+        store: JobStore = Depends(get_job_store),
+    ) -> JobManifest:
+        job = store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+        if job.token_hash is None:
+            return job
+        if _token_matches(job, request.headers.get("x-job-token")):
+            return job
+        if verify_url_credential(job_id, purpose, request.query_params.get("sig")):
+            return job
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+
+    return dependency
 
 
 def get_completed_job(
@@ -437,7 +469,17 @@ async def _create_job_reserved(
         await asyncio.shield(asyncio.to_thread(store.delete_job, job_id))
         raise
 
-    return CreateJobResponse(job_id=job_id, job_token=job_token)
+    # Plan V2.4 — events-scoped signed URL for EventSource (which cannot
+    # set headers). Valid for the whole run: the job's timeout budget
+    # plus a margin for queueing and late reconnections.
+    events_sig = sign_url_credential(
+        job_id, "events", _runner_module.DEFAULT_JOB_TIMEOUT_SECONDS + 600
+    )
+    return CreateJobResponse(
+        job_id=job_id,
+        job_token=job_token,
+        events_url=f"/api/jobs/{job_id}/events?sig={events_sig}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -521,10 +563,11 @@ async def cancel_job(
 async def job_events(
     job_id: str,
     store: JobStore = Depends(get_job_store),
-    _job: JobManifest = Depends(require_job_access),
+    _job: JobManifest = Depends(require_job_access_signed("events")),
 ) -> EventSourceResponse:
-    """SSE stream of correction job events. P1-7 — EventSource cannot set
-    headers, so the capability token arrives as ``?token=``."""
+    """SSE stream of correction job events. Plan V2.4 — EventSource
+    cannot set headers, so access uses the events-scoped ``?sig=``
+    credential minted at job creation (never the capability token)."""
 
     async def generator() -> AsyncGenerator[dict, None]:
         async for sse_event in store.stream_events(job_id):
@@ -665,6 +708,12 @@ async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
 # ---------------------------------------------------------------------------
 
 
+#: Plan V2.4 — lifetime of the images-scoped ``?sig=`` appended to
+#: layout image URLs. Browsers fetch the <img> right after the layout
+#: response; 15 minutes generously covers slow loads and a re-render.
+_IMAGE_SIG_TTL_SECONDS = 15 * 60
+
+
 @router.get("/{job_id}/layout")
 async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
     """Return structural layout data (blocks + lines with ALTO coordinates).
@@ -674,7 +723,15 @@ async def get_job_layout(job: JobManifest = Depends(get_completed_job)) -> dict:
     if job.document_manifest is None:
         raise HTTPException(status_code=500, detail="Job has no document_manifest.")
     # Wave-3 review — same offload rationale as /diff.
-    return await asyncio.to_thread(build_layout, job.job_id, job.document_manifest, job.images)
+    data = await asyncio.to_thread(build_layout, job.job_id, job.document_manifest, job.images)
+    # Plan V2.4 — <img> cannot set headers: append a short-lived,
+    # images-scoped signed credential to each URL (this response is
+    # itself token-gated, so only the job owner receives them).
+    sig = sign_url_credential(job.job_id, "images", _IMAGE_SIG_TTL_SECONDS)
+    for page in data.get("pages", []):
+        if page.get("image_url"):
+            page["image_url"] = f"{page['image_url']}?sig={sig}"
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -694,10 +751,11 @@ _IMAGE_MIME: dict[str, str] = {
 async def get_job_image(
     job_id: str,
     image_name: str,
-    _job: JobManifest = Depends(require_job_access),
+    _job: JobManifest = Depends(require_job_access_signed("images")),
 ) -> Response:
-    """Serve a source scan image for a job. P1-7 — <img> tags cannot set
-    headers, so the capability token arrives as ``?token=``."""
+    """Serve a source scan image for a job. Plan V2.4 — <img> tags cannot
+    set headers, so access uses the images-scoped ``?sig=`` credential
+    appended by the layout endpoint (never the capability token)."""
 
     # Sanitise: only allow plain filenames (no path traversal)
     if "/" in image_name or "\\" in image_name or image_name.startswith("."):

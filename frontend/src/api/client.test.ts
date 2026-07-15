@@ -9,12 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createJob,
   downloadJob,
+  eventsUrlFor,
   fetchDiff,
   fetchLayout,
   fetchTrace,
   listModels,
+  setEventsUrl,
   setJobToken,
-  withToken,
 } from './client'
 
 function jsonResponse(
@@ -42,6 +43,7 @@ const fetchMock = vi.fn()
 
 beforeEach(() => {
   setJobToken(null)
+  setEventsUrl(null)
   fetchMock.mockReset()
   vi.stubGlobal('fetch', fetchMock)
 })
@@ -54,24 +56,19 @@ afterEach(() => {
 // Token plumbing
 // ---------------------------------------------------------------------------
 
-describe('withToken', () => {
-  it('returns the url unchanged when no token is held', () => {
-    expect(withToken('/api/jobs/j1/events')).toBe('/api/jobs/j1/events')
+describe('eventsUrlFor (Plan V2.4 — no capability token in URLs)', () => {
+  it('falls back to the bare events route when no signed url is held', () => {
+    expect(eventsUrlFor('j1')).toBe('/api/jobs/j1/events')
   })
 
-  it('appends ?token= when the url has no query string', () => {
-    setJobToken('abc')
-    expect(withToken('/api/jobs/j1/events')).toBe('/api/jobs/j1/events?token=abc')
+  it('returns the signed events_url captured at creation', () => {
+    setEventsUrl('/api/jobs/j1/events?sig=123.abc')
+    expect(eventsUrlFor('j1')).toBe('/api/jobs/j1/events?sig=123.abc')
   })
 
-  it('appends &token= when the url already has a query string', () => {
-    setJobToken('abc')
-    expect(withToken('/api/jobs/j1/events?x=1')).toBe('/api/jobs/j1/events?x=1&token=abc')
-  })
-
-  it('percent-encodes the token', () => {
-    setJobToken('a/b+c')
-    expect(withToken('/d')).toBe('/d?token=a%2Fb%2Bc')
+  it('never embeds the capability token in any URL', () => {
+    setJobToken('secret-token')
+    expect(eventsUrlFor('j1')).not.toContain('secret-token')
   })
 })
 
@@ -120,8 +117,14 @@ describe('listModels', () => {
 // ---------------------------------------------------------------------------
 
 describe('createJob', () => {
-  it('sends multipart form data and stores the returned job token', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ job_id: 'j9', job_token: 'tok-1' }))
+  it('sends multipart form data and stores the token + signed events url', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        job_id: 'j9',
+        job_token: 'tok-1',
+        events_url: '/api/jobs/j9/events?sig=9.mac',
+      }),
+    )
     const file = new File(['<alto/>'], 'page.xml', { type: 'application/xml' })
 
     const res = await createJob([file], 'mistral', 'sk-m', 'small')
@@ -132,15 +135,24 @@ describe('createJob', () => {
     expect(form.get('provider')).toBe('mistral')
     expect(form.get('api_key')).toBe('sk-m')
     expect(form.get('model')).toBe('small')
-    // Token captured — subsequent urls carry it.
-    expect(withToken('/x')).toBe('/x?token=tok-1')
+    // Token captured for headers; signed url captured for EventSource.
+    fetchMock.mockResolvedValue(jsonResponse({}))
+    await fetchDiff('j9')
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/jobs/j9/diff', {
+      headers: { 'X-Job-Token': 'tok-1' },
+    })
+    expect(eventsUrlFor('j9')).toBe('/api/jobs/j9/events?sig=9.mac')
   })
 
-  it('clears the held token when the server returns none', async () => {
+  it('clears the held token and events url when the server returns none', async () => {
     setJobToken('stale')
+    setEventsUrl('/api/jobs/old/events?sig=1.a')
     fetchMock.mockResolvedValue(jsonResponse({ job_id: 'j9' }))
     await createJob([], 'openai', 'k', 'gpt')
-    expect(withToken('/x')).toBe('/x')
+    fetchMock.mockResolvedValue(jsonResponse({}))
+    await fetchDiff('j9')
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/jobs/j9/diff', { headers: {} })
+    expect(eventsUrlFor('j9')).toBe('/api/jobs/j9/events')
   })
 
   it('throws the server detail on failure', async () => {
@@ -194,21 +206,49 @@ describe('apiGet-backed endpoints', () => {
 // downloadJob
 // ---------------------------------------------------------------------------
 
-describe('downloadJob', () => {
-  it('clicks a temporary tokened anchor and removes it from the DOM', () => {
+describe('downloadJob (Plan V2.4 — token in header, blob to the browser)', () => {
+  function blobResponse(headers: Record<string, string> = {}) {
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (k: string) => headers[k.toLowerCase()] ?? null },
+      blob: () => Promise.resolve(new Blob(['<alto/>'])),
+      json: () => Promise.reject(new Error('not json')),
+    } as unknown as Response
+  }
+
+  it('fetches with the token in a HEADER and never in the URL', async () => {
     setJobToken('dl-tok')
+    fetchMock.mockResolvedValue(
+      blobResponse({ 'content-disposition': 'attachment; filename="out.zip"' }),
+    )
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn(() => 'blob:mock'),
+      revokeObjectURL: vi.fn(),
+    })
     const clicked: string[] = []
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
       this: HTMLAnchorElement,
     ) {
-      clicked.push(this.getAttribute('href') ?? '')
+      clicked.push(`${this.getAttribute('href')}|${this.getAttribute('download')}`)
     })
 
-    downloadJob('j7')
+    await downloadJob('j7')
 
-    expect(clicked).toEqual(['/api/jobs/j7/download?token=dl-tok'])
-    // The anchor must not leak into the document.
+    expect(fetchMock).toHaveBeenCalledWith('/api/jobs/j7/download', {
+      headers: { 'X-Job-Token': 'dl-tok' },
+    })
+    // The anchor points at a local blob named by Content-Disposition —
+    // the capability token appears in NO URL.
+    expect(clicked).toEqual(['blob:mock|out.zip'])
     expect(document.querySelector('a[href*="download"]')).toBeNull()
     clickSpy.mockRestore()
+  })
+
+  it('throws the server detail on failure', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ detail: 'not completed' }, { ok: false, status: 409 }),
+    )
+    await expect(downloadJob('j7')).rejects.toThrow('not completed')
   })
 })

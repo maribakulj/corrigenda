@@ -172,7 +172,7 @@
       "get": {
         "tags": ["jobs"],
         "summary": "Job Events",
-        "description": "SSE stream of correction job events. P1-7 \u2014 EventSource cannot set\nheaders, so the capability token arrives as ``?token=``.",
+        "description": "SSE stream of correction job events. Plan V2.4 \u2014 EventSource\ncannot set headers, so access uses the events-scoped ``?sig=``\ncredential minted at job creation (never the capability token).",
         "operationId": "job_events_api_jobs__job_id__events_get",
         "parameters": [
           {
@@ -379,7 +379,7 @@
       "get": {
         "tags": ["jobs"],
         "summary": "Get Job Image",
-        "description": "Serve a source scan image for a job. P1-7 \u2014 <img> tags cannot set\nheaders, so the capability token arrives as ``?token=``.",
+        "description": "Serve a source scan image for a job. Plan V2.4 \u2014 <img> tags cannot\nset headers, so access uses the images-scoped ``?sig=`` credential\nappended by the layout endpoint (never the capability token).",
         "operationId": "get_job_image_api_jobs__job_id__images__image_name__get",
         "parameters": [
           {
@@ -474,6 +474,17 @@
               }
             ],
             "title": "Job Token"
+          },
+          "events_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events Url"
           }
         },
         "type": "object",

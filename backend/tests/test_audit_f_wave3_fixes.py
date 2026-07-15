@@ -306,7 +306,7 @@ def test_f19_honest_job_still_completes_after_offload(client):
     import hashlib
 
     store.update_job(job_id, token_hash=hashlib.sha256(token.encode()).hexdigest())
-    resp = client.get(f"/api/jobs/{job_id}/download", params={"token": token})
+    resp = client.get(f"/api/jobs/{job_id}/download", headers={"X-Job-Token": token})
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/zip")
 
