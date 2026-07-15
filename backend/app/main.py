@@ -7,7 +7,6 @@ import contextlib
 import logging
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,13 +25,12 @@ from app.api.jobs import router as jobs_router
 from app.api.providers import router as providers_router
 from app.api.rate_limit import limiter
 from app.api.upload_guard import UploadSizeLimitMiddleware
+from app.frontend_static import INDEX_HTML as _INDEX_HTML
+from app.frontend_static import STATIC_DIR as _STATIC_DIR
+from app.frontend_static import frontend_expected
 from app.jobs.store import JobStore
 from app.jobs.task_registry import BackgroundTaskRegistry
 from app.observability.logging_config import setup_json_logging
-
-# Resolved once at import time — same process for the lifetime of the container
-_STATIC_DIR = Path(__file__).parent.parent / "static"
-_INDEX_HTML = _STATIC_DIR / "index.html"
 
 
 # ---------------------------------------------------------------------------
@@ -230,11 +228,24 @@ def create_app() -> FastAPI:
     if assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
-    @app.get("/", include_in_schema=False)
-    async def root():
+    def _spa_response() -> FileResponse | JSONResponse:
+        # Plan V1.3 — a deployment that PROMISES the SPA (SERVE_FRONTEND=1,
+        # single-container image) but lacks index.html is broken and must
+        # say so. The old unconditional {"status":"ok"} 200 made the
+        # historical wrong-COPY regression invisible to every probe.
         if _INDEX_HTML.exists():
             return FileResponse(str(_INDEX_HTML))
+        if frontend_expected():
+            return JSONResponse(
+                {"detail": "frontend build missing (index.html not found)"},
+                status_code=503,
+            )
+        # Backend-only deployment (docker-compose dev): no SPA promised.
         return JSONResponse({"status": "ok"})
+
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return _spa_response()
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
@@ -245,9 +256,7 @@ def create_app() -> FastAPI:
         reserved = reserved or full_path == "health" or full_path.startswith("health/")
         if reserved:
             return JSONResponse({"detail": "Not Found"}, status_code=404)
-        if _INDEX_HTML.exists():
-            return FileResponse(str(_INDEX_HTML))
-        return JSONResponse({"status": "ok"})
+        return _spa_response()
 
     return app
 

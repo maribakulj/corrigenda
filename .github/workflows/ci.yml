@@ -400,7 +400,8 @@ jobs:
     # unresolvable pinned digest, or a dependency conflict only surfaced
     # at HF Spaces build time (a class of failure that has shipped
     # silently once — see the root Dockerfile comment). Build all three
-    # (no push), and smoke-test /health on the root image. Plain
+    # (no push), and smoke-test the root image: /health, the actual SPA
+    # at /, a built asset, and /health/ready. Plain
     # `docker build`/`run` (buildx is preinstalled on ubuntu-latest) so
     # this job adds no third-party action to pin.
     runs-on: ubuntu-latest
@@ -414,16 +415,18 @@ jobs:
         run: docker build -f backend/Dockerfile -t corrigenda-backend:ci .
       - name: Build frontend image
         run: docker build -f frontend/Dockerfile -t corrigenda-frontend:ci ./frontend
-      - name: Smoke test /health on the root image
-        # Guards the regression class where the static-dir COPY is
-        # silently wrong yet /health still 200s: assert the container
-        # comes up AND serves /health on its documented port (7860).
+      - name: Smoke test the root image (health + REAL frontend)
+        # Plan V1.3 — /health alone CANNOT catch the wrong-COPY
+        # regression: the Dockerfile documents that /health stayed 200
+        # while the SPA was gone. Assert the properties that actually
+        # regressed: / serves HTML with the SPA mount point, a built
+        # asset referenced by that HTML responds, and /health/ready
+        # (which now includes the frontend check) is green.
         run: |
           docker run -d --name corrigenda-smoke -p 7860:7860 corrigenda-root:ci
           ok=0
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:7860/health >/dev/null 2>&1; then
-              echo "root image /health OK"
               ok=1
               break
             fi
@@ -432,6 +435,36 @@ jobs:
           if [ "$ok" -ne 1 ]; then
             echo "::error::root image did not serve /health within 60s"
             docker logs corrigenda-smoke || true
+            docker rm -f corrigenda-smoke >/dev/null 2>&1 || true
+            exit 1
           fi
+
+          fail() {
+            echo "::error::$1"
+            docker logs corrigenda-smoke || true
+            docker rm -f corrigenda-smoke >/dev/null 2>&1 || true
+            exit 1
+          }
+
+          # 1. / must be the SPA: text/html AND the React mount point.
+          ctype=$(curl -fsS -o /tmp/root.html -w '%{content_type}' http://127.0.0.1:7860/) \
+            || fail "GET / failed"
+          case "$ctype" in
+            text/html*) ;;
+            *) fail "GET / returned '$ctype', expected text/html — frontend not served" ;;
+          esac
+          grep -q '<div id="root">' /tmp/root.html \
+            || fail "GET / HTML lacks the SPA mount point <div id=\"root\">"
+
+          # 2. A built asset referenced by the HTML must respond.
+          asset=$(grep -oE '/assets/[^"]+\.js' /tmp/root.html | head -1)
+          [ -n "$asset" ] || fail "GET / HTML references no /assets/*.js bundle"
+          curl -fsS "http://127.0.0.1:7860${asset}" >/dev/null \
+            || fail "frontend asset ${asset} did not respond"
+
+          # 3. Readiness (includes the SERVE_FRONTEND=1 frontend check).
+          curl -fsS http://127.0.0.1:7860/health/ready >/dev/null \
+            || fail "/health/ready is not green"
+
+          echo "root image serves /health, the SPA at /, its assets, and /health/ready"
           docker rm -f corrigenda-smoke >/dev/null 2>&1 || true
-          [ "$ok" -eq 1 ]

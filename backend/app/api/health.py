@@ -28,6 +28,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from app.api.deps import get_job_store
+from app.frontend_static import INDEX_HTML, frontend_expected
 from app.protocols import JobStore
 
 router = APIRouter()
@@ -76,6 +77,14 @@ async def ready(
         checks["storage_dir"] = f"error: {type(exc).__name__}"
     else:
         checks["storage_dir"] = "ok" if is_writable else "error: not writable"
+
+    # Plan V1.3 — a deployment that PROMISES the SPA (SERVE_FRONTEND=1)
+    # but lacks the built index.html is not ready: the historical
+    # wrong-COPY regression kept /health green while the frontend was
+    # gone. Backend-only deployments (variable unset) skip the check.
+    if frontend_expected():
+        exists = await asyncio.to_thread(INDEX_HTML.exists)
+        checks["frontend"] = "ok" if exists else "error: index.html missing"
 
     healthy = all(v == "ok" for v in checks.values())
     return JSONResponse(

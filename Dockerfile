@@ -39,6 +39,10 @@ COPY --from=frontend-builder /frontend/dist /app/backend/static/
 
 ENV JOB_STORAGE_DIR=/tmp/app-jobs
 ENV PYTHONPATH=/app/backend
+# This image PROMISES the SPA: / and /health/ready return 503 when the
+# built index.html is missing (guards the wrong-COPY regression class
+# documented above — /health alone stayed green through it).
+ENV SERVE_FRONTEND=1
 # TRUSTED_PROXIES — audit fix: the generic image no longer bakes in
 # the dangerous wildcard. Default is the safe baseline (trust only
 # loopback); a deployment behind a proxy that SANITISES
