@@ -525,6 +525,9 @@ class CorrectionPipeline:
         # §4.1 vision envelope — populated per-run from run(source_images=…).
         self._image_ref_by_page_id: dict[str, ImageRef] = {}
         self._page_dims: dict[str, tuple[int, int]] = {}
+        # Plan V4.1 — reentrancy guard: per-run state lives on the
+        # instance, so a second concurrent run() would corrupt the first.
+        self._running = False
 
     @classmethod
     def for_provider(
@@ -627,6 +630,20 @@ class CorrectionPipeline:
     ) -> CorrectionResult:
         """Run the full pipeline. Mutates `document_manifest.pages` in place.
 
+        **Concurrency contract (Plan V4.1)** — one instance, one run at
+        a time: per-run state (counters, producer ops, accepted
+        snapshots, finalisation owners) lives on the instance and is
+        reset at the start of each run, so a second concurrent ``run()``
+        on the same instance would corrupt the first. Guarded: a
+        concurrent call raises :class:`RuntimeError` immediately instead
+        of contaminating a run in flight. Instances are not thread-safe.
+        The input manifest is CONSUMED (mutated in place); re-running on
+        the same manifest starts from the previous run's corrected
+        state, not from the original OCR text. Sequential re-use of one
+        instance on fresh manifests is supported. (The per-run
+        ``RunContext`` extraction that makes the pipeline stateless per
+        execution is planned before the SemVer freeze.)
+
         §5.1 resorption — there is no ``api_key``/``model``/``provider_name``
         here anymore: credentials and the vendor call live inside the
         injected :class:`EditProducer` (see :meth:`for_provider`), and the
@@ -660,6 +677,36 @@ class CorrectionPipeline:
         (and its :class:`CorrectionReport`) is the whole deliverable —
         useful for preview or for a consumer benchmarking without writing.
         """
+        if self._running:
+            raise RuntimeError(
+                "CorrectionPipeline.run() is already executing on this instance — "
+                "one instance supports one run at a time (per-run state lives on "
+                "the instance). Create a separate pipeline per concurrent run."
+            )
+        self._running = True
+        try:
+            return await self._run_exclusive(
+                document_manifest=document_manifest,
+                source_files=source_files,
+                run_id=run_id,
+                should_abort=should_abort,
+                apply=apply,
+                source_images=source_images,
+            )
+        finally:
+            self._running = False
+
+    async def _run_exclusive(
+        self,
+        *,
+        document_manifest: DocumentManifest,
+        source_files: dict[str, Path],
+        run_id: str | None,
+        should_abort: Callable[[], bool] | None,
+        apply: bool,
+        source_images: dict[str, ImageRef] | None,
+    ) -> CorrectionResult:
+        """Body of :meth:`run`, executing under the reentrancy guard."""
         run_id = run_id or str(uuid.uuid4())
         self._retry_count = 0
         self._fallback_count = 0
