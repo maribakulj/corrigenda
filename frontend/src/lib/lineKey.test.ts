@@ -46,12 +46,8 @@ describe('buildTraceMap', () => {
     const map = buildTraceMap(lines)
 
     expect(map.size).toBe(4)
-    expect(map.get(lineKey('P_file1', 'L1'))?.source_ocr_text).toBe(
-      'texte du fichier 1, ligne 1',
-    )
+    expect(map.get(lineKey('P_file1', 'L1'))?.source_ocr_text).toBe('texte du fichier 1, ligne 1')
     // Selecting L1 of file 2 must return file 2's trace, never file 1's.
-    expect(map.get(lineKey('P_file2', 'L1'))?.source_ocr_text).toBe(
-      'texte du fichier 2, ligne 1',
-    )
+    expect(map.get(lineKey('P_file2', 'L1'))?.source_ocr_text).toBe('texte du fichier 2, ligne 1')
   })
 })

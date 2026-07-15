@@ -12,6 +12,7 @@ import tempfile
 import zipfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import cast
 
 from corrigenda.core.schemas import PairingPolicy
 from corrigenda.formats.alto.parser import build_document_manifest
@@ -359,7 +360,9 @@ async def _create_job_reserved(
         # freeze the single-worker event loop (SSE keepalives, health
         # probes, in-flight downloads).
         try:
-            saved, image_files = await asyncio.to_thread(save_uploaded_files, job_id, staged_files)
+            saved, image_files = await asyncio.to_thread(
+                save_uploaded_files, job_id, cast(list[tuple[str, bytes | Path]], staged_files)
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
