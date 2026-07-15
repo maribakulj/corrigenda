@@ -69,6 +69,21 @@ async def lifespan(app: FastAPI):
     to drain in-flight correction jobs so we don't leave half-written
     output files when Docker/HF Spaces sends SIGTERM during a redeploy.
     """
+    # Plan V3.2 — the store is in-memory: any job directory found on
+    # disk at startup belongs to a pre-restart job the API no longer
+    # knows and the TTL sweep can never reclaim. Delete them before
+    # serving (best effort — never blocks startup).
+    try:
+        from app import storage as _storage
+
+        reclaimed = await asyncio.to_thread(
+            app.state.job_store.reclaim_orphans, _storage._BASE_DIR
+        )
+        if reclaimed:
+            logger.info("startup: reclaimed %d orphan job directorie(s)", reclaimed)
+    except Exception:
+        logger.exception("startup orphan reclaim failed (continuing)")
+
     sweep_task = asyncio.create_task(_periodic_sweep(app), name="job-sweep")
     try:
         yield

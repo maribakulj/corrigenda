@@ -98,13 +98,18 @@ The container writes uploads and corrected outputs to `/tmp/app-jobs/<job_id>/`.
 - The `trace.json` and corrected XML are gone after a restart even if the job completed — download them immediately.
 - A user revisiting the Space after a restart will get a `404` on `/api/jobs/{id}/download` for any previous job_id.
 
-The frontend shows a yellow warning banner above the upload zone. If you need persistence, mount a persistent volume (paid HF Spaces feature) and point `JOB_STORAGE_DIR` to it:
+The frontend shows a yellow warning banner above the upload zone.
 
-```
-ENV JOB_STORAGE_DIR=/data/app-jobs
-```
-
-(or set the env var in the Space settings UI).
+**A persistent volume does NOT make jobs persistent.** Job records
+(status, capability-token hashes, eviction timestamps) live in process
+memory only. If you mount a volume and point `JOB_STORAGE_DIR` at it,
+the files survive a restart but the API has no record of them: every
+endpoint returns `404` for pre-restart job_ids, the old tokens are
+gone, and the results are unreachable. The server therefore deletes
+such orphan directories at startup rather than letting them accumulate
+as dead weight. Real persistence (a database holding job records that
+survive restarts) is a planned institutional-profile feature, not a
+mount-a-volume option.
 
 Single-worker on purpose — see Dockerfile comments. A multi-worker setup would need a shared `JobStore` (Redis, Postgres) since the current one is in-process.
 
