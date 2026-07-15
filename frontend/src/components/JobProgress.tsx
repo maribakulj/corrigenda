@@ -15,6 +15,8 @@ const STATUS_COLORS: Record<string, string> = {
   // "done, but review the fallbacks".
   completed_with_fallbacks: 'text-amber-300',
   failed: 'text-red-400',
+  cancel_requested: 'text-amber-400',
+  cancelled: 'text-slate-400',
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -24,6 +26,8 @@ const STATUS_LABELS: Record<string, string> = {
   completed: 'COMPLETED',
   completed_with_fallbacks: 'COMPLETED (WITH FALLBACKS)',
   failed: 'FAILED',
+  cancel_requested: 'CANCELLING…',
+  cancelled: 'CANCELLED',
 }
 
 // Defensive fallbacks so a status the maps don't know about (a future

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { createJob, fetchDiff, fetchLayout, fetchTrace } from './api/client'
+import { cancelJob, createJob, fetchDiff, fetchLayout, fetchTrace } from './api/client'
 import { retryFetch } from './api/retry'
 import { ApiKeyInput } from './components/ApiKeyInput'
 import { DiffViewer } from './components/DiffViewer'
@@ -63,6 +63,9 @@ export default function App() {
 
   const isDone = status === 'completed' || status === 'completed_with_fallbacks'
   const isFailed = status === 'failed'
+  const isCancelled = status === 'cancelled'
+  // Plan V2.2 — true between the user's click and the server's verdict.
+  const [cancelPending, setCancelPending] = useState(false)
 
   // Wave-4 review — staleness guard for the three bounded fetches. A
   // retryFetch in flight (its backoff spans seconds) survives a reset:
@@ -144,6 +147,7 @@ export default function App() {
     if (!canPlay || !provider || !selectedModel) return
     setSubmitting(true)
     setSubmitError(null)
+    setCancelPending(false)
     try {
       const res = await createJob(files, provider, apiKey, selectedModel)
       setJobId(res.job_id)
@@ -154,10 +158,23 @@ export default function App() {
     }
   }
 
+  async function handleCancel() {
+    if (!jobId || cancelPending) return
+    setCancelPending(true)
+    try {
+      await cancelJob(jobId)
+    } catch {
+      // The cancel endpoint is idempotent; a failed request just
+      // re-enables the button for another attempt.
+      setCancelPending(false)
+    }
+  }
+
   function handleReset() {
     setFiles([])
     setJobId(null)
     setSubmitError(null)
+    setCancelPending(false)
     setDiffData(null)
     setDiffLoading(false)
     setDiffError(false)
@@ -214,7 +231,21 @@ export default function App() {
                 Debug
               </button>
             )}
-            {(isDone || isFailed) && (
+            {isRunning && jobId && (
+              <button
+                onClick={handleCancel}
+                disabled={cancelPending || status === 'cancel_requested'}
+                className={[
+                  'font-mono text-xs border rounded px-3 py-1.5 transition-colors',
+                  cancelPending || status === 'cancel_requested'
+                    ? 'text-slate-500 border-slate-600/40 cursor-not-allowed'
+                    : 'text-red-400 border-red-500/40 hover:bg-red-500/10',
+                ].join(' ')}
+              >
+                {cancelPending || status === 'cancel_requested' ? 'Annulation…' : 'Annuler'}
+              </button>
+            )}
+            {(isDone || isFailed || isCancelled) && (
               <button
                 onClick={handleReset}
                 className="font-mono text-xs text-amber-400 border border-amber-500/40
@@ -323,7 +354,7 @@ export default function App() {
         </section>
 
         {/* 4. Progress — shown once job started */}
-        {jobId && (isRunning || isDone || isFailed) && (
+        {jobId && (isRunning || isDone || isFailed || isCancelled) && (
           <section>
             <h2 className="font-serif text-base font-semibold text-slate-300 mb-3 flex items-center gap-2">
               <span className="font-mono text-amber-500 text-xs">03</span>

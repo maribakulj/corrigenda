@@ -20,6 +20,11 @@ export type JobStatus =
   // text: outputs are valid and downloadable, but the run is degraded.
   | 'completed_with_fallbacks'
   | 'failed'
+  // Plan V2.2 — cooperative cancellation: cancel_requested until the
+  // pipeline's probe trips (between pages/chunks), then cancelled
+  // (terminal, no output).
+  | 'cancel_requested'
+  | 'cancelled'
 
 // ---------------------------------------------------------------------------
 // Model info
@@ -172,6 +177,11 @@ export interface SSEFailed {
   event: 'failed'
   error: string
 }
+// Plan V2.2 — terminal event for a user-requested cancellation.
+export interface SSECancelled {
+  event: 'cancelled'
+  job_id?: string
+}
 export interface SSEKeepalive {
   event: 'keepalive'
 }
@@ -198,6 +208,7 @@ export type SSEEventData =
   | SSEPageCompleted
   | SSECompleted
   | SSEFailed
+  | SSECancelled
   | SSEKeepalive
   | SSEError
   | SSERewriterStats

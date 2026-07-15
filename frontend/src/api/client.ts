@@ -124,6 +124,21 @@ export async function fetchJobStatus(jobId: string): Promise<JobStatusData | nul
 }
 
 // ---------------------------------------------------------------------------
+// cancelJob — cooperative cancellation (Plan V2.2). Idempotent.
+// ---------------------------------------------------------------------------
+
+export async function cancelJob(jobId: string): Promise<void> {
+  const resp = await fetch(`${BASE}/api/jobs/${jobId}/cancel`, {
+    method: 'POST',
+    headers: tokenHeaders(),
+  })
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }))
+    throw new Error((err as { detail?: string }).detail ?? 'Failed to cancel job')
+  }
+}
+
+// ---------------------------------------------------------------------------
 // downloadJob — triggers browser download
 // ---------------------------------------------------------------------------
 

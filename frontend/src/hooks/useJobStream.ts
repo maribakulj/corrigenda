@@ -28,6 +28,13 @@ function appendLog(prev: LogEntry[], entry: LogEntry): LogEntry[] {
   return next.length > MAX_LOGS ? next.slice(next.length - MAX_LOGS) : next
 }
 
+/** Terminal job states — the stream/poller never restarts after these. */
+function isTerminalStatus(s: JobStatus | null): boolean {
+  return (
+    s === 'completed' || s === 'completed_with_fallbacks' || s === 'failed' || s === 'cancelled'
+  )
+}
+
 const INITIAL_PROGRESS: JobProgress = {
   pages_total: 0,
   pages_done: 0,
@@ -138,6 +145,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
       'page_completed',
       'completed',
       'failed',
+      'cancelled',
       'keepalive',
       'error',
       'rewriter_stats',
@@ -297,6 +305,14 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
         case 'failed':
           setStatus('failed')
           setLogs((l) => appendLog(l, makeLog('error', `Failed: ${ev.error}`)))
+          esRef.current?.close()
+          break
+
+        case 'cancelled':
+          // Plan V2.2 — user-requested outcome, terminal like failed
+          // but not an error.
+          setStatus('cancelled')
+          setLogs((l) => appendLog(l, makeLog('warning', 'Job cancelled on user request')))
           esRef.current?.close()
           break
 
@@ -461,6 +477,10 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
             )
             return
           }
+          if (snap.status === 'cancelled') {
+            setLogs((l) => appendLog(l, makeLog('warning', 'Job cancelled on user request')))
+            return
+          }
         }
         pollTimeoutRef.current = setTimeout(() => {
           pollTimeoutRef.current = null
@@ -485,8 +505,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
       es.onerror = () => {
         es.close()
         if (cancelled) return
-        const s = statusRef.current
-        if (s === 'completed' || s === 'completed_with_fallbacks' || s === 'failed') return
+        if (isTerminalStatus(statusRef.current)) return
 
         // Audit-F30 — a subscriber-cap close: reconnect with a
         // progressive backoff (2s → 30s), NEVER mark failed. Auto-
@@ -565,8 +584,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
     // fails again, onerror re-enters the retry→polling ladder.
     reconnectFnRef.current = () => {
       if (cancelled) return
-      const s = statusRef.current
-      if (s === 'completed' || s === 'completed_with_fallbacks' || s === 'failed') return
+      if (isTerminalStatus(statusRef.current)) return
       if (pollTimeoutRef.current !== null) {
         clearTimeout(pollTimeoutRef.current)
         pollTimeoutRef.current = null
@@ -599,7 +617,12 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
     reconnectFnRef.current?.()
   }, [])
 
-  const isRunning = status === 'queued' || status === 'started' || status === 'running'
+  const isRunning =
+    status === 'queued' ||
+    status === 'started' ||
+    status === 'running' ||
+    // Plan V2.2 — the pipeline is still executing until its probe trips.
+    status === 'cancel_requested'
 
   return { logs, progress, status, isRunning, streamState, finalStats, reconnect }
 }

@@ -127,6 +127,47 @@
         }
       }
     },
+    "/api/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": ["jobs"],
+        "summary": "Cancel Job",
+        "description": "Plan V2.2 \u2014 request cooperative cancellation. Idempotent.\n\nSets the job's cancellation event; the pipeline's ``should_abort``\nprobe (polled between pages and chunks) trips on the next check and\nthe runner lands the job in CANCELLED with no output promoted. A\nrequest on an already-settled job acknowledges without effect \u2014\nthe response body always carries the CURRENT status.",
+        "operationId": "cancel_job_api_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/events": {
       "get": {
         "tags": ["jobs"],
@@ -454,7 +495,16 @@
       },
       "JobStatus": {
         "type": "string",
-        "enum": ["queued", "started", "running", "completed", "completed_with_fallbacks", "failed"],
+        "enum": [
+          "queued",
+          "started",
+          "running",
+          "completed",
+          "completed_with_fallbacks",
+          "failed",
+          "cancel_requested",
+          "cancelled"
+        ],
         "title": "JobStatus",
         "description": "Lifecycle state of a correction job, surfaced to API clients."
       },

@@ -28,6 +28,7 @@ from app.api.upload_guard import UploadSizeLimitMiddleware
 from app.frontend_static import INDEX_HTML as _INDEX_HTML
 from app.frontend_static import STATIC_DIR as _STATIC_DIR
 from app.frontend_static import frontend_expected
+from app.jobs.cancellation import CancellationRegistry
 from app.jobs.store import JobStore
 from app.jobs.task_registry import BackgroundTaskRegistry
 from app.observability.logging_config import setup_json_logging
@@ -143,6 +144,9 @@ def create_app() -> FastAPI:
     # (correction runs spawned from POST /api/jobs). Drained on
     # shutdown by the lifespan handler above.
     app.state.tasks = BackgroundTaskRegistry()
+    # Plan V2.2 — per-job cancellation events; POST /api/jobs/{id}/cancel
+    # sets them, the runner's should_abort probe reads them.
+    app.state.cancellations = CancellationRegistry()
 
     # ------------------------------------------------------------------
     # Middleware stack (Starlette applies LIFO, so the LAST middleware

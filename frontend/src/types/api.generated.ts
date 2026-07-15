@@ -64,6 +64,32 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/jobs/{job_id}/cancel': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Cancel Job
+     * @description Plan V2.2 — request cooperative cancellation. Idempotent.
+     *
+     *     Sets the job's cancellation event; the pipeline's ``should_abort``
+     *     probe (polled between pages and chunks) trips on the next check and
+     *     the runner lands the job in CANCELLED with no output promoted. A
+     *     request on an already-settled job acknowledges without effect —
+     *     the response body always carries the CURRENT status.
+     */
+    post: operations['cancel_job_api_jobs__job_id__cancel_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/jobs/{job_id}/events': {
     parameters: {
       query?: never
@@ -242,6 +268,8 @@ export interface components {
       | 'completed'
       | 'completed_with_fallbacks'
       | 'failed'
+      | 'cancel_requested'
+      | 'cancelled'
     /** JobStatusResponse */
     JobStatusResponse: {
       /** Job Id */
@@ -413,6 +441,37 @@ export interface operations {
     responses: {
       /** @description Successful Response */
       200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['JobStatusResponse']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  cancel_job_api_jobs__job_id__cancel_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        job_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      202: {
         headers: {
           [name: string]: unknown
         }

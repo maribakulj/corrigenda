@@ -72,6 +72,10 @@ class PipelineEventType(str, Enum):
     STARTED = "started"
     COMPLETED = "completed"
     FAILED = "failed"
+    #: Cooperative cancellation (``should_abort`` probe tripped): the
+    #: run raised :class:`~corrigenda.errors.CorrectionAborted`, no
+    #: output was written. Terminal, like ``completed``/``failed``.
+    CANCELLED = "cancelled"
 
     # Document / page / chunk lifecycle (emitted by CorrectionPipeline)
     DOCUMENT_PARSED = "document_parsed"

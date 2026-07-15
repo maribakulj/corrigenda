@@ -39,7 +39,12 @@ _MAX_COMPLETED_JOBS = 200
 
 #: Every state after which a job never changes again (eviction-eligible).
 _TERMINAL_STATES = frozenset(
-    {JobStatus.COMPLETED, JobStatus.COMPLETED_WITH_FALLBACKS, JobStatus.FAILED}
+    {
+        JobStatus.COMPLETED,
+        JobStatus.COMPLETED_WITH_FALLBACKS,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+    }
 )
 
 
@@ -63,7 +68,7 @@ class JobStore:
 
     #: Terminal SSE event names — delivery of these is GUARANTEED by
     #: emit() even when the subscriber queue is full (Audit-F20).
-    _TERMINAL_EVENTS: frozenset[str] = frozenset({"completed", "failed"})
+    _TERMINAL_EVENTS: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
 
     def __init__(self, ttl_seconds: int = _DEFAULT_TTL_SECONDS) -> None:
         self._jobs: dict[str, JobManifest] = {}
@@ -392,6 +397,8 @@ class JobStore:
                 event="failed",
                 data={"job_id": job_id, "error": job.error or "job failed"},
             )
+        if job.status == JobStatus.CANCELLED:
+            return SSEEvent(event="cancelled", data={"job_id": job_id})
         return SSEEvent(
             event="completed",
             data={

@@ -29,6 +29,7 @@ from app.schemas import (
     TERMINAL_SUCCESS_STATES,
     CreateJobResponse,
     JobManifest,
+    JobStatus,
     JobStatusResponse,
     Provider,
 )
@@ -299,27 +300,40 @@ async def create_job(
                 headers={"Retry-After": "30"},
             )
 
+        # Plan V2.2 — register the cancellation event BEFORE the task
+        # exists so POST /cancel can never race an unregistered run; the
+        # probe (event.is_set) is polled by the pipeline between pages
+        # and chunks.
+        app_state = request.app.state
+        cancel_event = app_state.cancellations.register(job_id)
+
+        async def _run_job() -> None:
+            try:
+                await runner.run(
+                    job_id=job_id,
+                    document_manifest=doc_manifest,
+                    provider_name=provider,
+                    api_key=api_key,
+                    model=model,
+                    output_writer=output_writer_instance,
+                    source_files={name: path for name, path in saved.items()},
+                    provider=provider_instance,
+                    # Lookup is dynamic (not a snapshot) so tests that
+                    # `monkeypatch.setattr("app.jobs.runner.DEFAULT_JOB_TIMEOUT_SECONDS", N)`
+                    # actually see the override at spawn time.
+                    timeout_seconds=_runner_module.DEFAULT_JOB_TIMEOUT_SECONDS,
+                    should_abort=cancel_event.is_set,
+                )
+            finally:
+                # The run settled (any terminal state): the event has no
+                # further reader — drop it so the registry never leaks.
+                app_state.cancellations.discard(job_id)
+
         # Spawn correction through the per-app registry so the task is
         # strongly referenced (prevents GC mid-run) AND so the lifespan
         # handler can drain it on SIGTERM. Crash logging is centralised
         # in BackgroundTaskRegistry._on_done.
-        request.app.state.tasks.spawn(
-            runner.run(
-                job_id=job_id,
-                document_manifest=doc_manifest,
-                provider_name=provider,
-                api_key=api_key,
-                model=model,
-                output_writer=output_writer_instance,
-                source_files={name: path for name, path in saved.items()},
-                provider=provider_instance,
-                # Lookup is dynamic (not a snapshot) so tests that
-                # `monkeypatch.setattr("app.jobs.runner.DEFAULT_JOB_TIMEOUT_SECONDS", N)`
-                # actually see the override at spawn time.
-                timeout_seconds=_runner_module.DEFAULT_JOB_TIMEOUT_SECONDS,
-            ),
-            name=f"run_job:{job_id}",
-        )
+        request.app.state.tasks.spawn(_run_job(), name=f"run_job:{job_id}")
     except BaseException:
         # P1-10 — rollback: no half-created QUEUED job may survive a
         # failed creation (they are never terminal, hence never evicted).
@@ -328,6 +342,7 @@ async def create_job(
         # call in this handler, and SHIELDED so a client abort
         # (CancelledError can land right here) can't skip the cleanup —
         # the thread runs to completion even if the await is cancelled.
+        request.app.state.cancellations.discard(job_id)
         await asyncio.shield(asyncio.to_thread(store.delete_job, job_id))
         raise
 
@@ -354,6 +369,55 @@ async def get_job(
         fallbacks=job.fallbacks,
         duration_seconds=job.duration_seconds,
         error=job.error,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/jobs/{job_id}/cancel
+# ---------------------------------------------------------------------------
+
+
+#: States after which a cancel request is a no-op (job already settled).
+_SETTLED_STATES = frozenset(
+    {
+        JobStatus.COMPLETED,
+        JobStatus.COMPLETED_WITH_FALLBACKS,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+    }
+)
+
+
+@router.post("/{job_id}/cancel", response_model=JobStatusResponse, status_code=202)
+async def cancel_job(
+    request: Request,
+    job: JobManifest = Depends(require_job_access),
+    store: JobStore = Depends(get_job_store),
+) -> JobStatusResponse:
+    """Plan V2.2 — request cooperative cancellation. Idempotent.
+
+    Sets the job's cancellation event; the pipeline's ``should_abort``
+    probe (polled between pages and chunks) trips on the next check and
+    the runner lands the job in CANCELLED with no output promoted. A
+    request on an already-settled job acknowledges without effect —
+    the response body always carries the CURRENT status.
+    """
+    if job.status not in _SETTLED_STATES:
+        requested = request.app.state.cancellations.request(job.job_id)
+        if requested and job.status != JobStatus.CANCEL_REQUESTED:
+            store.update_job(job.job_id, status=JobStatus.CANCEL_REQUESTED)
+
+    fresh = store.get_job(job.job_id) or job
+    return JobStatusResponse(
+        job_id=fresh.job_id,
+        status=fresh.status,
+        total_lines=fresh.total_lines,
+        lines_modified=fresh.lines_modified,
+        chunks_total=fresh.chunks_total,
+        retries=fresh.retries,
+        fallbacks=fresh.fallbacks,
+        duration_seconds=fresh.duration_seconds,
+        error=fresh.error,
     )
 
 
