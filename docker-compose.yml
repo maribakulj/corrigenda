@@ -10,7 +10,13 @@ services:
     env_file:
       - .env
     volumes:
-      - /tmp/app-jobs:/tmp/app-jobs
+      # Named volume, NOT a host bind mount: binding /tmp/app-jobs from
+      # the host masks the image's `chown appuser` (Docker creates the
+      # host dir as root), leaving the non-root container user unable
+      # to write. The named volume is seeded from the image's directory
+      # ownership on first use. To use a host path instead, pre-create
+      # it with the container user's UID (`chown 1000` typically).
+      - jobs-data:/tmp/app-jobs
 
   frontend:
     build: ./frontend
@@ -18,3 +24,6 @@ services:
       - "5173:80"
     depends_on:
       - backend
+
+volumes:
+  jobs-data:
