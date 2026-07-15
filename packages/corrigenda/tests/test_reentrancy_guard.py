@@ -1,10 +1,11 @@
 """Plan V4.1 — the pipeline's concurrency contract is enforced.
 
-Per-run state (counters, producer ops, accepted snapshots, finalisation
-owners) lives on the instance and resets at the start of each run(): a
-second concurrent run() on the same instance would wipe the first's
-state mid-flight. The guard turns that silent corruption into an
-immediate RuntimeError; sequential re-use stays supported.
+V4.1-L: per-run state lives in a fresh RunContext per execution — the
+instance carries only immutable configuration. The reentrancy guard
+stays because the injected observer/output_writer are shared: two
+concurrent runs would interleave events and overwrite outputs. The
+guard turns that into an immediate RuntimeError; sequential re-use
+stays supported and leaks no state across runs.
 """
 
 from __future__ import annotations
@@ -118,5 +119,48 @@ def test_guard_releases_after_a_failed_run() -> None:
             raise
         except Exception:
             pass
+
+    asyncio.run(scenario())
+
+
+def test_sequential_runs_share_no_state() -> None:
+    """V4.1-L acceptance — a second run starts from a virgin RunContext.
+
+    An identity producer corrects nothing; both runs over fresh manifests
+    of the same file must report identical, non-accumulating stats. Under
+    the pre-refactor instance-state model this held only thanks to manual
+    resets at the top of run(); RunContext makes it structural.
+    """
+
+    class _IdentityProducer:
+        async def produce(self, payload: Any, *, policy: Any) -> Any:
+            from corrigenda.core.editing import EditScript, ReplaceLine
+
+            ops = [
+                ReplaceLine(line_id=line.line_id, text=line.ocr_text)
+                for line in payload.lines
+            ]
+            return EditScript(ops=ops), None
+
+    async def scenario() -> None:
+        pipeline = _pipeline(_IdentityProducer())
+        results = []
+        for _ in range(2):
+            manifest = build_document_manifest([(SAMPLE_XML, "sample.xml")])
+            results.append(
+                await pipeline.run(
+                    document_manifest=manifest,
+                    source_files={"sample.xml": SAMPLE_XML},
+                    apply=False,
+                )
+            )
+        first, second = results
+        assert first.retry_count == second.retry_count == 0
+        assert first.fallback_count == second.fallback_count
+        assert first.total_chunks == second.total_chunks
+        assert first.total_reconciled == second.total_reconciled
+        assert first.reconcile_metrics.coherent == second.reconcile_metrics.coherent
+        assert len(first.edit_script.ops) == len(second.edit_script.ops)
+        assert first.usage.input_tokens == second.usage.input_tokens == 0
 
     asyncio.run(scenario())
