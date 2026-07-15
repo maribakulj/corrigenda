@@ -1,40 +1,23 @@
 // ---------------------------------------------------------------------------
-// Enums
+// REST types — derived from the OpenAPI-generated file (Plan V3.5).
+//
+// The CI drift check regenerates api.generated.ts from the backend's
+// live schema; aliasing here means a backend schema change breaks the
+// frontend COMPILATION, not just an adjacent artefact. Only UI-local
+// models and the SSE protocol (not exposed by OpenAPI) stay manual.
 // ---------------------------------------------------------------------------
 
-export type Provider = 'openai' | 'anthropic' | 'mistral' | 'google'
+import type { components } from './api.generated'
+
+export type Provider = components['schemas']['Provider']
+export type JobStatus = components['schemas']['JobStatus']
+export type ModelInfo = components['schemas']['ModelInfo']
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   mistral: 'Mistral',
   google: 'Google Gemini',
-}
-
-export type JobStatus =
-  | 'queued'
-  | 'started'
-  | 'running'
-  | 'completed'
-  // P0-1 — terminal success where some lines fell back to their OCR source
-  // text: outputs are valid and downloadable, but the run is degraded.
-  | 'completed_with_fallbacks'
-  | 'failed'
-  // Plan V2.2 — cooperative cancellation: cancel_requested until the
-  // pipeline's probe trips (between pages/chunks), then cancelled
-  // (terminal, no output).
-  | 'cancel_requested'
-  | 'cancelled'
-
-// ---------------------------------------------------------------------------
-// Model info
-// ---------------------------------------------------------------------------
-
-export interface ModelInfo {
-  id: string
-  label: string
-  supports_structured_output: boolean
-  context_window: number | null
 }
 
 // ---------------------------------------------------------------------------
@@ -293,20 +276,11 @@ export interface JobStats {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/jobs/{job_id} — authoritative status snapshot (JobStatusResponse)
+// GET /api/jobs/{job_id} — authoritative status snapshot (Plan V3.5:
+// aliased to the generated JobStatusResponse, never maintained by hand)
 // ---------------------------------------------------------------------------
 
-export interface JobStatusData {
-  job_id: string
-  status: JobStatus
-  total_lines: number
-  lines_modified: number
-  chunks_total: number
-  retries: number
-  fallbacks: number
-  duration_seconds: number | null
-  error: string | null
-}
+export type JobStatusData = components['schemas']['JobStatusResponse']
 
 // Plan V1.2 — connection state of the SSE stream, deliberately separate
 // from JobStatus: losing the stream is a transport problem, never a job
