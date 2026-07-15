@@ -114,9 +114,10 @@ jobs:
         # Ship pytest-asyncio so async tests in corrigenda don't quietly
         # error-out with "asyncio mode not installed"; pytest-cov gates the
         # package's own coverage (F11 repatriated the algorithm tests here).
+        # hypothesis powers the property-based invariant suite (Plan V4.2).
         run: |
           pip install -e .
-          pip install pytest pytest-asyncio pytest-cov
+          pip install pytest pytest-asyncio pytest-cov hypothesis
       - name: pytest + coverage gate (85%)
         run: pytest tests/ --cov=corrigenda --cov-report=term --cov-report=xml
 
