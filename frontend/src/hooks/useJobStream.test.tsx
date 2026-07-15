@@ -152,21 +152,162 @@ describe('F30 — subscriber_cap_reached backs off, no failed', () => {
   })
 })
 
-// Regression: a genuine connection failure still fails after MAX_RETRIES.
-describe('F30 regression — real connection loss still fails', () => {
-  it('marks failed after repeated onerror without open', () => {
+// ---------------------------------------------------------------------------
+// Plan V1.2 — a lost SSE connection is a TRANSPORT failure, never a job
+// outcome. Exhausted reconnects switch to polling GET /api/jobs/{id};
+// only the server's answer (or a 404) may decide the job's fate.
+// ---------------------------------------------------------------------------
+
+/** Drive the stream through MAX_RETRIES consecutive failures → polling. */
+function exhaustStreamRetries() {
+  for (let i = 0; i < 4; i++) {
+    act(() => {
+      FakeEventSource.last().error()
+    })
+    act(() => {
+      vi.advanceTimersByTime(10000)
+    })
+  }
+}
+
+function fetchResponding(payloads: Array<Record<string, unknown> | 404>) {
+  let call = 0
+  const fn = vi.fn(async () => {
+    const p = payloads[Math.min(call, payloads.length - 1)]
+    call += 1
+    if (p === 404) return { ok: false, status: 404 } as Response
+    return { ok: true, status: 200, json: async () => p } as unknown as Response
+  })
+  vi.stubGlobal('fetch', fn)
+  return fn
+}
+
+describe('V1.2 — stream loss falls back to polling, never fails the job', () => {
+  it('reaches completed via polling when the job succeeded server-side', async () => {
+    const fetchMock = fetchResponding([
+      { job_id: 'job-1', status: 'running', total_lines: 10, lines_modified: 0 },
+      {
+        job_id: 'job-1',
+        status: 'completed',
+        total_lines: 10,
+        lines_modified: 4,
+        chunks_total: 2,
+        retries: 0,
+        fallbacks: 0,
+        duration_seconds: 12.5,
+        error: null,
+      },
+    ])
     const { result } = renderHook(() => useJobStream('job-1'))
-    // Three drops WITHOUT a successful open each schedule a reconnect;
-    // the fourth trips the MAX_RETRIES=3 ceiling → failed.
-    for (let i = 0; i < 4; i++) {
-      act(() => {
-        FakeEventSource.last().error()
-      })
-      act(() => {
-        vi.advanceTimersByTime(10000)
-      })
-    }
+
+    exhaustStreamRetries()
+    expect(result.current.status).not.toBe('failed')
+    expect(result.current.streamState).toBe('polling')
+
+    // First poll fires immediately; second after the 5s interval.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5001)
+    })
+
+    expect(fetchMock).toHaveBeenCalled()
+    expect(result.current.status).toBe('completed')
+    // Structured stats from the snapshot — the download panel works.
+    expect(result.current.finalStats).toEqual({
+      lines_modified: 4,
+      hyphen_pairs: 0,
+      duration_seconds: 12.5,
+    })
+  })
+
+  it('adopts the server verdict when the job really failed', async () => {
+    fetchResponding([
+      {
+        job_id: 'job-1',
+        status: 'failed',
+        total_lines: 0,
+        lines_modified: 0,
+        chunks_total: 0,
+        retries: 3,
+        fallbacks: 0,
+        duration_seconds: null,
+        error: 'provider exploded',
+      },
+    ])
+    const { result } = renderHook(() => useJobStream('job-1'))
+    exhaustStreamRetries()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
     expect(result.current.status).toBe('failed')
+    expect(result.current.logs.some((l) => /provider exploded/.test(l.message))).toBe(true)
+  })
+
+  it('treats a 404 snapshot as the one authoritative dead end', async () => {
+    fetchResponding([404])
+    const { result } = renderHook(() => useJobStream('job-1'))
+    exhaustStreamRetries()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(result.current.status).toBe('failed')
+  })
+
+  it('keeps polling through transport errors instead of failing', async () => {
+    const fn = vi.fn(async () => {
+      throw new Error('network down')
+    })
+    vi.stubGlobal('fetch', fn)
+    const { result } = renderHook(() => useJobStream('job-1'))
+    exhaustStreamRetries()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(fn.mock.calls.length).toBeGreaterThan(2)
+    expect(result.current.status).not.toBe('failed')
+    expect(result.current.streamState).toBe('polling')
+  })
+
+  it('reconnect() reopens a live stream from polling mode', async () => {
+    fetchResponding([{ job_id: 'job-1', status: 'running', total_lines: 0, lines_modified: 0 }])
+    const { result } = renderHook(() => useJobStream('job-1'))
+    exhaustStreamRetries()
+    expect(result.current.streamState).toBe('polling')
+
+    const before = FakeEventSource.instances.length
+    act(() => {
+      result.current.reconnect()
+    })
+    expect(FakeEventSource.instances.length).toBe(before + 1)
+    act(() => {
+      FakeEventSource.last().open()
+    })
+    expect(result.current.streamState).toBe('live')
+  })
+})
+
+describe('V1.2 — terminal stats are structured, not parsed from log text', () => {
+  it('exposes finalStats from the SSE completed payload', () => {
+    const { result } = renderHook(() => useJobStream('job-1'))
+    act(() => {
+      FakeEventSource.last().dispatch('completed', {
+        total_lines: 20,
+        lines_modified: 5,
+        hyphen_pairs_total: 3,
+        duration_seconds: 7.25,
+      })
+    })
+    // Survives ANY rewording of the log sentence.
+    expect(result.current.finalStats).toEqual({
+      lines_modified: 5,
+      hyphen_pairs: 3,
+      duration_seconds: 7.25,
+    })
   })
 })
 

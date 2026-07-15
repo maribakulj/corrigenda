@@ -282,6 +282,28 @@ export interface JobStats {
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/jobs/{job_id} — authoritative status snapshot (JobStatusResponse)
+// ---------------------------------------------------------------------------
+
+export interface JobStatusData {
+  job_id: string
+  status: JobStatus
+  total_lines: number
+  lines_modified: number
+  chunks_total: number
+  retries: number
+  fallbacks: number
+  duration_seconds: number | null
+  error: string | null
+}
+
+// Plan V1.2 — connection state of the SSE stream, deliberately separate
+// from JobStatus: losing the stream is a transport problem, never a job
+// outcome. 'polling' means SSE reconnects were exhausted and the hook
+// now follows the job via GET /api/jobs/{id}.
+export type StreamState = 'idle' | 'live' | 'reconnecting' | 'polling'
+
+// ---------------------------------------------------------------------------
 // Line trace (Sprint 5bis / Sprint 6 debug)
 // ---------------------------------------------------------------------------
 

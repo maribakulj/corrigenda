@@ -1,6 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
-import { withToken } from '../api/client'
-import type { JobProgress, JobStatus, LogEntry, LogType, SSEEventData } from '../types'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { fetchJobStatus, withToken } from '../api/client'
+import type {
+  JobProgress,
+  JobStats,
+  JobStatus,
+  LogEntry,
+  LogType,
+  SSEEventData,
+  StreamState,
+} from '../types'
 
 const MAX_LOGS = 500
 
@@ -34,12 +42,22 @@ interface UseJobStreamReturn {
   progress: JobProgress
   status: JobStatus | null
   isRunning: boolean
+  // Plan V1.2 — transport state, separate from job status. 'polling'
+  // means the live stream is gone and the job is followed via GET.
+  streamState: StreamState
+  // Terminal statistics from the STRUCTURED completed payload (SSE) or
+  // the status snapshot (polling) — never parsed out of a log message.
+  finalStats: JobStats | null
+  // Manual attempt to re-open the SSE stream while polling.
+  reconnect: () => void
 }
 
 export function useJobStream(jobId: string | null): UseJobStreamReturn {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [progress, setProgress] = useState<JobProgress>(INITIAL_PROGRESS)
   const [status, setStatus] = useState<JobStatus | null>(null)
+  const [streamState, setStreamState] = useState<StreamState>('idle')
+  const [finalStats, setFinalStats] = useState<JobStats | null>(null)
 
   // Refs survive StrictMode's double-effect: the OLD code kept retryCount
   // and the reconnect setTimeout in closures so a setStatus updater
@@ -58,6 +76,10 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
   // at 2s forever).
   const capBackoffRef = useRef(false)
   const capAttemptRef = useRef(0)
+  // Plan V1.2 — polling fallback timer + the manual-reconnect closure
+  // (rebuilt on every effect run so it captures the current jobId).
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reconnectFnRef = useRef<(() => void) | null>(null)
 
   // Mirror status into a ref so the error handler can read the latest
   // value without triggering an effect re-run on every status change.
@@ -65,12 +87,22 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
     statusRef.current = status
   }, [status])
 
+  // Mirror progress for the polling path: the status snapshot carries
+  // no hyphen count, so completion-via-poll reuses the streamed value.
+  const progressRef = useRef<JobProgress>(INITIAL_PROGRESS)
+  useEffect(() => {
+    progressRef.current = progress
+  }, [progress])
+
   useEffect(() => {
     if (!jobId) {
       // Reset all state when job is cleared (e.g. "New correction" clicked)
       setLogs([])
       setProgress(INITIAL_PROGRESS)
       setStatus(null)
+      setStreamState('idle')
+      setFinalStats(null)
+      reconnectFnRef.current = null
       return
     }
 
@@ -78,6 +110,8 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
     setLogs([])
     setProgress(INITIAL_PROGRESS)
     setStatus('queued')
+    setStreamState('live')
+    setFinalStats(null)
     retryCountRef.current = 0
     capBackoffRef.current = false
     capAttemptRef.current = 0
@@ -85,6 +119,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
     let cancelled = false
     const MAX_RETRIES = 3
     const CAP_BACKOFF_MAX_MS = 30_000
+    const POLL_INTERVAL_MS = 5000
     // Mirror of the backend's emit sites. Synchronisation is enforced
     // by backend/tests/test_sse_event_contract.py — any drift fails CI.
     const EVENTS = [
@@ -226,6 +261,14 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
             lines_done: totalLines,
             hyphen_pairs_reconciled: hyphenPairs,
           }))
+          // Plan V1.2 — keep the STRUCTURED terminal payload. The UI
+          // used to regex-parse the log sentence below; any rewording
+          // silently zeroed the displayed statistics.
+          setFinalStats({
+            lines_modified: linesModified,
+            hyphen_pairs: hyphenPairs,
+            duration_seconds: duration,
+          })
           setLogs((l) =>
             appendLog(
               l,
@@ -344,6 +387,89 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
       }
     }
 
+    // Plan V1.2 — polling fallback. A lost SSE connection is a transport
+    // problem, never a job outcome: the server task keeps running. When
+    // reconnects are exhausted, follow the job via its authoritative
+    // status endpoint instead of declaring it failed (which made the
+    // download/diff/layout of a SUCCESSFUL job unreachable).
+    function startPolling() {
+      setStreamState('polling')
+      let transportErrorLogged = false
+      const poll = async () => {
+        if (cancelled) return
+        let snap: Awaited<ReturnType<typeof fetchJobStatus>> | undefined
+        try {
+          snap = await fetchJobStatus(jobId as string)
+        } catch {
+          // Transport failure — keep polling; log it once, not per tick.
+          if (!transportErrorLogged) {
+            transportErrorLogged = true
+            setLogs((l) =>
+              appendLog(l, makeLog('warning', 'Status poll failed — will keep retrying')),
+            )
+          }
+        }
+        if (cancelled) return
+        if (snap === null) {
+          // 404: evicted or unknown — the one authoritative dead end.
+          setStatus('failed')
+          setLogs((l) =>
+            appendLog(l, makeLog('error', 'Job no longer exists on the server (evicted?)')),
+          )
+          return
+        }
+        if (snap !== undefined) {
+          transportErrorLogged = false
+          setStatus(snap.status)
+          if (snap.status === 'completed' || snap.status === 'completed_with_fallbacks') {
+            const stats: JobStats = {
+              lines_modified: snap.lines_modified,
+              // The snapshot has no hyphen count; reuse the last streamed value.
+              hyphen_pairs: progressRef.current.hyphen_pairs_reconciled,
+              duration_seconds: snap.duration_seconds ?? 0,
+            }
+            setFinalStats(stats)
+            setProgress((p) => ({
+              ...p,
+              lines_done: snap.total_lines || p.lines_total || p.lines_done,
+            }))
+            setLogs((l) =>
+              appendLog(
+                l,
+                makeLog(
+                  'success',
+                  `Completed — ${stats.lines_modified} line(s) modified, ${stats.hyphen_pairs} hyphen pair(s), ${stats.duration_seconds.toFixed(1)}s`,
+                ),
+              ),
+            )
+            if (snap.status === 'completed_with_fallbacks') {
+              setLogs((l) =>
+                appendLog(
+                  l,
+                  makeLog(
+                    'warning',
+                    `Degraded success — ${snap.fallbacks} line(s) fell back to their OCR source text.`,
+                  ),
+                ),
+              )
+            }
+            return
+          }
+          if (snap.status === 'failed') {
+            setLogs((l) =>
+              appendLog(l, makeLog('error', `Failed: ${snap.error ?? 'unknown error'}`)),
+            )
+            return
+          }
+        }
+        pollTimeoutRef.current = setTimeout(() => {
+          pollTimeoutRef.current = null
+          void poll()
+        }, POLL_INTERVAL_MS)
+      }
+      void poll()
+    }
+
     function attach(es: EventSource) {
       for (const name of EVENTS) {
         es.addEventListener(name, (e: MessageEvent) => handleEvent(name, e.data))
@@ -354,6 +480,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
       // even though every reconnection succeeded).
       es.onopen = () => {
         retryCountRef.current = 0
+        setStreamState('live')
       }
       es.onerror = () => {
         es.close()
@@ -368,6 +495,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
         if (capBackoffRef.current) {
           capBackoffRef.current = false
           capAttemptRef.current += 1
+          setStreamState('reconnecting')
           const delay = Math.min(2000 * 2 ** (capAttemptRef.current - 1), CAP_BACKOFF_MAX_MS)
           setLogs((l) =>
             appendLog(
@@ -389,14 +517,23 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
         }
 
         if (retryCountRef.current >= MAX_RETRIES) {
+          // Plan V1.2 — do NOT mark the job failed: the stream is gone,
+          // the job isn't. Fall back to polling the authoritative status.
           setLogs((l) =>
-            appendLog(l, makeLog('error', 'Connection to server lost after multiple retries')),
+            appendLog(
+              l,
+              makeLog(
+                'warning',
+                'Live stream lost after multiple retries — following the job via status polling',
+              ),
+            ),
           )
-          setStatus('failed')
+          startPolling()
           return
         }
 
         retryCountRef.current += 1
+        setStreamState('reconnecting')
         const attempt = retryCountRef.current
         const delay = attempt * 2000
         setLogs((l) =>
@@ -423,18 +560,46 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
     esRef.current = es
     attach(es)
 
+    // Plan V1.2 — manual reconnect (UI button while polling): stop the
+    // poller, reset the retry budget and try a fresh EventSource. If it
+    // fails again, onerror re-enters the retry→polling ladder.
+    reconnectFnRef.current = () => {
+      if (cancelled) return
+      const s = statusRef.current
+      if (s === 'completed' || s === 'completed_with_fallbacks' || s === 'failed') return
+      if (pollTimeoutRef.current !== null) {
+        clearTimeout(pollTimeoutRef.current)
+        pollTimeoutRef.current = null
+      }
+      retryCountRef.current = 0
+      setStreamState('reconnecting')
+      setLogs((l) => appendLog(l, makeLog('info', 'Reconnecting to the live stream…')))
+      const fresh = new EventSource(withToken(`/api/jobs/${jobId}/events`))
+      esRef.current = fresh
+      attach(fresh)
+    }
+
     return () => {
       cancelled = true
       if (retryTimeoutRef.current !== null) {
         clearTimeout(retryTimeoutRef.current)
         retryTimeoutRef.current = null
       }
+      if (pollTimeoutRef.current !== null) {
+        clearTimeout(pollTimeoutRef.current)
+        pollTimeoutRef.current = null
+      }
+      reconnectFnRef.current = null
       esRef.current?.close()
       esRef.current = null
     }
   }, [jobId])
 
+  const reconnect = useCallback(() => {
+    reconnectFnRef.current?.()
+  }, [])
+
   const isRunning = status === 'queued' || status === 'started' || status === 'running'
 
-  return { logs, progress, status, isRunning }
+  return { logs, progress, status, isRunning, streamState, finalStats, reconnect }
 }

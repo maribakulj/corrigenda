@@ -30,7 +30,6 @@ export default function App() {
   const [jobId, setJobId] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const [finalStats, setFinalStats] = useState<JobStats | null>(null)
   const [diffData, setDiffData] = useState<DiffData | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
   const [diffError, setDiffError] = useState(false)
@@ -57,12 +56,11 @@ export default function App() {
     reset: resetModels,
   } = useModels()
 
-  // SSE stream
-  const { logs, progress, status, isRunning } = useJobStream(jobId)
+  // SSE stream — streamState is transport-only (Plan V1.2): a lost
+  // stream downgrades to status polling, it never fails the job.
+  const { logs, progress, status, isRunning, streamState, finalStats, reconnect } =
+    useJobStream(jobId)
 
-  // Capture completed stats from the SSE logs
-  // (we pull them from the last 'success' log message via progress state)
-  // Actually we compute stats from progress + last completed event
   const isDone = status === 'completed' || status === 'completed_with_fallbacks'
   const isFailed = status === 'failed'
 
@@ -134,17 +132,6 @@ export default function App() {
       })
   }, [debugMode, isDone, jobId, traceData, traceLoading, traceError])
 
-  // Capture stats when completed
-  useEffect(() => {
-    if (isDone && !finalStats && progress.lines_total > 0) {
-      setFinalStats({
-        lines_modified: 0, // will be set via log parsing below
-        hyphen_pairs: progress.hyphen_pairs_reconciled,
-        duration_seconds: 0,
-      })
-    }
-  }, [isDone, finalStats, progress.lines_total, progress.hyphen_pairs_reconciled])
-
   const canPlay =
     files.length > 0 &&
     provider !== null &&
@@ -157,7 +144,6 @@ export default function App() {
     if (!canPlay || !provider || !selectedModel) return
     setSubmitting(true)
     setSubmitError(null)
-    setFinalStats(null)
     try {
       const res = await createJob(files, provider, apiKey, selectedModel)
       setJobId(res.job_id)
@@ -172,7 +158,6 @@ export default function App() {
     setFiles([])
     setJobId(null)
     setSubmitError(null)
-    setFinalStats(null)
     setDiffData(null)
     setDiffLoading(false)
     setDiffError(false)
@@ -190,21 +175,11 @@ export default function App() {
     setResetKey((k) => k + 1) // Force FileUpload to remount and clear internal state
   }
 
-  // Extract stats from the success log entry when completed
-  const completedLog = logs.find((l) => l.type === 'success' && l.message.startsWith('Completed'))
-  const displayStats: JobStats | null = completedLog
-    ? (() => {
-        const m = completedLog.message.match(/(\d+) line\(s\) modified.*?(\d+) hyphen.*?([\d.]+)s/)
-        if (m) {
-          return {
-            lines_modified: parseInt(m[1]),
-            hyphen_pairs: parseInt(m[2]),
-            duration_seconds: parseFloat(m[3]),
-          }
-        }
-        return finalStats
-      })()
-    : finalStats
+  // Plan V1.2 — terminal statistics come from the STRUCTURED completed
+  // payload kept by the hook (SSE event or status snapshot). The old
+  // regex over the "Completed …" log sentence silently zeroed the stats
+  // on any rewording.
+  const displayStats: JobStats | null = finalStats
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
@@ -355,6 +330,28 @@ export default function App() {
               Progress
             </h2>
             <JobProgressPanel progress={progress} status={status} />
+            {/* Plan V1.2 — transport banner: the stream is gone but the
+                job continues server-side; polling keeps the status
+                authoritative and the button retries the live stream. */}
+            {streamState === 'polling' && !isDone && !isFailed && (
+              <div
+                role="status"
+                className="mt-3 flex items-center justify-between gap-3 rounded border
+                           border-amber-700/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-200/80"
+              >
+                <span>
+                  Connexion temps réel perdue — le job continue côté serveur, suivi par sondage du
+                  statut.
+                </span>
+                <button
+                  onClick={reconnect}
+                  className="shrink-0 font-mono text-amber-300 border border-amber-500/40
+                             hover:bg-amber-500/10 rounded px-2 py-1 transition-colors"
+                >
+                  Reconnecter
+                </button>
+              </div>
+            )}
           </section>
         )}
 

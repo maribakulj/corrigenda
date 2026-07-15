@@ -1,4 +1,4 @@
-import type { DiffData, LayoutData, ModelInfo, Provider, TraceData } from '../types'
+import type { DiffData, JobStatusData, LayoutData, ModelInfo, Provider, TraceData } from '../types'
 
 // proxied via vite → http://localhost:8000
 const BASE = ''
@@ -103,6 +103,24 @@ export function fetchDiff(jobId: string): Promise<DiffData> {
 
 export function fetchTrace(jobId: string): Promise<TraceData> {
   return apiGet<TraceData>(`${BASE}/api/jobs/${jobId}/trace`, 'Failed to fetch trace')
+}
+
+// ---------------------------------------------------------------------------
+// fetchJobStatus — authoritative job status (polling fallback when SSE dies)
+// ---------------------------------------------------------------------------
+
+/**
+ * Plan V1.2 — returns `null` on 404 (job evicted/unknown: the ONE case
+ * where giving up is correct) and throws on transport errors so the
+ * caller can keep polling: a dead network is never a job outcome.
+ */
+export async function fetchJobStatus(jobId: string): Promise<JobStatusData | null> {
+  const resp = await fetch(`${BASE}/api/jobs/${jobId}`, { headers: tokenHeaders() })
+  if (resp.status === 404) return null
+  if (!resp.ok) {
+    throw new Error(`Status poll failed: ${resp.status}`)
+  }
+  return resp.json() as Promise<JobStatusData>
 }
 
 // ---------------------------------------------------------------------------
