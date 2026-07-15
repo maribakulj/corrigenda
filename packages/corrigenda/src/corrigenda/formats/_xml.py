@@ -76,9 +76,9 @@ def make_safe_parser() -> etree.XMLParser:
 def classified_parse_errors(source_name: str) -> Iterator[None]:
     """§8.4 — a parser may only raise classified :class:`CorrectionError`s.
 
-    Wrap a parser entry point's body in this context manager so hostile or
-    malformed input (fuzzing V4.2 phase 2) can never escape as an
-    unclassified exception:
+    Wrap a parser entry point's body in this context manager so hostile
+    or malformed input can never escape as an unclassified exception
+    (ADR-008; pinned by the fuzz suite):
 
       - ``etree.XMLSyntaxError`` (malformed XML, encoding mismatches,
         truncated files) → :class:`ParseError`;

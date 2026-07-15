@@ -38,7 +38,7 @@ def _body_has_offset(body: str) -> bool:
 def strip_offset_groups(custom: str) -> tuple[str, int]:
     """Return ``(new_custom, removed_count)`` with offset-anchored groups gone.
 
-    Structural groups are preserved VERBATIM (Audit-F12): each kept group
+    Structural groups are preserved VERBATIM: each kept group
     is the exact source slice (``match.group(0)``), and the original text
     BETWEEN two kept groups survives untouched when no removed group sat
     there (non-Transkribus exporters legitimately write

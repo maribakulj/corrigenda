@@ -35,9 +35,8 @@ migrations through the gap.
     numeric thresholds are deliberately MORE permissive than Stage B's
     (PART1 growth: 2 words at A vs 1 at B — see ``GuardConfig``): a cheap
     retry only fires on gross drift, then the strict Stage B bound decides
-    what actually survives reconciliation. (P2-7 — this line used to call
-    Stage A "the strictest", contradicting the config's documented
-    values; "strict" here always meant the remedy, not the thresholds.)
+    what actually survives reconciliation ("strict" describes the
+    remedy, not the thresholds).
   - Stage B catches drift the LLM produced despite the retry; the fallback
     preserves the OCR pair atomically. Its predicates live in
     ``hyphenation.py`` beside their sole caller (``reconcile_hyphen_pair``).

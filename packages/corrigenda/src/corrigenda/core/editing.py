@@ -69,10 +69,10 @@ class MatchAnchor(BaseModel):
     the op is rejected. An explicit integer — **including 0 for "the
     first occurrence"** — always selects that occurrence.
 
-    P2-8 — ``occurrence`` used to default to ``0``, conflating "producer
-    said nothing" with "producer wants the first occurrence": naming the
-    first of several repeats was *inexpressible* (0 + multiple matches →
-    rejected as ambiguous). ``int | None`` separates the two meanings.
+    ``occurrence`` is ``int | None``, never defaulted to ``0``: a
+    default would conflate "producer said nothing" with "producer wants
+    the first occurrence", making the first of several repeats
+    inexpressible (0 + multiple matches → rejected as ambiguous).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -89,7 +89,7 @@ class ReplaceLine(BaseModel):
     op: Literal["replace_line"] = "replace_line"
     line_id: str
     text: str
-    # Wave-1 review (F4 residual) — line_ids may legitimately repeat across
+    # line_ids may legitimately repeat across
     # FILES; only page_ids are document-unique. The final edit_script stamps
     # this so a consumer can attribute every op to its file. Optional and
     # additive: hand-written scripts without it keep their old semantics,
@@ -184,7 +184,7 @@ def normalize_anchor(
     if not starts:
         return None, R_ANCHOR_NOT_FOUND
     if anchor.occurrence is None:
-        # P2-8 — no explicit occurrence: the match must be unique.
+        # No explicit occurrence: the match must be unique.
         if len(starts) > 1:
             return None, R_ANCHOR_AMBIGUOUS
         s = starts[0]
@@ -202,7 +202,7 @@ def normalize_anchor(
 
 
 def _has_newline(text: str) -> bool:
-    # Audit-F10 — twin of the validator's single-line gate: every
+    # Twin of the validator's single-line gate: every
     # str.splitlines boundary counts, not just \n/\r (the shared
     # predicate keeps the two enforcement points from drifting).
     return has_line_separator(text)
@@ -213,7 +213,7 @@ def _changed_chars(original: str, replacement: str) -> int:
     ``replacement`` — the size of the differing window after trimming the
     common prefix and suffix.
 
-    P2-9 — the E4 line budget used to sum ``abs(len(replacement) -
+    The E4 line budget must NOT sum ``abs(len(replacement) -
     len(original))``: a length-*neutral* rewrite of 100 characters cost 0,
     so ``edit_line_max_changed_chars`` bounded length drift, not the
     amount of text changed — much weaker than the invariant's name. The
@@ -338,7 +338,7 @@ def _apply_line_ops(
             )
             continue
         accepted.append((rng, text))
-        # P2-9 — count the characters the op actually changes, not the
+        # Count the characters the op actually changes, not the
         # length delta (see _changed_chars).
         changed_chars += _changed_chars(canonical[rng.start : rng.end], text)
         prev_start = rng.start
@@ -389,7 +389,7 @@ def apply_edit_script(
     is NOT run here — the pipeline applies it afterwards to the resulting
     line text, identically for ``replace_line`` and ``replace_span``.
 
-    ``page_id`` (wave-1 review, F4 residual) scopes replay to one page of a
+    ``page_id`` scopes replay to one page of a
     multi-file script: ops stamped with a DIFFERENT page_id are silently
     out of scope (not rejections — they belong to another file), so a
     consumer can replay the whole final edit_script one page at a time

@@ -140,7 +140,7 @@ class RulesProducer:
         text: str,
         chosen: list[tuple[int, int, str, bool]],
     ) -> list[tuple[int, int, str]]:
-        """Audit-F11 — re-validate tokens carrying SEVERAL composed edits.
+        """Re-validate tokens carrying SEVERAL composed edits.
 
         ``_word_ok`` vets each guarded edit against the ORIGINAL token in
         isolation, so two individually-valid edits composing inside one

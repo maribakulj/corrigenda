@@ -23,10 +23,10 @@ from corrigenda.formats._xml import (
 def _int_attr(el: etree._Element, name: str, default: int = 0) -> int:
     """Read an integer attribute, tolerating MISSING, EMPTY and FLOAT values.
 
-    Pre-L10 the corrigenda parser used ``int(el.get(name, 0))`` which fails
-    on ``WIDTH=""`` (legitimate output from some ALTO producers) because
-    ``get(name, 0)`` returns the empty string for present-but-empty attrs —
-    the default only fires for MISSING attrs (L10/B3).
+    A bare ``int(el.get(name, 0))`` fails on ``WIDTH=""`` (legitimate
+    output from some ALTO producers) because ``get(name, 0)`` returns the
+    empty string for present-but-empty attrs — the default only fires for
+    MISSING attrs.
 
     Spec F5 — some ALTO producers emit float-valued coordinates
     (``HPOS="123.0"``, ``WIDTH="12.5"``); floats truncate toward zero. A

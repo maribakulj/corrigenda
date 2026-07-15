@@ -69,10 +69,10 @@ def polygon_to_bbox(points: str) -> tuple[int, int, int, int]:
             # with a good x but a bad y (heritage-OCR garbage) is skipped
             # atomically. Appending x first left a half-added pair (xs longer
             # than ys), inflating the bbox with a coordinate the docstring
-            # promises to skip. Audit-F9 — the shared strict parser also
-            # surfaces inf/overflow-shaped coordinates as ValueError
-            # (pre-fix ``int(float("inf"))`` escaped as OverflowError and
-            # aborted the whole file, violating the skip promise above).
+            # promises to skip. The shared strict parser also surfaces
+            # inf/overflow-shaped coordinates as ValueError (a bare
+            # ``int(float("inf"))`` would escape as OverflowError and
+            # abort the whole file, violating the skip promise above).
             xi = parse_int_tolerant(x_str, strict=True)
             yi = parse_int_tolerant(y_str, strict=True)
         except ValueError:

@@ -1,12 +1,15 @@
 # Plan de remédiation — 15 juillet 2026
 
-Statut : **Vagues 1, 2, 3 livrées ; Vague 4 livrée pour sa partie automatisable** (V1.1 `bb8b49c`, V1.2 `149f7c1`, V1.3 `84a2d16`, V2.5 `f90e9f1`, V2.3 `b613045`, V2.2 `0038cf4`, V2.1 `2374b92`, V2.4 `bb14a28`, V3.2 `6182ae8`, V3.3 `63f5c46`, V3.4 `29f0277`, V3.5 `ff631cb`, V3.1 `2c8b437`, V4.1-S, V4.2 phase 1, V4.3, V4.4 squelette ADR) · **Critère « app demo honnête » : atteint.**
+Statut : **Vagues 1, 2, 3 livrées ; Vague 4 livrée intégralement sauf V4.5** (V1.1 `bb8b49c`, V1.2 `149f7c1`, V1.3 `84a2d16`, V2.5 `f90e9f1`, V2.3 `b613045`, V2.2 `0038cf4`, V2.1 `2374b92`, V2.4 `bb14a28`, V3.2 `6182ae8`, V3.3 `63f5c46`, V3.4 `29f0277`, V3.5 `ff631cb`, V3.1 `2c8b437`, V4.1-S, V4.1-L, V4.2 phases 1–3, V4.3 complet, V4.4 passe complète + ADR 001–008) · **Critère « app demo honnête » : atteint.**
 
-Reste ouvert avant le tag `corrigenda-v1.0.0` (V4) :
-- **V4.1-L** — extraction `RunContext` (pipeline stateless par exécution) ; le contrat est documenté et GARDÉ (`RuntimeError` sur run concurrent) en attendant.
-- **V4.2 phases 2–3** — fuzzing XML systématique et corpus externe non vu en dev (les 3 propriétés Hypothesis noyau sont en CI).
-- **V4.3 reliquat** — attestations de provenance + SBOM dans le workflow de publication : nécessitent d'épingler de nouvelles actions par SHA, volontairement non devinés hors-ligne. Le gate « CI verte sur le SHA tagué » est livré.
-- **V4.4 passe complète** — nettoyage des commentaires d'audit → ADR, après V4.1-L (mêmes fichiers).
+Détail des livraisons V4 tardives :
+- **V4.1-L** — `RunContext` extrait : le pipeline ne porte plus que la configuration immuable ; la garde de réentrance reste (observer/output_writer partagés — ADR-005 mis à jour).
+- **V4.2 phase 2** — suite de fuzzing (`test_fuzz_xml.py`) + enveloppe `classified_parse_errors` : plus aucune erreur non classée ne sort des parseurs (ADR-008).
+- **V4.2 phase 3** — corpus externe Gallica épinglé (`tests/external_corpus/`), job CI `corrigenda-external-corpus` non bloquant (promotion en bloquant = décision explicite).
+- **V4.3 reliquat** — attestations PEP 740 activées explicitement sur l'action de publication déjà épinglée (aucun nouveau SHA requis) + SBOM CycloneDX générée depuis le venv de smoke-install, jointe aux artefacts.
+- **V4.4** — passe complète : plus aucune référence `Audit-Fxx`/`P0-x`/`Wave-N`/`L10/x` dans `src/` ; les décisions récurrentes sont désormais ADR-006 (événements, pas de logs), ADR-007 (identités dupliquées refusées), ADR-008 (taxonomie d'erreurs).
+
+Reste ouvert avant le tag `corrigenda-v1.0.0` :
 - **V4.5** — revue humaine indépendante de l'API publique : par nature externe ; ne pas taguer avant.
 
 Vague 5 (institutional) : sur déclencheur uniquement, inchangée.

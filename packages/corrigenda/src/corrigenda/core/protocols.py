@@ -59,7 +59,7 @@ class ProviderPermanentError(Exception):
     schema the vendor definitively rejects — the client-side 4xx family
     other than 429.
 
-    P0-1 — semantics contract: the pipeline treats this as FATAL for the
+    ADR-008 — semantics contract: the pipeline treats this as FATAL for the
     whole run. It is never retried, never downgraded, and NEVER converted
     into an OCR fallback: a run whose provider rejected every call must
     fail loudly, not report success with silently uncorrected text.

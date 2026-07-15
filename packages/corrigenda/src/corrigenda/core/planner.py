@@ -1,6 +1,6 @@
 """Chunk planner: splits a page's lines into LLM-sized chunks.
 
-Budget semantics (P1-8): ``max_input_chars_per_request`` bounds the sum of
+Budget semantics: ``max_input_chars_per_request`` bounds the sum of
 the chunk lines' RAW OCR text — it deliberately excludes the JSON
 envelope, system prompt, neighbour context and optional geometry the
 enrichment step adds (all of which grow roughly linearly with the same
@@ -308,7 +308,7 @@ def _try_window(
     start = 0
 
     while start < n:
-        # P1-8 — a window is bounded by BOTH the line count and the char
+        # A window is bounded by BOTH the line count and the char
         # budget (historically only PAGE/BLOCK honoured the char budget;
         # a window of pathologically long lines blew straight past
         # max_input_chars_per_request). At least one line always enters,
@@ -344,14 +344,14 @@ def _try_window(
         # Step relative to the ACTUAL core window when the char budget
         # shortened it, so nothing is skipped (a fixed step would jump
         # past unvisited lines). When the budget did not bind, keep the
-        # historical fixed step exactly (byte-parity with the pre-P1-8
+        # historical fixed step exactly (byte-parity with the fixed-step
         # planner, including its tail-window behaviour near page end).
         budget_bound = core_end < min(start + window_size, n)
         if budget_bound:
             next_start = max(start + 1, core_end - overlap)
         else:
             next_start = start + (window_size - overlap)
-        # Defensive progress guard: the P2-5 validator forbids
+        # Defensive progress guard: the config validator forbids
         # overlap >= window_size, but pydantic's model_copy(update=...)
         # BYPASSES validation — without this clamp such a config spins
         # this loop forever (review finding, reproduced).
@@ -401,7 +401,7 @@ def _plan_line(
         # All lines linked by forward hyphen pairs must stay together.
         chain_ids = [lm.line_id]
         j = i
-        # P1-8 — the chain follow is capped: an adversarial page where
+        # The chain follow is capped: an adversarial page where
         # every line ends in a dash would otherwise produce one unbounded
         # request.
         while j < len(lines) and len(chain_ids) < config.max_lines_per_request:
@@ -417,7 +417,7 @@ def _plan_line(
             else:
                 break
 
-        # Review fix (pair atomicity, CLAUDE.md): if the cap cut the chain
+        # Pair atomicity (core invariant): if the cap cut the chain
         # BETWEEN a forward line and its partner, the two halves would sit
         # in different chunks as a still-linked pair — the validator skips
         # such pairs (both members must be in-chunk) and the reconciler
@@ -519,7 +519,7 @@ def plan_page(
     return _try_window(page, document_id, config)
 
 
-# --- __all__ (Stage 3 audit remediation) ---
+# --- public surface ---
 __all__ = [
     "downgrade_granularity",
     "plan_page",

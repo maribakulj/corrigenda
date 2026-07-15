@@ -87,7 +87,7 @@ def _assign_hyphen_roles(lines: list[LineManifest]) -> None:
 def _reading_order_refs(page_el: etree._Element, ns: str) -> list[str]:
     """Region ids in the page's declared ``ReadingOrder``, flattened.
 
-    P1-1 — ``OrderedGroup`` children are visited by ascending ``@index``
+    ``OrderedGroup`` children are visited by ascending ``@index``
     (document order breaks ties / missing indexes), ``UnorderedGroup``
     children in document order; groups nest arbitrarily. Returns ``[]``
     when the page declares no reading order. Unknown children are skipped.
@@ -126,10 +126,9 @@ def _reading_order_refs(page_el: etree._Element, ns: str) -> list[str]:
 def _regions_in_reading_order(page_el: etree._Element, ns: str) -> list[etree._Element]:
     """Every ``TextRegion`` under the page, in reading order.
 
-    P1-1 — the historical ``findall`` only saw *direct* children of
-    ``Page``, silently dropping regions nested inside another region
-    (PAGE's region hierarchy). ``iter`` collects the whole subtree in
-    document order; each region later contributes only its *direct*
+    Regions may nest inside other regions (PAGE's region hierarchy);
+    the whole subtree is collected in document order so none is dropped.
+    Each region later contributes only its *direct*
     ``TextLine`` children, so nested regions' lines are attributed to
     their own block, never double-counted.
 
@@ -139,8 +138,8 @@ def _regions_in_reading_order(page_el: etree._Element, ns: str) -> list[etree._E
     that only group some articles/tables — is ignored entirely and
     document order is kept: yanking the referenced regions ahead of every
     unreferenced one would reorder text the declaration said nothing
-    about (review fix; conservative, mirrors the ALTO IDNEXT fallback
-    rule: never guess on an incomplete declaration).
+    about (conservative, mirrors the ALTO IDNEXT fallback rule: never
+    guess on an incomplete declaration).
     """
     regions = list(page_el.iter(_tag("TextRegion", ns)))
     refs = _reading_order_refs(page_el, ns)
@@ -176,7 +175,7 @@ def parse_page_file(
 
     §8.4 — raises only classified errors: malformed XML, encoding
     mismatches, unreadable files and non-numeric values all surface as
-    :class:`~corrigenda.errors.ParseError` (V4.2 phase 2), never as a
+    :class:`~corrigenda.errors.ParseError` (ADR-008), never as a
     bare lxml/OS/ValueError.
     """
     with classified_parse_errors(source_name):
@@ -269,10 +268,10 @@ def _parse_page_file(
             )
         )
 
-    # P0-5 — duplicate IDs within one file make every downstream
+    # ADR-007 — duplicate IDs within one file make every downstream
     # correction-to-line association ambiguous. Refuse explicitly.
     ensure_unique_identities(pages, source_name)
-    # Review fix — the rewriter matches TextLine ids over the WHOLE
+    # The rewriter matches TextLine ids over the WHOLE
     # document tree; the parse-time gate must scan the same scope so a
     # duplicate never surfaces only at rewrite time (after the full
     # producer spend).

@@ -98,7 +98,7 @@ def link_hyphen_pairs(
     (e.g. the candidate sits too far below, or is an implausible reading
     continuation in another block), the link is skipped and the PART1 line
     is left unpaired for the downstream guards to handle. The default
-    policy (P1-2) vets *heuristic* pairs geometrically and always trusts
+    policy vets *heuristic* pairs geometrically and always trusts
     engine-asserted (explicit) ones; ``PairingPolicy(geometric_checks=
     False)`` restores the historical accept-every-next-line behaviour.
     """

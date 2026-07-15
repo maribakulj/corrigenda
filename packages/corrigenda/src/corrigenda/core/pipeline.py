@@ -87,7 +87,7 @@ from corrigenda.core.schemas import (
     Usage,
 )
 
-# Audit P3 — genuine programming-error types that must FAIL the run rather
+# ADR-008 — genuine programming-error types that must FAIL the run rather
 # than degrade silently to OCR fallback on the producer-attempt path.
 # Deliberately EXCLUDES ValueError (JSON/validation/parse errors are
 # expected producer-output failures) and any provider transport error
@@ -445,7 +445,7 @@ class CorrectionResult:
 
 @dataclass
 class RunContext:
-    """All mutable state of ONE pipeline execution (Plan V4.1-L).
+    """All mutable state of ONE pipeline execution (ADR-005).
 
     Created fresh at the top of every :meth:`CorrectionPipeline.run` and
     threaded through the internal methods, so ``CorrectionPipeline``
@@ -498,7 +498,7 @@ class CorrectionPipeline:
 
     Dependencies are injected via the constructor; the pipeline never
     reaches for global state. The instance holds only immutable
-    configuration (V4.1-L): every run creates a fresh :class:`RunContext`
+    configuration (ADR-005): every run creates a fresh :class:`RunContext`
     for its mutable state, and the stats it accumulates are exposed in
     the final `CorrectionResult` for the caller to persist.
 
@@ -546,7 +546,7 @@ class CorrectionPipeline:
         # processingStep. Pure strings: the pipeline never dials a vendor.
         self.provider_name = provider_name
         self.model = model
-        # Reentrancy guard. Per-run state lives in RunContext (V4.1-L),
+        # Reentrancy guard (ADR-005). Per-run state lives in RunContext,
         # but the injected observer and output_writer are shared instance
         # dependencies: two concurrent runs would interleave their events
         # and overwrite each other's outputs (write_trace has no run
@@ -656,9 +656,9 @@ class CorrectionPipeline:
     ) -> CorrectionResult:
         """Run the full pipeline. Mutates `document_manifest.pages` in place.
 
-        **Concurrency contract (Plan V4.1)** — one instance, one run at
+        **Concurrency contract (ADR-005)** — one instance, one run at
         a time. All per-run state lives in a fresh :class:`RunContext`
-        created here (V4.1-L: the pipeline instance itself carries only
+        created here (the pipeline instance itself carries only
         immutable configuration), but the injected ``observer`` and
         ``output_writer`` are shared instance dependencies: two
         concurrent runs would interleave their events and overwrite each
@@ -734,7 +734,7 @@ class CorrectionPipeline:
     ) -> CorrectionResult:
         """Body of :meth:`run`, executing under the reentrancy guard."""
         run_id = run_id or str(uuid.uuid4())
-        # V4.1-L — one fresh context per execution; no per-run state
+        # ADR-005 — one fresh context per execution; no per-run state
         # remains on the instance.
         ctx = RunContext()
 
@@ -742,7 +742,7 @@ class CorrectionPipeline:
         # never a silent image-less call.
         require_source_images(self.producer, list(source_files.keys()), source_images)
 
-        # P0-5 — identity-uniqueness invariant, enforced at the pipeline
+        # ADR-007 — identity-uniqueness invariant, enforced at the pipeline
         # door so hand-built manifests get the same guarantee as
         # parser-built ones: within one source file every page/block/line
         # ID must be unique (correction-to-line association is keyed by
@@ -839,34 +839,32 @@ class CorrectionPipeline:
             total_chunks += page_chunks
             total_reconciled += page_reconciled
 
-        # Review fix (P2-6, one level up): a duplication straddling a PAGE
-        # boundary was still invisible — chunk plans and the page-level
-        # pass are both page-scoped, while page-boundary lines DO see each
-        # other through cross-page hyphen context. Check each page seam
+        # Page-seam duplicate pass: chunk plans and the page-level pass
+        # are both page-scoped, yet page-boundary lines DO see each other
+        # through cross-page hyphen context — so each page seam is checked
         # explicitly (O(#pages), one pair per seam). The lookup is built
         # per seam, never document-wide: bare line_ids may legitimately
         # repeat across FILES, and a global bare-id dict is the exact
-        # ambiguity P0-5 bans — an ambiguous seam is skipped instead.
+        # ambiguity ADR-007 bans — an ambiguous seam is skipped instead.
         for prev_page, next_page in zip(
             document_manifest.pages, document_manifest.pages[1:]
         ):
             if not prev_page.lines or not next_page.lines:
                 continue
-            # Audit P2 — only compare a seam WITHIN one source file. Pages
-            # of different files are concatenated in document_manifest,
-            # so without this guard the last physical line of file A was
-            # compared against the first line of file B as if adjacent,
-            # and could be spuriously reverted as a "duplicate".
+            # Only compare a seam WITHIN one source file: pages of
+            # different files are concatenated in document_manifest, and
+            # the last physical line of file A is NOT adjacent to the
+            # first line of file B — comparing them could spuriously
+            # revert either as a "duplicate".
             if prev_page.source_file != next_page.source_file:
                 continue
             seam_map = {lm.line_id: lm for lm in (*prev_page.lines, *next_page.lines)}
             if len(seam_map) != len(prev_page.lines) + len(next_page.lines):
                 continue  # cross-file line_id reuse → ambiguous, skip
             a, b = prev_page.lines[-1], next_page.lines[0]
-            # Audit-F3 (twin branch) — same pre-revert snapshot basis as
-            # the cross-chunk boundary pass: an intra-page revert of the
-            # seam line otherwise masked the third member of a run
-            # straddling the page seam.
+            # Same pre-revert snapshot basis as the cross-chunk boundary
+            # pass: an intra-page revert of the seam line would otherwise
+            # mask the third member of a run straddling the page seam.
             seam_reverts = check_adjacent_duplicates(
                 [
                     (
@@ -935,7 +933,7 @@ class CorrectionPipeline:
         state, after reconciliation, the acceptance guard, and every
         duplicate/seam revert have run. It therefore never carries an op
         for a line that was reverted to OCR or reconciled to different text
-        (Audit P2 — a dry-run consumer replaying it would otherwise diverge
+        (a dry-run consumer replaying it would otherwise diverge
         from the pipeline's own corrected XML):
 
         - line not ``CORRECTED`` (fallback / failed / pending) → no op;
@@ -962,8 +960,8 @@ class CorrectionPipeline:
                     # The producer's output survived every guard unchanged —
                     # keep its original ops (and their TYPE, e.g. span),
                     # stamped with the page_id so a consumer can attribute
-                    # them per file (wave-1 review, F4 residual: bare
-                    # line_ids repeat across files).
+                    # them per file (bare line_ids repeat across
+                    # files — ADR-001).
                     ops.extend(
                         op.model_copy(update={"page_id": lm.page_id}) for op in line_ops
                     )
@@ -1077,7 +1075,7 @@ class CorrectionPipeline:
                 page_reconciled += n
             except (CorrectionAborted, ProviderPermanentError):
                 # F10 — cancellation must propagate, never be downgraded
-                # to a chunk_error event. P0-1 — a permanent provider
+                # to a chunk_error event. ADR-008 — a permanent provider
                 # rejection (401/403/404) is fatal for the whole run: it
                 # would hit every remaining chunk identically, and
                 # converting it into per-chunk OCR fallbacks would let the
@@ -1094,7 +1092,7 @@ class CorrectionPipeline:
                         "exception_type": type(exc).__name__,
                     },
                 )
-                # P0-2 — only RECOVERABLE domain errors may be absorbed as
+                # ADR-008 — only RECOVERABLE domain errors may be absorbed as
                 # a chunk_error + continue. Anything else (KeyError,
                 # AttributeError, a pydantic bug, a broken invariant) is a
                 # programming error: continuing would let the run complete
@@ -1102,17 +1100,17 @@ class CorrectionPipeline:
                 if not isinstance(exc, CorrectionError):
                     raise
 
-        # P2-6 — cross-chunk adjacency pass. Per-chunk finalization only
-        # sees that chunk's TARGET lines, so two document-adjacent lines
-        # owned by different chunks were never compared: a duplication
-        # straddling a chunk boundary escaped the guard entirely. Only
-        # the boundary pairs are new — intra-chunk pairs were already
-        # checked with the same function and config — so the pass is
-        # restricted to adjacent pairs whose owners differ (review fix:
-        # re-checking whole pages re-ran SequenceMatcher over every
-        # already-checked pair for nothing).
+        # Cross-chunk adjacency pass. Per-chunk finalization only sees
+        # that chunk's TARGET lines, so two document-adjacent lines owned
+        # by different chunks are never compared there — a duplication
+        # straddling a chunk boundary needs this pass. Only the boundary
+        # pairs are new — intra-chunk pairs were already checked with the
+        # same function and config — so the pass is restricted to
+        # adjacent pairs whose owners differ (re-checking whole pages
+        # would re-run SequenceMatcher over every already-checked pair
+        # for nothing).
         #
-        # Wave-1 review — the owners are the finalization passes that
+        # The owners are the finalization passes that
         # ACTUALLY ran (ctx.finalized_owner), not the planned chunks:
         # granularity descent finalizes a planned chunk as many
         # sub-chunks, whose seams the plan-derived map could not see —
@@ -1126,11 +1124,11 @@ class CorrectionPipeline:
                 _trace_key(b)
             ):
                 continue
-            # Audit-F3 — compare the PRE-REVERT accepted corrections
-            # (snapshotted in _finalize_chunk_traces), not the live
-            # corrected_text: an intra-chunk revert of the boundary
-            # line otherwise masked the third member of an
-            # identical-correction run straddling the boundary.
+            # Compare the PRE-REVERT accepted corrections (snapshotted
+            # in _finalize_chunk_traces), not the live corrected_text: an
+            # intra-chunk revert of the boundary line would otherwise mask
+            # the third member of an identical-correction run straddling
+            # the boundary.
             pair = [
                 (
                     lm.line_id,
@@ -1576,8 +1574,8 @@ class CorrectionPipeline:
                 # text that op produced (pre-guard, pre-reconcile). The final
                 # EditScript is NOT emitted from here: a line later reverted
                 # (duplicate / rejected by check_line) or reconciled to
-                # different text must not leave a stale op behind (Audit P2 —
-                # a dry-run consumer replaying it would diverge from the
+                # different text must not leave a stale op behind (a
+                # dry-run consumer replaying it would diverge from the
                 # pipeline's own corrected XML). _build_final_edit_script
                 # reconciles these captured ops against the FINAL per-line
                 # state, preserving the producer's op TYPE (e.g. a rules
@@ -1598,11 +1596,11 @@ class CorrectionPipeline:
                 return response, attempts_used, False, "", chunk_usage
 
             except ProviderPermanentError:
-                # P0-1 — credentials/model rejected: retrying is pointless
+                # ADR-008 — credentials/model rejected: retrying is pointless
                 # and falling back would fake success. Fatal for the run.
                 raise
             except Exception as exc:
-                # Audit P3 (same class as P0-2, on the attempt path): a
+                # ADR-008 (attempt-path branch): a
                 # genuine PROGRAMMING error — a bug in _script_to_raw /
                 # validation, or a broken invariant — must FAIL the run, not
                 # be silently masked as uncorrected OCR text (which would
@@ -1701,7 +1699,7 @@ class CorrectionPipeline:
         return {"lines": entries}
 
     # ------------------------------------------------------------------
-    # Chunk helpers extracted from _run_chunk (audit A3)
+    # Chunk helpers extracted from _run_chunk
     # ------------------------------------------------------------------
 
     def _reconcile_chunk_hyphens(
@@ -1853,19 +1851,18 @@ class CorrectionPipeline:
         """Revert duplicate-flagged lines to OCR — atomically with their
         hyphen partner.
 
-        Shared by the chunk-level sweep, the page-level cross-chunk pass
-        and the page-boundary pass (review fix: the revert logic used to
-        be duplicated and none of the copies preserved pair atomicity —
-        reverting one member of a reconciled pair left a mixed
-        OCR+corrected pair, the exact state ``reconcile_hyphen_pair``
-        guarantees can never survive). A flagged line's partner is
+        ONE shared implementation for the chunk-level sweep, the
+        page-level cross-chunk pass and the page-boundary pass: a mixed
+        OCR+corrected pair is the exact state ``reconcile_hyphen_pair``
+        guarantees can never survive, so every copy of the revert logic
+        must preserve pair atomicity — a flagged line's partner is
         reverted too, with its own trace reason.
 
-        Audit P1 — partner extension resolves through ``_resolve_partner``
-        so a *cross-page* partner (living on another page, absent from the
-        page-local ``line_by_id``) is reverted too. The old page-local
-        ``pid in line_by_id`` guard silently skipped it, leaving the
-        reconciled cross-page pair half OCR / half corrected.
+        Partner extension resolves through ``_resolve_partner`` so a
+        *cross-page* partner (living on another page, absent from the
+        page-local ``line_by_id``) is reverted too — a page-local guard
+        would silently skip it and leave the reconciled cross-page pair
+        half OCR / half corrected.
         """
         if not reverts:
             return
@@ -1881,13 +1878,12 @@ class CorrectionPipeline:
             lm = line_by_id.get(lid)
             if lm is not None:
                 _enroll(lm, reason)
-        # Audit-F2 — walk the partner extension to a FIXED POINT: enrolled
-        # partners are themselves iterated so whole 3+-line hyphen chains
-        # (PART1→BOTH→…→PART2) revert atomically. The previous single pass
-        # over the original flags was one-hop, so a chain neighbour two
-        # hops from any flagged line kept its corrected text — the mixed
-        # OCR+corrected pair state that reconcile_hyphen_pair's contract
-        # and this function's own docstring forbid.
+        # Walk the partner extension to a FIXED POINT: enrolled partners
+        # are themselves iterated so whole 3+-line hyphen chains
+        # (PART1→BOTH→…→PART2) revert atomically. A one-hop pass would
+        # leave a chain neighbour two hops from any flagged line with its
+        # corrected text — the mixed OCR+corrected pair state that
+        # reconcile_hyphen_pair's contract and this docstring forbid.
         worklist: list[LineManifest] = [
             lm for lm in (line_by_id.get(lid) for lid in reverts) if lm is not None
         ]
@@ -1996,7 +1992,7 @@ class CorrectionPipeline:
         ``apply`` is ``False`` the injected ``OutputWriter`` is never
         called: nothing is persisted.
 
-        Wave-3 review — the heavy calls (``rewrite_file``: a full lxml
+        The heavy calls (``rewrite_file``: a full lxml
         parse/rewrite/serialize of the source file; ``write_corrected``:
         disk IO; ``extract_texts``: another parse) run in worker threads
         so a ~100 MiB rewrite no longer freezes the host's event loop
@@ -2075,7 +2071,7 @@ class CorrectionPipeline:
         # CorrectionReport — one §9 artefact, not a parallel JobTrace shape.
 
 
-# --- __all__ (Stage 3 audit remediation) ---
+# --- public surface ---
 __all__ = [
     "sanitize_error",
     "CorrectionResult",

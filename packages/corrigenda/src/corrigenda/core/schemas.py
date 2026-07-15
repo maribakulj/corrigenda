@@ -216,7 +216,7 @@ class DocumentManifest(BaseModel):
 
     @model_validator(mode="after")
     def _totals_match_content(self) -> "DocumentManifest":
-        """P2-5 — contradictory counters are a construction bug, not data.
+        """Contradictory counters are a construction bug, not data.
 
         The format builders always compute these from the pages; a
         hand-built manifest that lies about its totals would silently
@@ -281,7 +281,7 @@ class ChunkPlannerConfig(FrozenPolicy):
 
     @model_validator(mode="after")
     def _overlap_smaller_than_window(self) -> "ChunkPlannerConfig":
-        """P2-5 — an overlap >= the window size can never advance."""
+        """An overlap >= the window size can never advance."""
         if self.line_window_overlap >= self.line_window_size:
             raise ValueError(
                 f"line_window_overlap={self.line_window_overlap} must be "
@@ -362,7 +362,7 @@ class GuardConfig(FrozenPolicy):
 
     @model_validator(mode="after")
     def _boundary_band_ordered(self) -> "GuardConfig":
-        """P2-5 — an inverted ratio band would reject every boundary word."""
+        """An inverted ratio band would reject every boundary word."""
         if self.boundary_len_ratio_min > self.boundary_len_ratio_max:
             raise ValueError(
                 f"boundary_len_ratio_min={self.boundary_len_ratio_min} must "
@@ -388,7 +388,7 @@ class GuardConfig(FrozenPolicy):
     #: A span replacement may be at most this many times as long as the span
     #: it replaces (``len(replacement) <= ratio * max(1, span_len)``).
     edit_span_max_growth_ratio: float = Field(default=4.0, gt=0.0)
-    #: Total characters a line's span ops may actually change (P2-9): per
+    #: Total characters a line's span ops may actually change: per
     #: op, the size of the differing window after trimming the common
     #: prefix/suffix of (original span, replacement) — so a length-neutral
     #: rewrite costs its real size, not 0. Generous by default; a rules
@@ -405,7 +405,7 @@ class PairingPolicy(FrozenPolicy):
     """Decides whether a PART1/BOTH line may pair with the following line (F7).
 
     Hyphen pairing is sequential — the parser proposes the next line in
-    reading order — and this policy vets the proposal. P1-2: the default
+    reading order — and this policy vets the proposal. The default
     is now *geometric* for **heuristic** pairs (trailing-dash detection):
 
     * same block — the candidate must sit BELOW the PART1 line, within
@@ -452,7 +452,7 @@ class PairingPolicy(FrozenPolicy):
     #: cross-page partner is by definition in a different block, this also
     #: forbids cross-page pairing — intended reading of the constraint.
     same_block_only: bool = False
-    #: Master switch for the P1-2 geometric vetting of heuristic pairs.
+    #: Master switch for the geometric vetting of heuristic pairs.
     #: ``False`` restores the historical purely-sequential behaviour.
     geometric_checks: bool = True
     #: Max downward gap between the PART1 line's bottom and the candidate's
@@ -503,7 +503,7 @@ class PairingPolicy(FrozenPolicy):
             if gap > self.max_vertical_gap:
                 return False
 
-        # --- P1-2 geometric vetting (heuristic pairs, intra-page) ---
+        # --- geometric vetting (heuristic pairs, intra-page) ---
         if not self.geometric_checks:
             return True
         if part1.page_id != candidate.page_id:
@@ -573,7 +573,7 @@ class RetryPolicy(FrozenPolicy):
 
     @model_validator(mode="after")
     def _temperatures_in_range(self) -> "RetryPolicy":
-        """P2-5 — every provider rejects temperatures outside [0, 2]."""
+        """Every provider rejects temperatures outside [0, 2]."""
         for t in self.temperatures:
             if not (0.0 <= t <= 2.0):
                 raise ValueError(f"temperature {t} outside the valid [0, 2] range")
@@ -624,7 +624,7 @@ class ChunkRequest(BaseModel):
 
     @model_validator(mode="after")
     def _targets_subset_of_lines(self) -> "ChunkRequest":
-        """P2-5 — a target outside the chunk's lines would be silently
+        """A target outside the chunk's lines would be silently
         ignored at correction time (it has no enriched input) while still
         counting as "owned" — a line lost without a trace."""
         if self.target_line_ids is not None:
@@ -820,7 +820,7 @@ class CorrectionReport(BaseModel):
         return [ln for ln in self.lines if ln.validation_status == "fallback"]
 
 
-# --- __all__ (Stage 3 audit remediation) ---
+# --- public surface ---
 __all__ = [
     "LineStatus",
     "ChunkGranularity",

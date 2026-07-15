@@ -33,7 +33,7 @@ class ParseError(CorrectionError, ValueError):
 
 
 class DuplicateIdError(ParseError):
-    """A source document or manifest set carries duplicate identities (P0-5).
+    """A source document or manifest set carries duplicate identities (ADR-007).
 
     Every internal association between a correction and its physical line
     (rewriter lookup, trace projection, hyphen partner resolution) is keyed

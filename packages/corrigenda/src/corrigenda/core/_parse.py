@@ -29,11 +29,11 @@ def parse_int_tolerant(
     ``strict`` is ``True`` (the ALTO geometry policy — a non-numeric
     coordinate is a real error worth surfacing, not silently zeroed).
 
-    Audit-F7 — an infinity/overflow-shaped value (``"inf"``, ``"1e999"``)
-    passes ``float()`` but ``int(inf)`` raises ``OverflowError``, which
-    used to escape the ``except ValueError`` and crash the whole parse.
-    Such values now follow the SAME policy as non-numeric ones: default
-    in tolerant mode, ``ValueError`` (the promised class) in strict mode.
+    An infinity/overflow-shaped value (``"inf"``, ``"1e999"``) passes
+    ``float()`` but ``int(inf)`` raises ``OverflowError`` — which must
+    not escape a bare ``except ValueError``. Such values follow the SAME
+    policy as non-numeric ones: default in tolerant mode, ``ValueError``
+    (the promised class) in strict mode.
     """
     if raw is None or raw == "":
         return default

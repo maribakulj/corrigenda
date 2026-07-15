@@ -112,7 +112,7 @@ def _parse_textline_hyphen_info(
 
     # Heuristic: a genuine word-break hyphen is the last non-space token
     # ending in "-" with an ALPHABETIC character immediately before it.
-    # L10/B6 — this narrowing rejects pure-numeric forms ("1789-", "n°5-")
+    # This narrowing rejects pure-numeric forms ("1789-", "n°5-")
     # and dialog em-dashes that would otherwise mark a phantom PART1 and
     # make the rewriter emit a spurious HYP on output. The rule now lives
     # in ``core.pairing.trailing_hyphen_char`` (shared with the PAGE parser,
@@ -148,7 +148,7 @@ def _parse_textline_hyphen_info(
 
 
 # ---------------------------------------------------------------------------
-# Block discovery + reading order (P1-1)
+# Block discovery + reading order
 # ---------------------------------------------------------------------------
 
 
@@ -161,12 +161,11 @@ def _collect_blocks_skipping_margins(
     """Every ``TextBlock`` under ``container`` in document order, never
     descending into the four margin containers.
 
-    Review fix — when a page has no ``PrintSpace`` the container is the
-    ``Page`` itself; a naive ``iter`` would sweep margin-nested blocks
-    (running headers, page numbers) into correction scope, which the
-    historical direct-children lookup implicitly excluded. An explicit
-    walk keeps the margin rule true in both container shapes. Descent
-    stops at a ``TextBlock`` (ALTO forbids nested TextBlocks).
+    When a page has no ``PrintSpace`` the container is the ``Page``
+    itself; a naive ``iter`` would sweep margin-nested blocks (running
+    headers, page numbers) into correction scope. An explicit walk keeps
+    the margin rule true in both container shapes. Descent stops at a
+    ``TextBlock`` (ALTO forbids nested TextBlocks).
     """
     margin_tags = {_tag(t, ns) for t in _MARGIN_LOCALNAMES}
     tb_tag = _tag("TextBlock", ns)
@@ -190,11 +189,10 @@ def _blocks_in_reading_order(
 ) -> list[etree._Element]:
     """Every ``TextBlock`` under ``container``, in reading order.
 
-    P1-1 — the historical ``findall`` only saw *direct* children, so any
-    ``TextBlock`` nested inside a ``ComposedBlock`` group (articles,
-    figures-with-caption, …) was silently dropped from the manifest.
-    ``iter`` walks the whole subtree in document order instead (ALTO does
-    not allow a TextBlock inside a TextBlock, so no double-visit).
+    TextBlocks may nest inside ``ComposedBlock`` groups (articles,
+    figures-with-caption, …); the whole subtree is walked in document
+    order so none is dropped (ALTO does not allow a TextBlock inside a
+    TextBlock, so no double-visit).
 
     When blocks carry the optional ``IDNEXT`` attribute (ALTO's explicit
     next-block-in-reading-sequence chain), the chains override document
@@ -229,8 +227,8 @@ def _blocks_in_reading_order(
         bid = _bid(b)
         if bid is not None:
             if bid in by_id:
-                # Duplicate block IDs — the manifest-level P0-5 check will
-                # refuse the file; don't attempt any reordering here.
+                # Duplicate block IDs — the manifest-level uniqueness gate
+                # (ADR-007) will refuse the file; no reordering here.
                 return blocks
             by_id[bid] = b
 
@@ -292,13 +290,13 @@ def parse_alto_file(
     Parse one ALTO XML file and return (list_of_PageManifest, root_element).
 
     ``pairing_policy`` (F7) is forwarded to the hyphen-pair linker; the
-    default (P1-2) vets heuristic pairs geometrically; pass
+    default vets heuristic pairs geometrically; pass
     ``PairingPolicy(geometric_checks=False)`` for the historical
     purely-sequential pairing.
 
     §8.4 — raises only classified errors: malformed XML, encoding
     mismatches, unreadable files and non-numeric coordinates all surface
-    as :class:`~corrigenda.errors.ParseError` (V4.2 phase 2), never as a
+    as :class:`~corrigenda.errors.ParseError` (ADR-008), never as a
     bare lxml/OS/ValueError.
     """
     with classified_parse_errors(source_name):
@@ -411,10 +409,10 @@ def _parse_alto_file(
             )
         )
 
-    # P0-5 — duplicate IDs within one file make every downstream
+    # ADR-007 — duplicate IDs within one file make every downstream
     # correction-to-line association ambiguous. Refuse explicitly.
     ensure_unique_identities(pages, source_name)
-    # Review fix — the rewriter matches TextLine IDs over the WHOLE
+    # The rewriter matches TextLine IDs over the WHOLE
     # document tree (margins included), so the parse-time gate must scan
     # the same scope: a margin line reusing a body line's ID would
     # otherwise pass here and only explode at rewrite time, after the
@@ -445,7 +443,7 @@ def build_document_manifest(
     Files are processed in order; page/line indices are continuous.
 
     ``pairing_policy`` (F7) is applied to both intra-page and cross-page
-    hyphen linking; the default (P1-2) vets heuristic pairs geometrically.
+    hyphen linking; the default vets heuristic pairs geometrically.
     """
     source_files: list[str] = []
     page_offset = 0
@@ -485,7 +483,7 @@ def build_document_manifest(
     )
 
 
-# --- __all__ (Stage 3 audit remediation) ---
+# --- public surface ---
 __all__ = [
     "parse_alto_file",
     "build_document_manifest",

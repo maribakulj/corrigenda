@@ -80,14 +80,12 @@ def validate_llm_response(
         "hyphen_integrity_violation".
     """
     # --- Basic structure ---
-    # L10/B4 — guard against non-dict input UPFRONT. Pre-fix the
-    # first line was `if "lines" not in raw` which raised
-    # `TypeError: argument of type 'NoneType' is not iterable` on
-    # None / list / int / bool. The orchestrator's retry classifier
-    # only catches `(ValueError, json.JSONDecodeError)`, so a
-    # provider returning None silently bypassed all 3 retry attempts
-    # AND skipped the OCR fallback. Re-raising as ValueError puts
-    # the response back on the standard retry path.
+    # Guard against non-dict input UPFRONT with a ValidationError: the
+    # orchestrator's retry classifier only catches
+    # `(ValueError, json.JSONDecodeError)`, so a provider returning
+    # None/list/int must surface as a ValueError-shaped error to stay on
+    # the standard retry path (a TypeError would bypass retries AND the
+    # OCR fallback — ADR-008).
     if not isinstance(raw, dict):
         raise ValidationError(
             f"LLM response is not a JSON object (got {type(raw).__name__})"
@@ -139,15 +137,14 @@ def validate_llm_response(
 
         seen_ids.add(line_id)
 
-        # L10/R3 — `corrected_text == ""` accepted whitespace-only
-        # values ("   ", "\t", NBSP). The rewriter would then write
-        # `CONTENT="   "` and silently obliterate the original word.
-        # `.strip()` catches every whitespace-only case in one check
-        # (ASCII spaces + Unicode whitespace incl. NBSP).
+        # Whitespace-only values ("   ", "\t", NBSP) are as empty as
+        # "": the rewriter would write `CONTENT="   "` and silently
+        # obliterate the original word. `.strip()` catches every
+        # whitespace-only case (ASCII + Unicode whitespace incl. NBSP).
         if not isinstance(corrected_text, str) or corrected_text.strip() == "":
             raise ValidationError(f"corrected_text for {line_id!r} is empty or missing")
-        # Audit-F10 — reject EVERY str.splitlines boundary, not just
-        # \n/\r: U+2028/U+2029 (and \x0b \x0c \x85 \x1c-\x1e) survive
+        # Reject EVERY str.splitlines boundary, not just \n/\r:
+        # U+2028/U+2029 (and \x0b \x0c \x85 \x1c-\x1e) would survive
         # clean_content into a single-line CONTENT attribute otherwise.
         if has_line_separator(corrected_text):
             raise ValidationError(
@@ -284,7 +281,7 @@ def _check_pair_drift(
         )
 
 
-# --- __all__ (Stage 3 audit remediation) ---
+# --- public surface ---
 __all__ = [
     "validate_llm_response",
 ]

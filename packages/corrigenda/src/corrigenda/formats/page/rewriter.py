@@ -311,7 +311,7 @@ def rewrite_page_file(
     metrics = PageRewriterMetrics()
     line_paths: dict[str, str] = {}
 
-    # P0-5 — a bare line_id keys every correction-to-element association
+    # ADR-007 — a bare line_id keys every correction-to-element association
     # below; duplicates (manifest or element side) fail loudly instead of
     # silently rewriting the wrong physical line. Mirrors the ALTO
     # rewriter: canonical shared check for the manifest side.
@@ -329,7 +329,7 @@ def rewrite_page_file(
         if line_id in seen_element_ids:
             raise DuplicateIdError(
                 f"duplicate TextLine id {line_id!r} in {xml_path.name!r} — "
-                "two physical lines would receive the same correction (P0-5)."
+                "two physical lines would receive the same correction (ADR-007)."
             )
         seen_element_ids.add(line_id)
         lm = line_by_id[line_id]
@@ -403,11 +403,11 @@ def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]
         line_id = tl.get("id")
         if line_id in line_ids:
             if line_id in result:
-                # P0-5 — a repeated id would silently collapse two physical
+                # ADR-007 — a repeated id would silently collapse two physical
                 # lines into one trace entry.
                 raise DuplicateIdError(
                     f"duplicate TextLine id {line_id!r} in rewritten PAGE — "
-                    "output-text extraction would be ambiguous (P0-5)."
+                    "output-text extraction would be ambiguous (ADR-007)."
                 )
             result[line_id] = canonical_line_text(tl, ns)
     return result
