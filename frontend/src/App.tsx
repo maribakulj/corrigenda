@@ -13,6 +13,7 @@ import { ModelSelector } from './components/ModelSelector'
 import { ProviderSelector } from './components/ProviderSelector'
 import { useJobStream } from './hooks/useJobStream'
 import { useModels } from './hooks/useModels'
+import { buildTraceMap, lineKey, type LineKey } from './lib/lineKey'
 import type { DiffData, JobStats, LayoutData, LineTrace, Provider, TraceData } from './types'
 
 export default function App() {
@@ -42,8 +43,10 @@ export default function App() {
   const [traceData, setTraceData] = useState<TraceData | null>(null)
   const [traceLoading, setTraceLoading] = useState(false)
   const [traceError, setTraceError] = useState(false)
-  const [traceByLineId, setTraceByLineId] = useState<Map<string, LineTrace>>(new Map())
-  const [selectedLineId, setSelectedLineId] = useState<string | null>(null)
+  // Keyed on (page_id, line_id) — line_id alone repeats across pages
+  // and made the last file's trace shadow every homonymous line.
+  const [traceByLineKey, setTraceByLineKey] = useState<Map<LineKey, LineTrace>>(new Map())
+  const [selectedLineKey, setSelectedLineKey] = useState<LineKey | null>(null)
 
   // Models
   const {
@@ -124,11 +127,7 @@ export default function App() {
           return
         }
         setTraceData(data)
-        const map = new Map<string, LineTrace>()
-        for (const lt of data.lines) {
-          map.set(lt.line_id, lt)
-        }
-        setTraceByLineId(map)
+        setTraceByLineKey(buildTraceMap(data.lines))
       })
       .finally(() => {
         if (isCurrent()) setTraceLoading(false)
@@ -183,8 +182,8 @@ export default function App() {
     setTraceData(null)
     setTraceLoading(false)
     setTraceError(false)
-    setTraceByLineId(new Map())
-    setSelectedLineId(null)
+    setTraceByLineKey(new Map())
+    setSelectedLineKey(null)
     setDebugMode(false)
     resetModels()
     setSelectedModel(null)
@@ -402,8 +401,12 @@ export default function App() {
             {diffData && (
               <DiffViewer
                 data={diffData}
-                selectedLineId={debugMode ? selectedLineId : null}
-                onSelectLine={debugMode ? setSelectedLineId : undefined}
+                selectedLineKey={debugMode ? selectedLineKey : null}
+                onSelectLine={
+                  debugMode
+                    ? (pageId, lineId) => setSelectedLineKey(lineKey(pageId, lineId))
+                    : undefined
+                }
               />
             )}
             {/* Wave-4 review — traceError was latched but never rendered:
@@ -414,7 +417,7 @@ export default function App() {
                 Désactivez puis réactivez le mode debug pour réessayer.
               </p>
             )}
-            {debugMode && selectedLineId && (
+            {debugMode && selectedLineKey && (
               <div className="mt-4">
                 {traceLoading && (
                   <div className="flex items-center gap-2 font-mono text-xs text-slate-500 py-4">
@@ -422,20 +425,20 @@ export default function App() {
                     Loading traces...
                   </div>
                 )}
-                {traceByLineId.has(selectedLineId) && (
+                {traceByLineKey.has(selectedLineKey) && (
                   <LineTracePanel
-                    trace={traceByLineId.get(selectedLineId)!}
-                    onClose={() => setSelectedLineId(null)}
+                    trace={traceByLineKey.get(selectedLineKey)!}
+                    onClose={() => setSelectedLineKey(null)}
                   />
                 )}
-                {!traceLoading && traceData && !traceByLineId.has(selectedLineId) && (
+                {!traceLoading && traceData && !traceByLineKey.has(selectedLineKey) && (
                   <p className="font-mono text-xs text-slate-500 py-2">
-                    No trace found for {selectedLineId}
+                    No trace found for {selectedLineKey}
                   </p>
                 )}
               </div>
             )}
-            {debugMode && !selectedLineId && traceData && (
+            {debugMode && !selectedLineKey && traceData && (
               <p className="font-mono text-xs text-slate-500 mt-3">
                 Click a line above to inspect its trace ({traceData.total_lines} lines loaded)
               </p>
