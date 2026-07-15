@@ -1,13 +1,20 @@
 # Contributing
 
+## Repo layout
+
+One Python distribution and two applications around it:
+
+- **`packages/corrigenda/`** — the correction library, the only
+  *packaged* Python distribution (hatchling; PyPI publication is
+  prepared by `.github/workflows/publish-corrigenda.yml` but has not
+  happened yet — no tag, no release).
+- **`backend/`** — FastAPI app, imported as a flat `app` package via
+  `PYTHONPATH` (deliberately **not** a built package yet; see the note
+  in `backend/pyproject.toml`).
+- **`frontend/`** — React + TypeScript + Vite (`corrigenda-frontend`,
+  private).
+
 ## Local dev setup
-
-The repo is a monorepo with two Python distributions:
-
-- **`packages/corrigenda/`** — pure correction pipeline, published to PyPI
-- **`backend/`** — FastAPI app that consumes corrigenda
-
-Install both in editable mode from the repo root:
 
 ```bash
 # corrigenda is a sibling package; install it first so backend's imports resolve.
@@ -29,21 +36,26 @@ pre-commit install
 ## Running things
 
 ```bash
-# Backend tests + coverage gate
-cd backend && pytest --cov
+# Library tests (coverage gate: 85%)
+cd packages/corrigenda && pytest
 
-# corrigenda smoke tests
-cd packages/corrigenda && pytest tests/
+# Backend tests (coverage gate: 80% on `app`; e2e run separately)
+cd backend && pytest -m "not e2e" --cov
+cd backend && pytest tests/e2e          # real uvicorn + fake provider
 
 # Linters / type-checker (run from the relevant package root)
 ruff check . && ruff format --check .
-mypy --explicit-package-bases app    # from backend/
+mypy --strict src/corrigenda            # from packages/corrigenda/
+mypy --explicit-package-bases app       # from backend/
 
 # Backend dev server
 cd backend && uvicorn app.main:app --reload --port 8000
 
-# Frontend dev server
-cd frontend && npm install && npm run dev
+# Frontend
+cd frontend && npm install && npm run dev   # tests: npx vitest run
+
+# Regenerate the OpenAPI snapshot + generated TS types (CI fails on drift)
+scripts/generate-frontend-api-types.sh
 ```
 
 ## Docker
@@ -52,19 +64,39 @@ cd frontend && npm install && npm run dev
 backend Dockerfile can reach `packages/corrigenda/`:
 
 ```bash
-docker-compose up           # backend on :8000, frontend on :5173
-docker build -t alto .      # single-image HF Spaces build (port 7860)
+docker-compose up                   # backend on :8000, frontend on :5173
+docker build -t corrigenda .        # single-image HF Spaces build (port 7860)
 ```
 
-## Branch + CI
+## CI gates (all must pass)
 
-- All PRs must pass: `corrigenda-lint`, `corrigenda-tests`, `corrigenda-build`,
-  `backend-lint`, `backend-types`, `backend-tests`, `backend-security`,
-  `frontend`. `backend-types` and `backend-tests` block on
-  `corrigenda-tests` (a broken core can't sneak through).
-- Coverage gate: 80% combined (`app` + `corrigenda`).
-- Security gate: bandit (with documented skips for B101/B108/B110) +
-  `pip-audit --strict` on the resolved env.
+Python 3.11 / 3.12 / 3.13 where applicable:
+
+- `corrigenda-lint`, `corrigenda-types` (mypy --strict),
+  `corrigenda-tests` (coverage ≥ 85%), `corrigenda-build`
+- `backend-lint`, `backend-types`, `backend-tests` (coverage ≥ 80% on
+  `app` — the library carries its own separate gate), `backend-e2e`
+  (real uvicorn server + deliberately sabotaged fake provider),
+  `backend-security` (bandit + pip-audit)
+- `frontend` (lint, typecheck, vitest, build, npm audit),
+  `frontend-api-types-drift` (regenerates the OpenAPI snapshot +
+  generated types and fails on any diff)
+- `docker-build` (all three images built; the root image is
+  smoke-tested: `/health`, the real SPA at `/`, a built asset,
+  `/health/ready`)
+
+`backend-types` and `backend-tests` block on `corrigenda-tests` — a
+broken core can't sneak through.
+
+## Documentation rules
+
+Normative docs are the ones listed in the README's documentation map
+(README, `SPECS_LIB_V2.md`, `packages/corrigenda/docs/`, `docs/API.md`,
+`SECURITY.md`, this file). Everything under `docs/history/` is frozen
+design/audit history — never update it to match the code; write the
+current truth in a normative doc instead. Audit-trail references
+(`Audit-Fxx`, wave numbers) belong in PRs and issues, not in new code
+comments.
 
 ## License
 

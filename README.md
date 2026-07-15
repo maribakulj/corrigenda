@@ -20,28 +20,25 @@ Upload one or more ALTO XML files, choose a provider and model, and get correcte
 
 ## Documentation map
 
-The correction engine has been extracted into a standalone library
-(`packages/corrigenda/`); this repo is that library **plus** a FastAPI +
-React app around it. Start with the authoritative docs; the rest are design
-history kept for provenance.
+The correction engine is a standalone library (`packages/corrigenda/`);
+this repo is that library **plus** a FastAPI + React app around it.
 
-**Authoritative (kept current):**
+**Normative (kept current — everything else is history):**
 
 | Doc | Scope |
 |---|---|
 | `README.md` (this file) | The app: what it does, how to run and deploy it |
-| `packages/corrigenda/docs/` | The library: `quickstart`, `formats`, `edit-protocol`, `versioning` |
-| `packages/corrigenda/CHANGELOG.md` | The library's released changes (SemVer) |
 | `SPECS_LIB_V2.md` | Normative spec for the `corrigenda` library |
-| `SPECS_API.md` / `SPECS_JOBS.md` / `SPECS_FRONTEND.md` | Backend / jobs / frontend specs |
+| `packages/corrigenda/docs/` | Library guides: `quickstart`, `formats`, `edit-protocol`, `versioning` |
+| `packages/corrigenda/CHANGELOG.md` | The library's released changes (SemVer) |
+| [`docs/API.md`](docs/API.md) | Backend HTTP API map (the OpenAPI schema is the contract) |
+| [`SECURITY.md`](SECURITY.md) | Deployment profiles, threat model, vulnerability reporting |
 | `CONTRIBUTING.md`, `CLAUDE.md` | Contributor + assistant guidance |
 
-**Historical (design & audit trail — non-normative; may name modules that
-have since moved, e.g. the pre-extraction `backend/app/alto/*` layout):**
-`SPECS.md` (original app spec), `ARCHITECTURE.md`, `MIGRATION.md`,
-`AUDIT.md`, `ISSUE_LEDGER.md`, `REMEDIATION_STATUS.md`, `PLAN_V2.md`,
-`PROGRESS_V1.md`, `ROADMAP.md`, and the topic `SPECS_*` drafts. Read them for
-*why* a decision was made, not for *where* code lives today.
+**Historical:** everything under [`docs/history/`](docs/history/) is
+frozen design & audit trail (original specs, migration and audit logs).
+It contradicts the current code in places by design — read it for *why*
+a decision was made, never for *where* code lives today.
 
 ---
 
