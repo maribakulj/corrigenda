@@ -192,6 +192,15 @@ jobs:
           python -m venv /tmp/wheel-smoke
           /tmp/wheel-smoke/bin/pip install dist/*.whl
           /tmp/wheel-smoke/bin/python _smoke_imports.py
+      - name: Checksum the distributions
+        # The publish workflow downloads THIS artifact and publishes it
+        # without rebuilding (tested bytes = published bytes); the sums
+        # file lets it prove the download is intact before uploading.
+        if: matrix.python-version == '3.11'
+        run: |
+          cd dist
+          sha256sum *.whl *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
       - name: Upload distribution artifacts
         # Only one matrix leg uploads to avoid name collisions on
         # actions/upload-artifact@v4 (which errors on duplicate names).
