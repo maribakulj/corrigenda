@@ -102,7 +102,7 @@ if TYPE_CHECKING:  # typed view of the lazy symbols below
         default_french_ocr_rules as default_french_ocr_rules,
     )
 
-__version__ = "1.0.0"
+__version__ = "0.9.0"
 
 # MAINTAINER NOTE — adding/removing a PUBLIC symbol touches THREE lists here,
 # by design (the friction is a feature: a public API change should be
