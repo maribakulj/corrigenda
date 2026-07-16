@@ -120,7 +120,7 @@ Single-worker on purpose — see Dockerfile comments. A multi-worker setup would
 | `CORS_ORIGINS` | `*` | Comma-separated list of allowed CORS origins, or `*` |
 | `DEPLOYMENT_PROFILE` | `demo` | `demo` (public Space stance) or `institutional` (behind SSO/proxy; refuses wildcard CORS). See [SECURITY.md](SECURITY.md) |
 | `MAX_ACTIVE_JOBS` | `4` | Concurrent correction pipelines |
-| `MAX_CONCURRENT_UPLOADS` | = `MAX_ACTIVE_JOBS` | Concurrent upload slots (reserved before reading any body byte) |
+| `MAX_CONCURRENT_UPLOADS` | = `MAX_ACTIVE_JOBS` | Concurrent upload slots — reserved by an ASGI middleware before any body byte is read; at capacity the request is refused (503 + `Retry-After`) without receiving the upload |
 | `JOB_TIMEOUT_SECONDS` | `1800` | Per-job wall-clock budget (0 disables) |
 
 ---

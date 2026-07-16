@@ -65,6 +65,19 @@ def _max_json_request_bytes() -> int:
     return _DEFAULT_MAX_JSON_REQUEST_BYTES
 
 
+def _max_concurrent_uploads() -> int:
+    """Concurrent upload slots (``MAX_CONCURRENT_UPLOADS``, default =
+    ``MAX_ACTIVE_JOBS``): resolved dynamically so deployments can override
+    and tests can monkeypatch the environment."""
+    raw = os.environ.get("MAX_CONCURRENT_UPLOADS")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return int(os.environ.get("MAX_ACTIVE_JOBS", "4"))
+
+
 #: Path prefixes whose POST bodies are size-guarded → cap resolver.
 #: Lambdas (not bare references) so tests monkeypatching the module
 #: functions are honoured — the name resolves at call time.
@@ -166,6 +179,90 @@ class UploadSizeLimitMiddleware:
                 f"Upload exceeds the maximum request size ({max_bytes} bytes).",
                 close_connection=True,
             )
+
+
+class UploadAdmissionMiddleware:
+    """Reserve an upload slot BEFORE a single body byte is read.
+
+    The reservation historically lived in the ``create_job`` route
+    handler — which FastAPI only calls after its dependency layer has
+    awaited ``request.form()``, i.e. after the ENTIRE multipart body has
+    been received and spooled to temp files. A request refused for
+    capacity had therefore already cost the full upload in bandwidth,
+    temp disk and parse work, and N such requests could stampede the
+    single-worker server before any 503 fired.
+
+    Here the check-and-increment runs at the ASGI layer, before the
+    framework ever sees the stream. At capacity the middleware answers
+    503 + ``Retry-After`` itself and **never calls** ``receive()``;
+    ``Connection: close`` tells the server to drop the connection
+    instead of draining a body the client may already be sending. The
+    slot is released in a ``finally`` whatever the inner app does.
+
+    Scope: exactly ``POST /api/jobs`` (the upload). Sub-path POSTs
+    (cancel, …) and other routes pass through untouched. The
+    check-and-increment needs no lock: it runs synchronously on the
+    single-threaded event loop (no await between check and increment).
+    """
+
+    def __init__(self, app: Callable) -> None:
+        self.app = app
+
+    async def __call__(
+        self,
+        scope: dict,
+        receive: Callable[[], Awaitable[dict]],
+        send: Callable[[dict], Awaitable[None]],
+    ) -> None:
+        if not _is_job_upload(scope):
+            await self.app(scope, receive, send)
+            return
+
+        state = scope["app"].state
+        limit = _max_concurrent_uploads()
+        if state.uploads_in_progress >= limit:
+            await _send_503(
+                send,
+                f"Server is at upload capacity ({limit} concurrent uploads). Retry shortly.",
+            )
+            return
+
+        state.uploads_in_progress += 1
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            state.uploads_in_progress -= 1
+
+
+def _is_job_upload(scope: dict) -> bool:
+    """True only for the multipart upload route (``POST /api/jobs``)."""
+    if scope.get("type") != "http" or scope.get("method") != "POST":
+        return False
+    path = (scope.get("path") or "").rstrip("/") or "/"
+    return path == "/api/jobs"
+
+
+async def _send_503(
+    send: Callable[[dict], Awaitable[None]],
+    detail: str,
+) -> None:
+    body = json.dumps({"detail": detail}).encode("utf-8")
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 503,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+                (b"cache-control", b"no-store"),
+                (b"retry-after", b"10"),
+                # The client may be mid-body: drop the connection rather
+                # than draining an upload we just refused.
+                (b"connection", b"close"),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
 
 
 class _BodyCapExceeded(Exception):
