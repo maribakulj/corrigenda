@@ -11,6 +11,7 @@ raises so consumers can ``except CorrectionError`` once::
     ├── ProviderError              — provider errors (core.protocols)
     │   ├── ProviderTransientError — recoverable transport failure
     │   └── ProviderPermanentError — fatal rejection (credentials, model)
+    ├── ProjectionError            — output artefact ≠ decisions
     └── CorrectionAborted
 
 The value-shaped errors additionally inherit ``ValueError`` so the bare
@@ -102,6 +103,20 @@ class ProviderError(CorrectionError):
         self.status_code = status_code
 
 
+class ProjectionError(CorrectionError):
+    """The rewritten XML does not say what the run decided.
+
+    Raised when the text re-extracted from the output artefact diverges
+    (beyond whitespace-run normalization — word tokenization cannot
+    represent consecutive spaces) from the final per-line decision, or
+    when a decided line is missing from the artefact altogether. This is
+    corruption of the deliverable, never a degradation: the run fails
+    before the writer persists anything.
+    """
+
+    code: ClassVar[str] = "projection_mismatch"
+
+
 class CorrectionAborted(CorrectionError):
     """Raised when ``should_abort()`` requested cancellation (F10).
 
@@ -122,5 +137,6 @@ __all__ = [
     "DuplicateIdError",
     "ValidationError",
     "ProviderError",
+    "ProjectionError",
     "CorrectionAborted",
 ]
