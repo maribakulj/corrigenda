@@ -71,6 +71,39 @@ class MockProvider:
         return {"lines": lines_out}, None
 
 
+class GarblingProvider(MockProvider):
+    """Identity correction except it garbles exactly one plain line —
+    structurally valid JSON, rejected only by the ACCEPTANCE guard
+    (too dissimilar from source): a line-level fallback with zero chunk
+    failures and zero retries."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._garbled = False
+
+    async def complete_structured(
+        self,
+        api_key: str,
+        model: str,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        json_schema: dict[str, Any],
+        temperature: float = 0.0,
+    ) -> dict[str, Any]:
+        lines_out = []
+        for line_in in user_payload.get("lines", []):
+            text = line_in["ocr_text"]
+            if (
+                not self._garbled
+                and line_in.get("hyphenation_role") is None
+                and len(text.split()) >= 3
+            ):
+                text = " ".join(w[::-1] for w in text.split())
+                self._garbled = True
+            lines_out.append({"line_id": line_in["line_id"], "corrected_text": text})
+        return {"lines": lines_out}, None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -262,11 +295,35 @@ async def test_fallback_on_persistent_failure(tmp_path: Path):
     job = store.get_job(job_id)
     assert job is not None
     assert job.status.value == "completed_with_fallbacks"
-    assert job.fallbacks >= 1
+    # The count is LINES, not chunks: with the provider failing
+    # persistently, every line of the document kept its OCR text.
+    doc = build_document_manifest([(SAMPLE_XML, SAMPLE_XML.name)])
+    total_lines = sum(len(p.lines) for p in doc.pages)
+    assert job.fallbacks == total_lines
 
     # Output file must still exist
     out_files = list(tmp_path.glob("*_corrected.xml"))
     assert len(out_files) >= 1
+
+
+# ---------------------------------------------------------------------------
+# test_guard_rejected_line_is_a_degraded_success
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_guard_rejected_line_is_a_degraded_success(tmp_path: Path):
+    """One line rejected by the acceptance guard — no chunk failure, no
+    retry — must still surface as a DEGRADED success with fallbacks == 1.
+    The historical chunk counter reported 0 here and the job ended in a
+    clean 'completed' while a line had silently kept its OCR text."""
+    store, job_id = _make_store_and_job()
+    await _run(job_id, GarblingProvider(), tmp_path, store)
+
+    job = store.get_job(job_id)
+    assert job is not None
+    assert job.status.value == "completed_with_fallbacks"
+    assert job.fallbacks == 1
 
 
 # ---------------------------------------------------------------------------

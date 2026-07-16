@@ -76,6 +76,9 @@ class JobManifest(BaseModel):
     lines_modified: int = 0
     chunks_total: int = 0
     retries: int = 0
+    #: Number of LINES that kept their OCR source text (chunk fallback,
+    #: guard rejection or duplicate revert) — the UI renders this as
+    #: "N line(s) fell back", so it must never be a chunk count.
     fallbacks: int = 0
     duration_seconds: float | None = None
     error: str | None = None

@@ -156,7 +156,7 @@ def test_sequential_runs_share_no_state() -> None:
             )
         first, second = results
         assert first.retry_count == second.retry_count == 0
-        assert first.fallback_count == second.fallback_count
+        assert first.fallback_chunks == second.fallback_chunks
         assert first.total_chunks == second.total_chunks
         assert first.total_reconciled == second.total_reconciled
         assert first.reconcile_metrics.coherent == second.reconcile_metrics.coherent

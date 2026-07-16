@@ -55,7 +55,7 @@ async def test_rules_producer_drives_full_pipeline_without_credentials():
     # Every line with an 'e' got its first occurrences substituted; lines
     # without a rule match kept their OCR text (no fallback, no retry).
     assert result.retry_count == 0
-    assert result.fallback_count == 0
+    assert result.fallback_chunks == 0
     changed = [
         lm
         for page in doc.pages

@@ -108,7 +108,7 @@ async def test_transient_failure_recovers_via_downgrade():
     obs = _RecordingObserver()
     result = await _run(_CountingProvider(fail_times=3), obs)
     assert "chunk_downgraded" in obs.names()
-    assert result.fallback_count == 0
+    assert result.fallback_chunks == 0
 
 
 @pytest.mark.asyncio
@@ -129,7 +129,7 @@ async def test_persistent_failure_falls_back_after_downgrade():
     obs = _RecordingObserver()
     result = await _run(_CountingProvider(fail_times=9999), obs)
     assert "chunk_downgraded" in obs.names()
-    assert result.fallback_count >= 1
+    assert result.fallback_chunks >= 1
     assert "warning" in obs.names()
 
 
@@ -252,7 +252,7 @@ async def test_downgrade_replans_targets_only_never_context():
     assert line_grain_ids, "expected a LINE-grain descent"
     assert "L4" not in line_grain_ids, "context line stolen by the descent"
     # Every line still ends corrected (L4 by its own window), no fallback.
-    assert result.fallback_count == 0
+    assert result.fallback_chunks == 0
     for lm in doc.pages[0].lines:
         assert lm.status == LineStatus.CORRECTED, lm.line_id
 
