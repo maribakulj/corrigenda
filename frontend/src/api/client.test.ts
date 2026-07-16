@@ -206,41 +206,29 @@ describe('apiGet-backed endpoints', () => {
 // downloadJob
 // ---------------------------------------------------------------------------
 
-describe('downloadJob (Plan V2.4 — token in header, blob to the browser)', () => {
-  function blobResponse(headers: Record<string, string> = {}) {
-    return {
-      ok: true,
-      status: 200,
-      headers: { get: (k: string) => headers[k.toLowerCase()] ?? null },
-      blob: () => Promise.resolve(new Blob(['<alto/>'])),
-      json: () => Promise.reject(new Error('not json')),
-    } as unknown as Response
-  }
-
-  it('fetches with the token in a HEADER and never in the URL', async () => {
+describe('downloadJob (signed URL — the browser streams, the token stays in a header)', () => {
+  it('mints the signed URL with the token in a HEADER, then navigates to it', async () => {
     setJobToken('dl-tok')
     fetchMock.mockResolvedValue(
-      blobResponse({ 'content-disposition': 'attachment; filename="out.zip"' }),
+      jsonResponse({ download_url: '/api/jobs/j7/download?sig=123.abc' }),
     )
-    vi.stubGlobal('URL', {
-      createObjectURL: vi.fn(() => 'blob:mock'),
-      revokeObjectURL: vi.fn(),
-    })
     const clicked: string[] = []
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
       this: HTMLAnchorElement,
     ) {
-      clicked.push(`${this.getAttribute('href')}|${this.getAttribute('download')}`)
+      clicked.push(this.getAttribute('href') ?? '')
     })
 
     await downloadJob('j7')
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/jobs/j7/download', {
+    // The mint request carries the token as a header; the token itself
+    // appears in NO URL. The download then streams browser-natively via
+    // the short-lived ?sig= — never buffered through fetch().blob().
+    expect(fetchMock).toHaveBeenCalledWith('/api/jobs/j7/download-url', {
       headers: { 'X-Job-Token': 'dl-tok' },
     })
-    // The anchor points at a local blob named by Content-Disposition —
-    // the capability token appears in NO URL.
-    expect(clicked).toEqual(['blob:mock|out.zip'])
+    expect(clicked).toEqual(['/api/jobs/j7/download?sig=123.abc'])
+    expect(clicked[0]).not.toContain('dl-tok')
     expect(document.querySelector('a[href*="download"]')).toBeNull()
     clickSpy.mockRestore()
   })

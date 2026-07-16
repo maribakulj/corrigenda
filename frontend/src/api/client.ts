@@ -30,6 +30,30 @@ export function eventsUrlFor(jobId: string): string {
   return currentEventsUrl ?? `/api/jobs/${jobId}/events`
 }
 
+/** Mint a FRESH events-scoped SSE URL with the capability token.
+ * Credentials are short-lived by design (they only cover one connection
+ * attempt), so every EventSource (re)connection calls this instead of
+ * reusing the creation-time URL — which a long or unbounded run
+ * (JOB_TIMEOUT_SECONDS=0) would outlive. Falls back to the last known
+ * URL when the mint fails: the connection attempt then surfaces the
+ * transport problem through the normal retry ladder. */
+export async function fetchEventsUrl(jobId: string): Promise<string> {
+  try {
+    const resp = await fetch(`${BASE}/api/jobs/${jobId}/events-url`, {
+      headers: tokenHeaders(),
+    })
+    if (!resp.ok) return eventsUrlFor(jobId)
+    const data = (await resp.json()) as { events_url?: string | null }
+    if (data.events_url) {
+      setEventsUrl(data.events_url)
+      return data.events_url
+    }
+    return eventsUrlFor(jobId)
+  } catch {
+    return eventsUrlFor(jobId)
+  }
+}
+
 function tokenHeaders(): Record<string, string> {
   return currentJobToken ? { 'X-Job-Token': currentJobToken } : {}
 }
@@ -154,26 +178,29 @@ export async function cancelJob(jobId: string): Promise<void> {
 // downloadJob — triggers browser download
 // ---------------------------------------------------------------------------
 
-/** Plan V2.4 — fetch with the token in a HEADER, then hand the payload
- * to the browser as a blob: the capability token never appears in a
- * URL (address bar, proxy logs, copied links). */
+/** Ask the backend for a short-lived download-scoped signed URL (token
+ * in a HEADER), then let the BROWSER navigate to it: the artefact
+ * streams natively to disk instead of being buffered whole through
+ * `fetch().blob()` in renderer memory — which defeated the backend's
+ * chunked streaming on large results. The capability token still never
+ * appears in a URL; the ?sig= credential expires in minutes and opens
+ * nothing but this download. */
 export async function downloadJob(jobId: string): Promise<void> {
-  const resp = await fetch(`${BASE}/api/jobs/${jobId}/download`, { headers: tokenHeaders() })
+  const resp = await fetch(`${BASE}/api/jobs/${jobId}/download-url`, {
+    headers: tokenHeaders(),
+  })
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: resp.statusText }))
     throw new Error((err as { detail?: string }).detail ?? 'Failed to download')
   }
-  const disposition = resp.headers.get('content-disposition') ?? ''
-  const m = disposition.match(/filename="?([^";]+)"?/)
-  const filename = m?.[1] ?? `corrigenda-${jobId}.zip`
-  const blob = await resp.blob()
-  const url = URL.createObjectURL(blob)
+  const { download_url } = (await resp.json()) as { download_url: string }
   const a = document.createElement('a')
-  a.href = url
-  a.download = filename
+  a.href = download_url
+  // The server's Content-Disposition names the file; `download` is a
+  // same-origin hint that keeps navigation out of the current tab.
+  a.download = ''
   a.style.display = 'none'
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
-  URL.revokeObjectURL(url)
 }

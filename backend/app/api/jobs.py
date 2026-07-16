@@ -30,6 +30,8 @@ from app.protocols import JobStore
 from app.schemas import (
     TERMINAL_SUCCESS_STATES,
     CreateJobResponse,
+    DownloadUrlResponse,
+    EventsUrlResponse,
     JobManifest,
     JobStatus,
     JobStatusResponse,
@@ -454,11 +456,13 @@ async def _create_job_reserved(
         raise
 
     # Plan V2.4 — events-scoped signed URL for EventSource (which cannot
-    # set headers). Valid for the whole run: the job's timeout budget
-    # plus a margin for queueing and late reconnections.
-    events_sig = sign_url_credential(
-        job_id, "events", _runner_module.DEFAULT_JOB_TIMEOUT_SECONDS + 600
-    )
+    # set headers). Short-lived: it only has to cover the FIRST
+    # connection — every (re)connection asks GET /{id}/events-url for a
+    # fresh credential with the capability token. The historical formula
+    # (job timeout + 600) minted a 10-minute credential when
+    # JOB_TIMEOUT_SECONDS=0 disabled the timeout, after which a dropped
+    # stream on an unbounded run could never be re-established.
+    events_sig = sign_url_credential(job_id, "events", _EVENTS_SIG_TTL_SECONDS)
     return CreateJobResponse(
         job_id=job_id,
         job_token=job_token,
@@ -564,6 +568,50 @@ async def job_events(
 
 
 # ---------------------------------------------------------------------------
+# GET /api/jobs/{job_id}/events-url
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{job_id}/events-url", response_model=EventsUrlResponse)
+async def renew_events_url(
+    job: JobManifest = Depends(require_job_access),
+) -> EventsUrlResponse:
+    """Mint a fresh events-scoped SSE URL (token-gated).
+
+    EventSource cannot set headers, so the stream route takes a signed
+    ``?sig=``. Credentials are deliberately short-lived; a client
+    reconnecting after a drop (or after any amount of time — the job
+    timeout can be disabled entirely) calls this with its capability
+    token instead of holding a credential sized to the whole run.
+    """
+    sig = sign_url_credential(job.job_id, "events", _EVENTS_SIG_TTL_SECONDS)
+    return EventsUrlResponse(events_url=f"/api/jobs/{job.job_id}/events?sig={sig}")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/jobs/{job_id}/download-url
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{job_id}/download-url", response_model=DownloadUrlResponse)
+async def mint_download_url(
+    job: JobManifest = Depends(get_completed_job),
+) -> DownloadUrlResponse:
+    """Mint a short-lived signed download URL (token-gated).
+
+    The browser then navigates to it and streams the artefact natively —
+    no ``fetch().blob()`` buffering the whole file in renderer memory,
+    and the capability token itself still never travels in a URL (a
+    leaked download credential expires in minutes and opens nothing
+    else).
+    """
+    sig = sign_url_credential(job.job_id, "download", _DOWNLOAD_SIG_TTL_SECONDS)
+    return DownloadUrlResponse(
+        download_url=f"/api/jobs/{job.job_id}/download?sig={sig}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # GET /api/jobs/{job_id}/download
 # ---------------------------------------------------------------------------
 
@@ -582,9 +630,15 @@ def _build_zip_archive(tmp_path: str, out_files: list[Path]) -> None:
 @router.get("/{job_id}/download")
 async def download_job(
     job_id: str,
-    job: JobManifest = Depends(require_job_access),
+    job: JobManifest = Depends(require_job_access_signed("download")),
 ) -> Response:
-    """Download corrected XML file(s)."""
+    """Download corrected XML file(s).
+
+    Accessible with the capability token (header) or a download-scoped
+    signed ``?sig=`` minted by ``GET /{job_id}/download-url`` — the
+    header-less variant exists so the BROWSER can stream the artefact
+    natively instead of the app buffering it through a blob.
+    """
     # P0-4 — outputs are only served for a terminal-success job. The
     # writer stages files and only commits on success, but this guard is
     # the contract: a FAILED/RUNNING job's /download can never return a
@@ -696,6 +750,17 @@ async def get_job_diff(job: JobManifest = Depends(get_completed_job)) -> dict:
 #: layout image URLs. Browsers fetch the <img> right after the layout
 #: response; 15 minutes generously covers slow loads and a re-render.
 _IMAGE_SIG_TTL_SECONDS = 15 * 60
+
+#: Lifetime of an events-scoped ``?sig=``. Each credential only has to
+#: cover ONE EventSource connection attempt — the client renews via
+#: GET /{id}/events-url before every (re)connection — so the lifetime
+#: is independent of the job's runtime budget.
+_EVENTS_SIG_TTL_SECONDS = 15 * 60
+
+#: Lifetime of a download-scoped ``?sig=``. Minted immediately before
+#: the browser navigates to it; five minutes covers slow first bytes
+#: without leaving long-lived download URLs in browser history.
+_DOWNLOAD_SIG_TTL_SECONDS = 5 * 60
 
 
 @router.get("/{job_id}/layout")

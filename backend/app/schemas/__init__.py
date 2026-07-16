@@ -33,6 +33,8 @@ from corrigenda.core.schemas import (
 
 from app.schemas.http import (
     CreateJobResponse,
+    DownloadUrlResponse,
+    EventsUrlResponse,
     JobStatusResponse,
     ListModelsRequest,
     ListModelsResponse,
@@ -63,6 +65,8 @@ __all__ = [
     "HyphenRole",
     "JobManifest",
     "JobStatus",
+    "DownloadUrlResponse",
+    "EventsUrlResponse",
     "JobStatusResponse",
     "LLMLineInput",
     "LLMLineOutput",
