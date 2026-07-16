@@ -85,9 +85,11 @@ class BaseProvider(Protocol):
 
     Implementations call out to their provider's API (or run a local
     model) and return the JSON shape declared by ``OUTPUT_JSON_SCHEMA``.
-    Implementations SHOULD wrap recoverable transport failures as
-    ``ProviderTransientError`` so the pipeline retries with
-    exponential backoff.
+    Implementations MUST wrap recoverable transport failures as
+    ``ProviderTransientError`` (and permanent rejections as
+    ``ProviderPermanentError``): recoverability is an allowlist, so a
+    raw httpx/SDK exception is treated as a bug and FAILS the run
+    instead of being retried.
     """
 
     async def list_models(self, api_key: str) -> list[ModelInfo]: ...

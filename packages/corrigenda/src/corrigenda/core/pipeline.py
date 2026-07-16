@@ -92,21 +92,23 @@ from corrigenda.core.schemas import (
     Usage,
 )
 
-# ADR-008 — genuine programming-error types that must FAIL the run rather
-# than degrade silently to OCR fallback on the producer-attempt path.
-# Deliberately EXCLUDES ValueError (JSON/validation/parse errors are
-# expected producer-output failures) and any provider transport error
-# (httpx / SDK exceptions the provider-agnostic pipeline cannot name),
-# which stay recoverable.
-_PROGRAMMING_ERROR_TYPES: tuple[type[BaseException], ...] = (
-    TypeError,
-    AttributeError,
-    KeyError,
-    IndexError,
-    NameError,
-    UnboundLocalError,
-    AssertionError,
-    NotImplementedError,
+# ADR-008 (revised) — recoverability is an ALLOWLIST. Exactly the two
+# families the retry classifier can route are recoverable on the
+# producer-attempt path:
+#   - ProviderTransientError — transport flakiness a conforming provider
+#     wrapped (wrapping is the provider CONTRACT, not a courtesy: the
+#     provider-agnostic pipeline cannot name raw httpx/SDK exceptions,
+#     so an unwrapped one is indistinguishable from a bug and fails the
+#     run rather than degrading to a fake success);
+#   - ValueError — the documented malformed-producer-output family
+#     (ValidationError, HyphenIntegrityError, json.JSONDecodeError all
+#     inherit it; §8.4 keeps them value-shaped for exactly this route).
+# Everything else — RuntimeError, KeyError, a pydantic bug, an SDK
+# exception nobody classified — fails the run: an unknown exception
+# must never become a silently-uncorrected "success".
+_RECOVERABLE_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    ProviderTransientError,
+    ValueError,
 )
 
 # Patterns to redact common secret formats in error messages.
@@ -1766,20 +1768,15 @@ class CorrectionPipeline:
                 # and falling back would fake success. Fatal for the run.
                 raise
             except Exception as exc:
-                # ADR-008 (attempt-path branch): a
-                # genuine PROGRAMMING error — a bug in _script_to_raw /
-                # validation, or a broken invariant — must FAIL the run, not
-                # be silently masked as uncorrected OCR text (which would
-                # degrade EVERY chunk to OCR while still reporting success).
-                # A denylist (not an allowlist) is used deliberately: the
-                # pipeline is provider-agnostic and cannot name every
-                # provider transport type (httpx errors, SDK exceptions),
-                # which are EXPECTED and must remain recoverable. Only the
-                # classic programmer-bug types propagate; ValueError family
-                # (JSON/validation/parse/HyphenIntegrityError),
-                # ProviderTransientError, CorrectionError, and any provider
-                # transport error all degrade to retry-then-OCR-fallback.
-                if isinstance(exc, _PROGRAMMING_ERROR_TYPES):
+                # ADR-008 (attempt-path branch, revised): only the
+                # allowlisted recoverable families degrade to
+                # retry-then-OCR-fallback. Anything else — a programming
+                # error, an unwrapped SDK transport exception, a broken
+                # invariant — FAILS the run: masking it as uncorrected OCR
+                # text would degrade EVERY chunk while still reporting
+                # success. Providers signal transport flakiness by
+                # wrapping it as ProviderTransientError (their contract).
+                if not isinstance(exc, _RECOVERABLE_ERROR_TYPES):
                     raise
                 # §5.1 — the pipeline no longer holds credentials; the
                 # pattern-based redaction still masks secret-shaped
