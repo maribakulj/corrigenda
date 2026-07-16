@@ -480,6 +480,7 @@ def build_document_manifest(
         total_pages=len(all_pages),
         total_blocks=total_blocks,
         total_lines=total_lines,
+        source_format="alto",
     )
 
 

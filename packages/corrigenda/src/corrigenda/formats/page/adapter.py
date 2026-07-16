@@ -15,6 +15,10 @@ from corrigenda.formats.page.rewriter import (
 class PageFormatAdapter:
     """Thin adapter: the pipeline's format seam, bound to PAGE XML."""
 
+    #: Matches ``DocumentManifest.source_format`` — the engine refuses a
+    #: run whose manifest declares a different format.
+    format_name = "page"
+
     def rewrite_file(
         self,
         xml_path: Path,

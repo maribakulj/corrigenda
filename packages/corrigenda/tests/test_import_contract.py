@@ -4,9 +4,10 @@ Rules enforced:
   1. ``corrigenda.core`` (and ``errors``) never import lxml, formats or
      producers — statically NOR at import time (subprocess-verified: no
      ``lxml`` in ``sys.modules`` after importing every core module).
-  2. Exactly TWO pinned exceptions, both composition-boundary conveniences
-     in ``core/pipeline.py``, both function-local:
-     ``_default_format_adapter`` (lazy ALTO adapter) and
+  2. Exactly TWO pinned lazy functions, both composition boundaries in
+     ``core/pipeline.py``, both with function-local imports only:
+     ``_adapter_for_format`` (resolves the adapter the MANIFEST declares
+     — one import per supported format, no implicit default) and
      ``for_provider`` (lazy ``LLMEditProducer`` wrap — the §5.1
      resorption moved the prompt/schema seam into the producer, so the
      old ``_default_llm_contract`` exception is gone).
@@ -52,8 +53,9 @@ def test_core_has_no_forbidden_imports_except_pinned_lazy_default():
     all_violations: list[str] = []
     for f in core_files:
         all_violations.extend(_violations(f, FORBIDDEN_IN_CORE))
-    # The only allowed sites: the two pinned lazy defaults in pipeline.py.
-    assert len(all_violations) == 2, f"unexpected core imports: {all_violations}"
+    # The only allowed sites: the two pinned lazy functions in pipeline.py
+    # (_adapter_for_format imports one adapter per supported format).
+    assert len(all_violations) == 3, f"unexpected core imports: {all_violations}"
     assert all("pipeline.py" in v for v in all_violations), all_violations
 
     # And those imports must be FUNCTION-LOCAL, inside the pinned names.
@@ -68,7 +70,7 @@ def test_core_has_no_forbidden_imports_except_pinned_lazy_default():
             if n.startswith(("corrigenda.formats", "corrigenda.producers"))
         )
     )
-    assert lazy_funcs == ["_default_format_adapter", "for_provider"], lazy_funcs
+    assert lazy_funcs == ["_adapter_for_format", "for_provider"], lazy_funcs
 
 
 def test_importing_core_never_loads_lxml():

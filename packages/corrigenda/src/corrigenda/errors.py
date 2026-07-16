@@ -11,6 +11,7 @@ raises so consumers can ``except CorrectionError`` once::
     ├── ProviderError              — provider errors (core.protocols)
     │   ├── ProviderTransientError — recoverable transport failure
     │   └── ProviderPermanentError — fatal rejection (credentials, model)
+    ├── ConfigurationError         — contradictory/incomplete composition
     ├── ProjectionError            — output artefact ≠ decisions
     └── CorrectionAborted
 
@@ -103,6 +104,19 @@ class ProviderError(CorrectionError):
         self.status_code = status_code
 
 
+class ConfigurationError(CorrectionError):
+    """The run was assembled from contradictory or incomplete pieces.
+
+    Raised before any correction work begins (or before any output is
+    written): e.g. an injected format adapter that contradicts the
+    format the manifest was parsed as, or a hand-built manifest with no
+    stamped format reaching the write phase without an explicit adapter.
+    Never retryable — the caller must fix the composition.
+    """
+
+    code: ClassVar[str] = "configuration_error"
+
+
 class ProjectionError(CorrectionError):
     """The rewritten XML does not say what the run decided.
 
@@ -137,6 +151,7 @@ __all__ = [
     "DuplicateIdError",
     "ValidationError",
     "ProviderError",
+    "ConfigurationError",
     "ProjectionError",
     "CorrectionAborted",
 ]

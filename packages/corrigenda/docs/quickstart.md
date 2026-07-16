@@ -58,7 +58,10 @@ class Observer:
 async def main():
     src = Path("my_page.xml")
     doc = build_document_manifest([(src, src.name)])   # ALTO
-    # PAGE XML: from corrigenda.formats.page.parser import build_document_manifest
+    # PAGE XML: import build_document_manifest from
+    # corrigenda.formats.page.parser instead — nothing else changes:
+    # the manifest carries its format and the pipeline derives the
+    # matching rewriter from it (no adapter to inject).
 
     pipeline = CorrectionPipeline.for_provider(
         MyProvider(),

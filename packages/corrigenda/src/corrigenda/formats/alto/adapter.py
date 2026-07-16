@@ -15,6 +15,10 @@ from corrigenda.formats.alto.rewriter import (
 class AltoFormatAdapter:
     """Thin adapter: the pipeline's format seam, bound to ALTO."""
 
+    #: Matches ``DocumentManifest.source_format`` — the engine refuses a
+    #: run whose manifest declares a different format.
+    format_name = "alto"
+
     def rewrite_file(
         self,
         xml_path: Path,
