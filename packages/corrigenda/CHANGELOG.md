@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Terminal-decision invariant — no line ends a run undecided.** The
+  page loop's ADR-008 absorb branch (recoverable `CorrectionError` →
+  `chunk_error` event + continue) now OCR-falls-back every
+  still-`PENDING` target line of the failed chunk before continuing —
+  previously those lines silently kept no decision while the run
+  reported success. A run-level backstop additionally refuses to write
+  outputs while any line is `PENDING` (engine bug → loud `RuntimeError`,
+  never a degraded success).
+
 - **Projection invariant — the artefact must say what the run decided.**
   The per-line text re-extracted from the rewritten XML (previously a
   trace-only diagnostic, `output_alto_text`) is now verified against the
