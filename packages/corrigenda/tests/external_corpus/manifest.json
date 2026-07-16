@@ -1,5 +1,6 @@
 {
-  "_comment": "V4.2 phase 3 — external ALTO corpus, NEVER used during development. Fetched at CI time by fetch.py from Gallica (source: gallica.bnf.fr / Bibliothèque nationale de France). The dev corpus lives in examples/ (ark bpt6k3265015q) and must never appear here.",
+  "_comment": "V4.2 phase 3 — external ALTO corpus, NEVER used during development. Fetched at CI time by fetch.py from Gallica (source: gallica.bnf.fr / Bibliothèque nationale de France). The dev corpus lives in examples/ (ark bpt6k3265015q) and must never appear here. Integrity: each document MAY pin per-page SHA-256 digests under 'sha256' (page number → hex); fetch.py prints ready-to-paste digests for unpinned pages and fails loudly on drift (Gallica re-OCR). 'max_missing' is the explicit network-flakiness tolerance.",
+  "max_missing": 1,
   "documents": [
     {
       "ark": "bpt6k2206225",
