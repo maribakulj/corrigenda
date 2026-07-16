@@ -237,3 +237,114 @@ async def test_sequential_runs_from_same_file_are_identical() -> None:
     first = _outcomes(await _run_partition(_SAMPLE, None))
     second = _outcomes(await _run_partition(_SAMPLE, None))
     assert first == second
+
+
+# ---------------------------------------------------------------------------
+# P3.2 gate — the same properties over RICH hyphenation: chains
+# (PART1→BOTH→PART2), multi-page files, explicit cross-page pairs.
+# ---------------------------------------------------------------------------
+
+from corrigenda.core.schemas import HyphenRole  # noqa: E402
+
+from tests._alto_gen import rich_alto_documents  # noqa: E402
+
+_EXPECTED_ROLE = {
+    "plain": HyphenRole.NONE,
+    "part1": HyphenRole.PART1,
+    "both": HyphenRole.BOTH,
+    "part2": HyphenRole.PART2,
+    "seam1": HyphenRole.PART1,
+    "seam2": HyphenRole.PART2,
+}
+
+
+@settings(max_examples=30, deadline=None)
+@given(doc_and_roles=rich_alto_documents())
+def test_parser_recognises_every_generated_structure(
+    doc_and_roles: tuple[str, dict[str, str]],
+) -> None:
+    """Generator↔parser cross-validation: every encoded chain member and
+    seam line must surface with its intended role, and seam lines must be
+    linked ACROSS the page boundary. Without this check a silent encoding
+    drift would turn the downstream properties vacuous."""
+    doc, expected = doc_and_roles
+    path = _write_tmp(doc)
+    try:
+        manifest = build_document_manifest([(path, path.name)])
+        by_id = {lm.line_id: lm for page in manifest.pages for lm in page.lines}
+        for line_id, role in expected.items():
+            lm = by_id[line_id]
+            assert lm.hyphen_role == _EXPECTED_ROLE[role], (
+                f"{line_id}: generated as {role!r}, parsed as {lm.hyphen_role}"
+            )
+            if role == "seam1":
+                assert lm.hyphen_pair_page_id == "P2", (
+                    "seam PART1 must link to its partner on the NEXT page"
+                )
+            if role == "seam2":
+                assert lm.hyphen_pair_page_id == "P1", (
+                    "seam PART2 must link back to the PREVIOUS page"
+                )
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@settings(max_examples=25, deadline=None)
+@given(doc_and_roles=rich_alto_documents())
+def test_final_text_invariant_under_chunking_with_chains(
+    doc_and_roles: tuple[str, dict[str, str]],
+) -> None:
+    """THE P3.2 gate: chunking invariance where the reconciler actually
+    works — chains, cross-page pairs, corrections landing ON hyphen
+    lines (the rules substitute in every line, fragments included)."""
+    doc, _ = doc_and_roles
+    path = _write_tmp(doc)
+    try:
+        results = {
+            name: _outcomes(asyncio.run(_run_partition(path, config)))
+            for name, config in _PARTITIONS.items()
+        }
+        baseline = results["default"]
+        assert all(
+            status != LineStatus.PENDING.value for _, status in baseline.values()
+        )
+        for name, outcome in results.items():
+            assert outcome == baseline, (
+                f"partition {name!r} changed the result on a chained/"
+                "cross-page document"
+            )
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@settings(max_examples=25, deadline=None)
+@given(doc_and_roles=rich_alto_documents())
+def test_identity_producer_preserves_rich_docs(
+    doc_and_roles: tuple[str, dict[str, str]],
+) -> None:
+    doc, _ = doc_and_roles
+    path = _write_tmp(doc)
+    try:
+        writer = _Capture()
+
+        async def run() -> None:
+            manifest = build_document_manifest([(path, path.name)])
+            pipeline = CorrectionPipeline(
+                producer=_IdentityProducer(),
+                observer=_Null(),
+                output_writer=writer,
+                provider_name="identity",
+                model="none",
+            )
+            await pipeline.run(
+                document_manifest=manifest,
+                source_files={path.name: path},
+            )
+
+        asyncio.run(run())
+        out = next(iter(writer.outputs.values()))
+        src = doc.encode("utf-8")
+        assert _string_contents(out) == _string_contents(src)
+        assert _textline_geometry(out) == _textline_geometry(src)
+    finally:
+        path.unlink(missing_ok=True)
