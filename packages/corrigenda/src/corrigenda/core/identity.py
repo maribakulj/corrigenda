@@ -27,11 +27,36 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable
+from dataclasses import dataclass
 
-from corrigenda.core.schemas import PageManifest
+from corrigenda.core.schemas import LineManifest, PageManifest
 from corrigenda.errors import DuplicateIdError, ParseError
 
 _MAX_REPORTED = 5
+
+
+@dataclass(frozen=True, slots=True)
+class LineRef:
+    """Fully qualified line identity — the ONLY key type for document-wide
+    line lookups (ADR-009).
+
+    ``page_id`` is document-unique (ADR-007: the format builders
+    disambiguate cross-file collisions and the pipeline door refuses
+    duplicates), so the pair qualifies a physical line unambiguously
+    across every source file of a run. The source file is deliberately
+    NOT part of the key: it is a property of the page
+    (``PageManifest.source_file``), and adding it would allow two keys
+    for one physical line. Bare ``line_id`` strings remain legal only
+    for lookups already scoped to ONE page or ONE source file.
+    """
+
+    page_id: str
+    line_id: str
+
+
+def line_ref(lm: LineManifest) -> LineRef:
+    """The :class:`LineRef` of a manifest line."""
+    return LineRef(page_id=lm.page_id, line_id=lm.line_id)
 
 
 def _format_duplicates(kind: str, counts: Counter[str]) -> str | None:
@@ -150,6 +175,8 @@ def ensure_unique_page_ids_across_files(pages: Iterable[PageManifest]) -> None:
 
 
 __all__ = [
+    "LineRef",
+    "line_ref",
     "ensure_unique_identities",
     "ensure_unique_element_ids",
     "ensure_element_ids_present",

@@ -46,8 +46,10 @@ from corrigenda.core.hyphenation import (
     reconcile_hyphen_pair,
 )
 from corrigenda.core.identity import (
+    LineRef,
     ensure_unique_identities,
     ensure_unique_page_ids_across_files,
+    line_ref,
 )
 from corrigenda.errors import (
     ConfigurationError,
@@ -196,11 +198,6 @@ def sanitize_error(msg: str, api_key: str | None = None) -> str:
     return msg
 
 
-def _trace_key(lm: LineManifest) -> str:
-    """Composite key for line traces, avoiding collisions across pages."""
-    return f"{lm.page_id}:{lm.line_order_global}:{lm.line_id}"
-
-
 def _verify_all_lines_terminal(document_manifest: DocumentManifest) -> None:
     """Refuse to finish a run while any line lacks a terminal decision.
 
@@ -270,7 +267,7 @@ def _verify_projection(
 
 
 def _set_trace(
-    traces: dict[str, LineTrace] | None,
+    traces: dict[LineRef, LineTrace] | None,
     lm: LineManifest,
     **fields: object,
 ) -> None:
@@ -283,7 +280,7 @@ def _set_trace(
     """
     if traces is None:
         return
-    trace = traces.get(_trace_key(lm))
+    trace = traces.get(line_ref(lm))
     if trace is None:
         return
     for name, value in fields.items():
@@ -416,7 +413,7 @@ def _resolve_partner(
     *,
     is_forward: bool,
     line_by_id: dict[str, LineManifest],
-    cross_page_partners: dict[tuple[str, str], LineManifest] | None,
+    cross_page_partners: dict[LineRef, LineManifest] | None,
 ) -> LineManifest | None:
     """Resolve a hyphen partner using a page-qualified lookup.
 
@@ -441,7 +438,7 @@ def _resolve_partner(
 
     if cross_page_partners is None:
         return None
-    return cross_page_partners.get((partner_page, partner_id))
+    return cross_page_partners.get(LineRef(page_id=partner_page, line_id=partner_id))
 
 
 def _reconcile_one_pair(
@@ -531,7 +528,7 @@ class CorrectionResult:
     #: fallen lines (e.g. ``{"all_attempts_exhausted": 20}``), so a
     #: consumer can say WHY without parsing messages.
     fallback_reasons: dict[str, int]
-    traces: dict[str, LineTrace]
+    traces: dict[LineRef, LineTrace]
     reconcile_metrics: ReconcileMetrics
     #: F14 — aggregate token consumption across every producer call in the
     #: run (zero when no provider reported usage).
@@ -576,21 +573,19 @@ class RunContext:
     #: across FILES (only page_ids are unique document-wide), and a
     #: bare-id key would let the last file's ops overwrite an earlier
     #: file's, corrupting the dry-run edit_script.
-    producer_ops: dict[tuple[str, str], tuple[list[EditOp], str]] = field(
-        default_factory=dict
-    )
+    producer_ops: dict[LineRef, tuple[list[EditOp], str]] = field(default_factory=dict)
     #: Per-line PRE-REVERT accepted correction, keyed by _trace_key. The
     #: cross-chunk boundary pass and the page-seam pass compare against
     #: THIS snapshot (like the intra-chunk pass does via its local
     #: `accepted_lines`): reading the live corrected_text after an
     #: earlier revert would mask the third line of an identical-
     #: correction run straddling a chunk/page seam.
-    accepted_snapshot: dict[str, str] = field(default_factory=dict)
+    accepted_snapshot: dict[LineRef, str] = field(default_factory=dict)
     #: Which finalization pass ACTUALLY owned each line (keyed by
     #: _trace_key). Granularity descent spawns sub-chunks the plan never
     #: listed, so the boundary pass must derive its seams from these
     #: owners, not from plan.chunks.
-    finalized_owner: dict[str, int] = field(default_factory=dict)
+    finalized_owner: dict[LineRef, int] = field(default_factory=dict)
     finalize_seq: int = 0
     #: §4.1 vision envelope — resolved once per run from run(source_images=…).
     image_ref_by_page_id: dict[str, ImageRef] = field(default_factory=dict)
@@ -906,10 +901,10 @@ class CorrectionPipeline:
         )
 
         # Initialize line traces
-        traces: dict[str, LineTrace] = {}
+        traces: dict[LineRef, LineTrace] = {}
         for page in document_manifest.pages:
             for lm in page.lines:
-                traces[_trace_key(lm)] = LineTrace(
+                traces[line_ref(lm)] = LineTrace(
                     line_id=lm.line_id,
                     page_id=lm.page_id,
                     source_ocr_text=lm.ocr_text,
@@ -917,10 +912,10 @@ class CorrectionPipeline:
                 )
 
         # Global page-qualified registry for cross-page partner lookups
-        all_lines_global: dict[tuple[str, str], LineManifest] = {}
+        all_lines_global: dict[LineRef, LineManifest] = {}
         for page in document_manifest.pages:
             for lm in page.lines:
-                all_lines_global[(lm.page_id, lm.line_id)] = lm
+                all_lines_global[line_ref(lm)] = lm
 
         total_chunks = 0
         total_reconciled = 0
@@ -934,7 +929,7 @@ class CorrectionPipeline:
                 )
 
             # Cross-page partners needed by this page's lines
-            cross_page: dict[tuple[str, str], LineManifest] = {}
+            cross_page: dict[LineRef, LineManifest] = {}
             for lm in page.lines:
                 for partner_id, partner_page in (
                     (lm.hyphen_pair_line_id, lm.hyphen_pair_page_id),
@@ -944,9 +939,13 @@ class CorrectionPipeline:
                         continue
                     if partner_page == page.page_id:
                         continue
-                    partner = all_lines_global.get((partner_page, partner_id))
+                    partner = all_lines_global.get(
+                        LineRef(page_id=partner_page, line_id=partner_id)
+                    )
                     if partner is not None:
-                        cross_page[(partner_page, partner_id)] = partner
+                        cross_page[
+                            LineRef(page_id=partner_page, line_id=partner_id)
+                        ] = partner
 
             page_chunks, page_reconciled = await self._process_page(
                 ctx=ctx,
@@ -991,7 +990,7 @@ class CorrectionPipeline:
                         lm.line_id,
                         lm.ocr_text,
                         ctx.accepted_snapshot.get(
-                            _trace_key(lm),
+                            line_ref(lm),
                             lm.corrected_text
                             if lm.corrected_text is not None
                             else lm.ocr_text,
@@ -1048,7 +1047,7 @@ class CorrectionPipeline:
         ]
         fallback_reasons: dict[str, int] = {}
         for lm in fallback_lms:
-            trace = traces.get(_trace_key(lm))
+            trace = traces.get(line_ref(lm))
             raw = (trace.fallback_reason if trace else None) or "unspecified"
             prefix = raw.split(":", 1)[0].strip()
             fallback_reasons[prefix] = fallback_reasons.get(prefix, 0) + 1
@@ -1093,7 +1092,7 @@ class CorrectionPipeline:
             for lm in page.lines:
                 if lm.status is not LineStatus.CORRECTED or lm.corrected_text is None:
                     continue
-                captured = ctx.producer_ops.get((lm.page_id, lm.line_id))
+                captured = ctx.producer_ops.get(line_ref(lm))
                 if captured is None:
                     # An accepted line the producer left untouched (no op) —
                     # e.g. a rules producer's uncovered line. Nothing applied.
@@ -1159,8 +1158,8 @@ class CorrectionPipeline:
         ctx: RunContext,
         page: PageManifest,
         document_id: str,
-        traces: dict[str, LineTrace],
-        cross_page_partners: dict[tuple[str, str], LineManifest] | None,
+        traces: dict[LineRef, LineTrace],
+        cross_page_partners: dict[LineRef, LineManifest] | None,
         should_abort: Callable[[], bool] | None = None,
     ) -> tuple[int, int]:
         line_by_id: dict[str, LineManifest] = {lm.line_id: lm for lm in page.lines}
@@ -1288,8 +1287,8 @@ class CorrectionPipeline:
         # both sides, where a revert would be a no-op anyway.
         boundary_reverts: dict[str, str] = {}
         for a, b in zip(page.lines, page.lines[1:]):
-            if ctx.finalized_owner.get(_trace_key(a)) == ctx.finalized_owner.get(
-                _trace_key(b)
+            if ctx.finalized_owner.get(line_ref(a)) == ctx.finalized_owner.get(
+                line_ref(b)
             ):
                 continue
             # Compare the PRE-REVERT accepted corrections (snapshotted
@@ -1302,7 +1301,7 @@ class CorrectionPipeline:
                     lm.line_id,
                     lm.ocr_text,
                     ctx.accepted_snapshot.get(
-                        _trace_key(lm),
+                        line_ref(lm),
                         lm.corrected_text
                         if lm.corrected_text is not None
                         else lm.ocr_text,
@@ -1349,8 +1348,8 @@ class CorrectionPipeline:
         chunk: ChunkRequest,
         page: PageManifest,
         line_by_id: dict[str, LineManifest],
-        traces: dict[str, LineTrace] | None = None,
-        cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
+        traces: dict[LineRef, LineTrace] | None = None,
+        cross_page_partners: dict[LineRef, LineManifest] | None = None,
         budget: list[int] | None = None,
         should_abort: Callable[[], bool] | None = None,
     ) -> int:
@@ -1503,8 +1502,8 @@ class CorrectionPipeline:
         chunk_lines: list[LineManifest],
         response: LLMResponse,
         line_by_id: dict[str, LineManifest],
-        cross_page_partners: dict[tuple[str, str], LineManifest] | None,
-        traces: dict[str, LineTrace] | None,
+        cross_page_partners: dict[LineRef, LineManifest] | None,
+        traces: dict[LineRef, LineTrace] | None,
         usage: Usage | None = None,
     ) -> int:
         """Reconcile / accept / finalize a chunk whose LLM call succeeded.
@@ -1566,7 +1565,7 @@ class CorrectionPipeline:
         *,
         chunk: ChunkRequest,
         chunk_lines: list[LineManifest],
-        traces: dict[str, LineTrace] | None,
+        traces: dict[LineRef, LineTrace] | None,
         sanitised_msg: str,
     ) -> None:
         """Revert the chunk's TARGET lines to their OCR text and emit a
@@ -1611,7 +1610,7 @@ class CorrectionPipeline:
         chunk_lines: list[LineManifest],
         hyphen_pairs: dict[str, str],
         all_lines_by_id: dict[str, LineManifest],
-        traces: dict[str, LineTrace] | None,
+        traces: dict[LineRef, LineTrace] | None,
         max_attempts: int,
     ) -> tuple[LLMResponse | None, int, bool, str, Usage | None]:
         """Call the edit producer with retries; return the outcome.
@@ -1757,7 +1756,9 @@ class CorrectionPipeline:
                 for line_id, line_ops in ops_by_line.items():
                     # Chunks are page-scoped, so chunk.page_id qualifies
                     # every target line unambiguously.
-                    ctx.producer_ops[(chunk.page_id, line_id)] = (
+                    ctx.producer_ops[
+                        LineRef(page_id=chunk.page_id, line_id=line_id)
+                    ] = (
                         line_ops,
                         produced_by_line[line_id],
                     )
@@ -1873,7 +1874,7 @@ class CorrectionPipeline:
         chunk_lines: list[LineManifest],
         text_by_id: dict[str, str],
         line_by_id: dict[str, LineManifest],
-        cross_page_partners: dict[tuple[str, str], LineManifest] | None,
+        cross_page_partners: dict[LineRef, LineManifest] | None,
     ) -> int:
         """Two-pass hyphen reconciliation: PART1→partner, then BOTH→forward.
 
@@ -1954,7 +1955,7 @@ class CorrectionPipeline:
         chunk_lines: list[LineManifest],
         text_by_id: dict[str, str],
         all_lines_by_id: dict[str, LineManifest],
-        traces: dict[str, LineTrace] | None,
+        traces: dict[LineRef, LineTrace] | None,
     ) -> None:
         """Apply the per-line acceptance policy on lines not already
         reconciled as hyphen pairs.
@@ -2007,9 +2008,9 @@ class CorrectionPipeline:
         self,
         *,
         reverts: dict[str, str],
-        traces: dict[str, LineTrace] | None,
+        traces: dict[LineRef, LineTrace] | None,
         line_by_id: dict[str, LineManifest],
-        cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
+        cross_page_partners: dict[LineRef, LineManifest] | None = None,
     ) -> None:
         """Revert duplicate-flagged lines to OCR — atomically with their
         hyphen partner.
@@ -2078,7 +2079,7 @@ class CorrectionPipeline:
             # Only stamp the reason if no earlier fallback path (e.g.
             # orphan_hyphen_completed) already pinned one.
             if traces is not None:
-                trace = traces.get(_trace_key(lm))
+                trace = traces.get(line_ref(lm))
                 if trace is not None and not trace.fallback_reason:
                     trace.fallback_reason = reason
 
@@ -2087,9 +2088,9 @@ class CorrectionPipeline:
         *,
         ctx: RunContext,
         chunk_lines: list[LineManifest],
-        traces: dict[str, LineTrace] | None,
+        traces: dict[LineRef, LineTrace] | None,
         line_by_id: dict[str, LineManifest],
-        cross_page_partners: dict[tuple[str, str], LineManifest] | None = None,
+        cross_page_partners: dict[LineRef, LineManifest] | None = None,
     ) -> None:
         """Adjacent-duplicate revert + projected_text/validation_status
         for every line trace.
@@ -2109,10 +2110,10 @@ class CorrectionPipeline:
         # the planned chunk list never had.
         ctx.finalize_seq += 1
         for lm in chunk_lines:
-            ctx.accepted_snapshot[_trace_key(lm)] = (
+            ctx.accepted_snapshot[line_ref(lm)] = (
                 lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
             )
-            ctx.finalized_owner[_trace_key(lm)] = ctx.finalize_seq
+            ctx.finalized_owner[line_ref(lm)] = ctx.finalize_seq
         dup_reverts = check_adjacent_duplicates(
             accepted_lines, config=self.guard_config
         )
@@ -2144,7 +2145,7 @@ class CorrectionPipeline:
         *,
         document_manifest: DocumentManifest,
         source_files: dict[str, Path],
-        traces: dict[str, LineTrace],
+        traces: dict[LineRef, LineTrace],
         apply: bool = True,
     ) -> None:
         """Rewrite corrected ALTO files, update traces, and (when ``apply``)
@@ -2222,20 +2223,20 @@ class CorrectionPipeline:
                 },
             )
 
-            lid_to_tkey: dict[str, str] = {}
+            lid_to_ref: dict[str, LineRef] = {}
             for p in pages_for_file:
                 for lm in p.lines:
-                    lid_to_tkey[lm.line_id] = _trace_key(lm)
+                    lid_to_ref[lm.line_id] = line_ref(lm)
 
             for lid, rpath in rewriter_paths.items():
-                tkey = lid_to_tkey.get(lid)
+                tkey = lid_to_ref.get(lid)
                 if tkey:
                     t = traces.get(tkey)
                     if t is not None:
                         t.rewriter_path = rpath
 
             for lid, otxt in output_texts.items():
-                tkey = lid_to_tkey.get(lid)
+                tkey = lid_to_ref.get(lid)
                 if tkey:
                     t = traces.get(tkey)
                     if t is not None:
