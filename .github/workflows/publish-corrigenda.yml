@@ -101,25 +101,45 @@ jobs:
         # Plan V4.3 — a matching tag proves INTENT, not QUALITY: nothing
         # so far proves the tagged commit ever passed CI. Require a
         # completed, successful run of the CI workflow for this exact
-        # SHA before building anything.
+        # SHA — and remember WHICH run, because its build artifact is
+        # what gets published below.
+        id: ci_gate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           SHA=$(git rev-parse HEAD)
-          CONCLUSION=$(gh api \
+          RUN=$(gh api \
             "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=${SHA}&status=completed&per_page=1" \
-            --jq '.workflow_runs[0].conclusion // "none"')
+            --jq '{conclusion: (.workflow_runs[0].conclusion // "none"), id: (.workflow_runs[0].id // 0)}')
+          CONCLUSION=$(echo "${RUN}" | python3 -c "import json,sys; print(json.load(sys.stdin)['conclusion'])")
+          RUN_ID=$(echo "${RUN}" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
           if [[ "${CONCLUSION}" != "success" ]]; then
             echo "::error::No successful CI run found for ${SHA} (latest completed: ${CONCLUSION}). Only commits with green CI may be published."
             exit 1
           fi
-          echo "CI is green for ${SHA}."
+          echo "CI is green for ${SHA} (run ${RUN_ID})."
+          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
 
-      - name: Install build tooling
-        run: pip install build
-
-      - name: Build wheel + sdist
-        run: python -m build
+      - name: Download the exact distributions that CI tested
+        # No rebuild: the bytes CI built, smoke-installed and went green
+        # on are the bytes that get attested and published. The artifact
+        # comes from the verified run above; its SHA256SUMS (written by
+        # the CI build job) proves the download is intact. Note: GitHub
+        # artifact retention applies — publishing an old tag may require
+        # re-running CI on that SHA first, which re-arms the same gate.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ steps.ci_gate.outputs.run_id }}" \
+            --repo "${{ github.repository }}" \
+            --name corrigenda-dist \
+            --dir dist
+          cd dist
+          sha256sum -c SHA256SUMS
+          # twine (inside the publish action) uploads every file in
+          # packages-dir and rejects non-distribution formats.
+          rm SHA256SUMS
+          ls -l
 
       - name: Smoke-install the wheel
         # Catch packaging regressions before they reach the index.
@@ -131,20 +151,40 @@ jobs:
           /tmp/wheel-smoke/bin/python _smoke_imports.py
 
       - name: Generate SBOM (CycloneDX) for the released artefact
-        # Plan V4.3 — a release ships with its bill of materials. The SBOM
-        # is produced from a CLEAN venv holding exactly the wheel and its
-        # resolved dependencies (the smoke-install env above), not the
-        # build runner's polluted site-packages. pip-audit is already the
-        # repo's SCA tool (backend job); no new action to pin.
+        # Plan V4.3 — a release ships with its bill of materials. The
+        # SBOM describes the smoke-install venv (exactly the wheel and
+        # its resolved dependencies) but the GENERATOR runs from its own
+        # venv, inspecting that environment from outside: installing the
+        # tool into the audited venv put pip-audit and its whole
+        # dependency tree INTO the shipped SBOM. cyclonedx-py is the
+        # reference CycloneDX generator and supports pointing at another
+        # environment; pip-audit (the repo's SCA tool) has no such mode.
         # The SBOM lives OUTSIDE dist/: twine (inside the publish action)
         # uploads every file in packages-dir and rejects non-distribution
         # formats, so a .json in dist/ would break the upload.
         run: |
           mkdir -p sbom
-          /tmp/wheel-smoke/bin/pip install pip-audit
-          /tmp/wheel-smoke/bin/pip-audit --format cyclonedx-json \
-            --output sbom/corrigenda-sbom.cyclonedx.json
+          python -m venv /tmp/sbom-tool
+          /tmp/sbom-tool/bin/pip install cyclonedx-bom
+          /tmp/sbom-tool/bin/cyclonedx-py environment /tmp/wheel-smoke/bin/python \
+            > sbom/corrigenda-sbom.cyclonedx.json
           test -s sbom/corrigenda-sbom.cyclonedx.json
+
+      - name: Verify the SBOM describes the wheel, not the tooling
+        run: |
+          python3 - << 'EOF'
+          import json
+
+          with open("sbom/corrigenda-sbom.cyclonedx.json") as fh:
+              sbom = json.load(fh)
+          components = {c["name"].lower() for c in sbom.get("components", [])}
+          assert "corrigenda" in components, f"corrigenda missing: {sorted(components)}"
+          for tool in ("pip-audit", "cyclonedx-bom", "cyclonedx-python-lib"):
+              assert tool not in components, (
+                  f"{tool} polluted the SBOM: {sorted(components)}"
+              )
+          print(f"SBOM components: {sorted(components)}")
+          EOF
 
       - name: Publish to TestPyPI (Trusted Publishing OIDC + PEP 740)
         if: inputs.target == 'testpypi'
