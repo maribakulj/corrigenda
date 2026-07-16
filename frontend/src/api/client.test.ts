@@ -209,9 +209,7 @@ describe('apiGet-backed endpoints', () => {
 describe('downloadJob (signed URL — the browser streams, the token stays in a header)', () => {
   it('mints the signed URL with the token in a HEADER, then navigates to it', async () => {
     setJobToken('dl-tok')
-    fetchMock.mockResolvedValue(
-      jsonResponse({ download_url: '/api/jobs/j7/download?sig=123.abc' }),
-    )
+    fetchMock.mockResolvedValue(jsonResponse({ download_url: '/api/jobs/j7/download?sig=123.abc' }))
     const clicked: string[] = []
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
       this: HTMLAnchorElement,

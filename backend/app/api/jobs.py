@@ -606,9 +606,7 @@ async def mint_download_url(
     else).
     """
     sig = sign_url_credential(job.job_id, "download", _DOWNLOAD_SIG_TTL_SECONDS)
-    return DownloadUrlResponse(
-        download_url=f"/api/jobs/{job.job_id}/download?sig={sig}"
-    )
+    return DownloadUrlResponse(download_url=f"/api/jobs/{job.job_id}/download?sig={sig}")
 
 
 # ---------------------------------------------------------------------------
