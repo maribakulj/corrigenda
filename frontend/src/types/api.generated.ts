@@ -36,6 +36,12 @@ export interface paths {
     /**
      * Create Job
      * @description Upload ALTO files and start a correction job.
+     *
+     *     Upload concurrency is reserved by ``UploadAdmissionMiddleware``
+     *     BEFORE the multipart body is read: by the time this handler runs,
+     *     FastAPI has already parsed (and spooled) the files, so a slot check
+     *     here would fire after the full upload cost was paid. The whole
+     *     handler executes inside the middleware's reservation.
      */
     post: operations['create_job_api_jobs_post']
     delete?: never
