@@ -74,14 +74,13 @@ _MAX_TOTAL_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MiB per request
 # 503s with Retry-After — an overload policy, not a silent queue.
 _MAX_ACTIVE_JOBS = int(os.environ.get("MAX_ACTIVE_JOBS", "4"))
 
-# Plan V2.1 — upload-phase reservation, SEPARATE from the running-jobs
-# cap: the job cap only bounds spawned pipelines, so N concurrent
-# requests could all buffer their payload before the authoritative
-# check let 4 spawn. This counter is reserved at handler entry (before
-# any body read) and released when the handler exits. Repeat the limit
-# at the reverse proxy in institutional deployments — this guard is the
-# app's own last line, not the only one.
-_MAX_CONCURRENT_UPLOADS = int(os.environ.get("MAX_CONCURRENT_UPLOADS", str(_MAX_ACTIVE_JOBS)))
+# Upload-phase concurrency (SEPARATE from the running-jobs cap) is
+# reserved by UploadAdmissionMiddleware at the ASGI layer — before the
+# multipart body is read, which no route-level check can achieve
+# (FastAPI parses the form before calling the handler). The slot limit
+# lives in app.api.upload_guard._max_concurrent_uploads. Repeat the
+# limit at the reverse proxy in institutional deployments — the
+# middleware is the app's own last line, not the only one.
 
 # Plan V2.1 — uploads stream to disk in chunks this size; peak RAM per
 # request drops from the 200 MiB request cap to one chunk.
@@ -249,35 +248,23 @@ async def create_job(
     geometric_pairing: bool = Form(True),
     store: JobStore = Depends(get_job_store),
 ) -> CreateJobResponse:
-    """Upload ALTO files and start a correction job."""
-    # Plan V2.1 — reserve an upload slot BEFORE touching any body byte.
-    # The job cap below only bounds spawned pipelines; without this
-    # reservation N concurrent requests could all stage their payload
-    # while active_count was still low. Check-and-increment is atomic on
-    # the single-threaded event loop (no await between them).
-    app_state = request.app.state
-    if app_state.uploads_in_progress >= _MAX_CONCURRENT_UPLOADS:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                f"Server is at upload capacity ({_MAX_CONCURRENT_UPLOADS} "
-                "concurrent uploads). Retry shortly."
-            ),
-            headers={"Retry-After": "10"},
-        )
-    app_state.uploads_in_progress += 1
-    try:
-        return await _create_job_reserved(
-            request=request,
-            files=files,
-            provider=provider,
-            api_key=api_key,
-            model=model,
-            geometric_pairing=geometric_pairing,
-            store=store,
-        )
-    finally:
-        app_state.uploads_in_progress -= 1
+    """Upload ALTO files and start a correction job.
+
+    Upload concurrency is reserved by ``UploadAdmissionMiddleware``
+    BEFORE the multipart body is read: by the time this handler runs,
+    FastAPI has already parsed (and spooled) the files, so a slot check
+    here would fire after the full upload cost was paid. The whole
+    handler executes inside the middleware's reservation.
+    """
+    return await _create_job_reserved(
+        request=request,
+        files=files,
+        provider=provider,
+        api_key=api_key,
+        model=model,
+        geometric_pairing=geometric_pairing,
+        store=store,
+    )
 
 
 async def _create_job_reserved(
@@ -290,7 +277,8 @@ async def _create_job_reserved(
     geometric_pairing: bool,
     store: JobStore,
 ) -> CreateJobResponse:
-    """The body of ``create_job``, running inside an upload reservation."""
+    """The body of ``create_job``, running inside the middleware's
+    upload reservation."""
     # P1-5 — admission control before reading a single byte: the task
     # registry's live count is the source of truth for running pipelines.
     if request.app.state.tasks.active_count >= _MAX_ACTIVE_JOBS:

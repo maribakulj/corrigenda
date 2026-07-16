@@ -54,9 +54,9 @@ def _upload(name: str = "sample.xml"):
 
 def test_upload_slots_exhausted_returns_503(client):
     # Simulate N in-flight uploads holding every slot.
-    from app.api import jobs as jobs_api
+    from app.api import upload_guard
 
-    client.app.state.uploads_in_progress = jobs_api._MAX_CONCURRENT_UPLOADS
+    client.app.state.uploads_in_progress = upload_guard._max_concurrent_uploads()
     try:
         r = client.post("/api/jobs", data=_form(), files=_upload())
         assert r.status_code == 503
@@ -64,6 +64,107 @@ def test_upload_slots_exhausted_returns_503(client):
         assert "Retry-After" in r.headers
     finally:
         client.app.state.uploads_in_progress = 0
+
+
+@pytest.mark.asyncio
+async def test_503_at_capacity_reads_no_body_byte():
+    """THE contract this middleware exists for: with every slot taken,
+    the refusal happens at the ASGI layer, before the multipart parser
+    is ever handed the stream — ``receive()`` must not be called once,
+    and the inner app must never run. (The historical route-level check
+    ran after FastAPI had already parsed — and spooled — the whole
+    body.)"""
+    from types import SimpleNamespace
+
+    from app.api.upload_guard import UploadAdmissionMiddleware, _max_concurrent_uploads
+
+    async def inner_app(scope, receive, send):
+        raise AssertionError("the application must not run at capacity")
+
+    async def trapped_receive():
+        raise AssertionError("receive() was called — a body byte was read")
+
+    sent: list[dict] = []
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/jobs",
+        "headers": [(b"content-length", b"999999")],
+        "app": SimpleNamespace(
+            state=SimpleNamespace(uploads_in_progress=_max_concurrent_uploads())
+        ),
+    }
+    await UploadAdmissionMiddleware(inner_app)(scope, trapped_receive, send)
+
+    start = sent[0]
+    assert start["type"] == "http.response.start"
+    assert start["status"] == 503
+    headers = {k.decode(): v.decode() for k, v in start["headers"]}
+    assert "retry-after" in headers
+    # The client may be mid-body: the connection is dropped, not drained.
+    assert headers.get("connection") == "close"
+
+
+@pytest.mark.asyncio
+async def test_slot_is_released_when_the_inner_app_crashes():
+    from types import SimpleNamespace
+
+    from app.api.upload_guard import UploadAdmissionMiddleware
+
+    async def crashing_app(scope, receive, send):
+        raise RuntimeError("boom mid-request")
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        pass
+
+    state = SimpleNamespace(uploads_in_progress=0)
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/jobs",
+        "headers": [],
+        "app": SimpleNamespace(state=state),
+    }
+    with pytest.raises(RuntimeError):
+        await UploadAdmissionMiddleware(crashing_app)(scope, receive, send)
+    assert state.uploads_in_progress == 0, "the finally must release the slot"
+
+
+@pytest.mark.asyncio
+async def test_non_upload_posts_never_consume_a_slot():
+    from types import SimpleNamespace
+
+    from app.api.upload_guard import UploadAdmissionMiddleware
+
+    seen_states: list[int] = []
+    state = SimpleNamespace(uploads_in_progress=0)
+
+    async def inner_app(scope, receive, send):
+        seen_states.append(state.uploads_in_progress)
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        pass
+
+    for path in ("/api/jobs/abc123/cancel", "/api/providers/models", "/health"):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [],
+            "app": SimpleNamespace(state=state),
+        }
+        await UploadAdmissionMiddleware(inner_app)(scope, receive, send)
+    assert seen_states == [0, 0, 0], "only POST /api/jobs reserves upload slots"
 
 
 def test_upload_slot_is_released_after_success(client):

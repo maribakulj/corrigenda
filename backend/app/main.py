@@ -24,7 +24,7 @@ from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
 from app.api.providers import router as providers_router
 from app.api.rate_limit import limiter
-from app.api.upload_guard import UploadSizeLimitMiddleware
+from app.api.upload_guard import UploadAdmissionMiddleware, UploadSizeLimitMiddleware
 from app.frontend_static import INDEX_HTML as _INDEX_HTML
 from app.frontend_static import STATIC_DIR as _STATIC_DIR
 from app.frontend_static import frontend_expected
@@ -188,6 +188,13 @@ def create_app() -> FastAPI:
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
     app.add_middleware(SlowAPIMiddleware)
+
+    # 1a. Upload admission — reserve a concurrency slot for POST
+    # /api/jobs at the ASGI layer, before the framework reads a single
+    # body byte (the route handler only runs after the whole multipart
+    # body is parsed and spooled). Added BEFORE the size guard so it
+    # sits INSIDE it: an oversize 413 never consumes a slot.
+    app.add_middleware(UploadAdmissionMiddleware)
 
     # 1b. Upload size guard (Audit-F18) — reject over-cap / no-Content-
     # Length POSTs to /api/jobs BEFORE Starlette spools the multipart
