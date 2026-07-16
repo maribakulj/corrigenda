@@ -177,6 +177,30 @@ def _trace_key(lm: LineManifest) -> str:
     return f"{lm.page_id}:{lm.line_order_global}:{lm.line_id}"
 
 
+def _verify_all_lines_terminal(document_manifest: DocumentManifest) -> None:
+    """Refuse to finish a run while any line lacks a terminal decision.
+
+    Every decision path (acceptance, reconciliation, fallback, absorbed
+    chunk error) guarantees per-line terminality; this is the run-level
+    backstop before outputs are written. A ``PENDING`` line here is an
+    engine bug — a decision path that forgot its lines — never an input
+    problem, so it fails the run instead of degrading.
+    """
+    undecided = [
+        (page.page_id, lm.line_id)
+        for page in document_manifest.pages
+        for lm in page.lines
+        if lm.status is LineStatus.PENDING
+    ]
+    if undecided:
+        shown = ", ".join(f"({p!r}, {li!r})" for p, li in undecided[:5])
+        suffix = " …" if len(undecided) > 5 else ""
+        raise RuntimeError(
+            f"{len(undecided)} line(s) reached the end of the run with no "
+            f"terminal decision (PENDING): {shown}{suffix}"
+        )
+
+
 def _projection_normal_form(text: str) -> str:
     """Whitespace-run normal form for the projection invariant.
 
@@ -936,6 +960,10 @@ class CorrectionPipeline:
                 cross_page_partners=all_lines_global,
             )
 
+        # Run-level terminality backstop: outputs exist only for a
+        # document where every line carries a terminal decision.
+        _verify_all_lines_terminal(document_manifest)
+
         await self._write_outputs(
             document_manifest=document_manifest,
             source_files=source_files,
@@ -1143,6 +1171,31 @@ class CorrectionPipeline:
                 # "successfully" with lines in an unknown state.
                 if not isinstance(exc, CorrectionError):
                     raise
+                # The absorbed error may have interrupted the chunk between
+                # its producer attempt and its finalization: any target
+                # line still awaiting a decision falls back to its source
+                # text NOW. The run may degrade; it may never continue
+                # with undecided lines (lines the chunk — or a descent
+                # sub-chunk — already finalized keep their decision).
+                undecided = [
+                    line_by_id[lid]
+                    for lid in chunk.targets()
+                    if lid in line_by_id
+                    and line_by_id[lid].status is LineStatus.PENDING
+                ]
+                if undecided:
+                    reason = sanitize_error(str(exc))[:120]
+                    for lm in undecided:
+                        lm.corrected_text = lm.ocr_text
+                        lm.status = LineStatus.FALLBACK
+                        _set_trace(
+                            traces,
+                            lm,
+                            projected_text=lm.ocr_text,
+                            validation_status="fallback",
+                            fallback_reason=f"chunk_error_absorbed: {reason}",
+                        )
+                    ctx.fallback_count += 1
 
         # Cross-chunk adjacency pass. Per-chunk finalization only sees
         # that chunk's TARGET lines, so two document-adjacent lines owned
