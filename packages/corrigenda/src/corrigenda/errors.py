@@ -8,20 +8,38 @@ raises so consumers can ``except CorrectionError`` once::
     │   └── DuplicateIdError       — ambiguous identities in source/manifest
     ├── ValidationError     (also ValueError) — producer response invalid
     │   └── HyphenIntegrityError   (defined in pipeline.validator)
+    ├── ProviderError              — provider errors (core.protocols)
+    │   ├── ProviderTransientError — recoverable transport failure
+    │   └── ProviderPermanentError — fatal rejection (credentials, model)
     └── CorrectionAborted
 
 The value-shaped errors additionally inherit ``ValueError`` so the bare
 ``ValueError`` raises that predate this hierarchy keep working under
 ``except ValueError`` (§8.4) — and the pipeline's retry classifier, which
 routes ``(ValueError, json.JSONDecodeError)`` to the malformed-output
-branch, still catches them.
+branch, still catches them. Provider errors deliberately do NOT inherit
+``ValueError``: a transport failure routed to the malformed-output branch
+would be mis-filed.
+
+Every class carries two machine-readable class attributes so hosts route
+on structure, never on message text:
+
+- ``code`` — a stable snake_case identifier, unique per class;
+- ``retryable`` — whether a fresh attempt of the SAME operation can heal
+  the failure. This describes the error, not the pipeline's policy: the
+  attempt budget and backoff stay in ``RetryPolicy``.
 """
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 
 class CorrectionError(Exception):
     """Base class for every error raised by corrigenda (§8.4)."""
+
+    code: ClassVar[str] = "correction_error"
+    retryable: ClassVar[bool] = False
 
 
 class ParseError(CorrectionError, ValueError):
@@ -30,6 +48,8 @@ class ParseError(CorrectionError, ValueError):
     Inherits ``ValueError`` for backwards compatibility with call sites
     that caught the bare ``ValueError`` the parser used to raise.
     """
+
+    code: ClassVar[str] = "parse_error"
 
 
 class DuplicateIdError(ParseError):
@@ -48,6 +68,8 @@ class DuplicateIdError(ParseError):
     working.
     """
 
+    code: ClassVar[str] = "duplicate_identity"
+
 
 class ValidationError(CorrectionError, ValueError):
     """A producer (LLM / rules / VLM) response failed validation.
@@ -56,8 +78,28 @@ class ValidationError(CorrectionError, ValueError):
     for structural problems (missing/duplicate/unknown line ids, wrong
     count, empty or multi-line ``corrected_text``, …). Inherits
     ``ValueError`` so the retry classifier keeps routing it to the
-    malformed-output branch.
+    malformed-output branch. Retryable: a fresh attempt may produce a
+    response that does validate.
     """
+
+    code: ClassVar[str] = "invalid_producer_output"
+    retryable: ClassVar[bool] = True
+
+
+class ProviderError(CorrectionError):
+    """Base for failures reported by a producer's underlying provider.
+
+    The concrete classes live in :mod:`corrigenda.core.protocols` next to
+    the ``BaseProvider`` contract that raises them; this base anchors them
+    under the single ``CorrectionError`` root. Carries the originating
+    HTTP status when there was one.
+    """
+
+    code: ClassVar[str] = "provider_error"
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class CorrectionAborted(CorrectionError):
@@ -71,11 +113,14 @@ class CorrectionAborted(CorrectionError):
     is cooperative, observed only at chunk/page boundaries).
     """
 
+    code: ClassVar[str] = "cancelled"
+
 
 __all__ = [
     "CorrectionError",
     "ParseError",
     "DuplicateIdError",
     "ValidationError",
+    "ProviderError",
     "CorrectionAborted",
 ]
