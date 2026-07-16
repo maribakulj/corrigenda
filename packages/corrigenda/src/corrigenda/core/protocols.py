@@ -12,7 +12,7 @@ construction; the import-contract test enforces it).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from corrigenda.core.editing import EditScript
 from corrigenda.core.schemas import (
@@ -23,10 +23,10 @@ from corrigenda.core.schemas import (
     RetryPolicy,
     Usage,
 )
-from corrigenda.errors import ValidationError
+from corrigenda.errors import ProviderError, ValidationError
 
 
-class ProviderTransientError(Exception):
+class ProviderTransientError(ProviderError):
     """Raised by a ``BaseProvider`` to signal a recoverable transport
     failure (network timeout, 5xx upstream, connection reset, …).
 
@@ -48,12 +48,11 @@ class ProviderTransientError(Exception):
     ``raise wrapped from original``.
     """
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
+    code: ClassVar[str] = "provider_transient"
+    retryable: ClassVar[bool] = True
 
 
-class ProviderPermanentError(Exception):
+class ProviderPermanentError(ProviderError):
     """Raised by a ``BaseProvider`` for a failure that will NEVER heal by
     retrying: invalid credentials (401/403), unknown model (404), a
     schema the vendor definitively rejects — the client-side 4xx family
@@ -67,15 +66,17 @@ class ProviderPermanentError(Exception):
     :class:`~corrigenda.errors.CorrectionAborted` does — before any
     output is written.
 
-    Deliberately NOT a ``ValueError`` (the retry classifier routes
-    ``ValueError`` to the malformed-output retry branch) and NOT a
-    ``CorrectionError`` (the chunk loop treats ``CorrectionError`` as a
-    recoverable per-chunk condition).
+    A :class:`~corrigenda.errors.CorrectionError` (via ``ProviderError``)
+    so the single-root catch contract holds, but deliberately NOT a
+    ``ValueError`` (the retry classifier routes ``ValueError`` to the
+    malformed-output retry branch). Fatality is enforced by the pipeline's
+    explicit ``except ProviderPermanentError: raise`` handlers, which sit
+    BEFORE every branch that absorbs recoverable ``CorrectionError``s —
+    the hierarchy states ownership, the handler ordering states severity.
     """
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
+    code: ClassVar[str] = "provider_permanent"
+    retryable: ClassVar[bool] = False
 
 
 @runtime_checkable

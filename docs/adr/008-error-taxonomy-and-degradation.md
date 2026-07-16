@@ -12,11 +12,21 @@ degrade every line to OCR fallback while the run still reports success.
 ## Decision
 1. **Single classified root** (spec §8.4): everything the library raises
    derives from `CorrectionError` (`ParseError`, `DuplicateIdError`,
-   `ValidationError`, `CorrectionAborted`). Value-shaped errors also
-   inherit `ValueError` for backwards compatibility. Parser entry points
-   wrap lxml/OS/ValueError leaks into `ParseError`
+   `ValidationError`, `CorrectionAborted`, and — since 0.9.0 — the
+   provider branch `ProviderError` → `ProviderTransientError` /
+   `ProviderPermanentError`, which historically inherited bare
+   `Exception` and escaped an `except CorrectionError` catch-all).
+   Value-shaped errors also inherit `ValueError` for backwards
+   compatibility; provider errors deliberately do NOT (the retry
+   classifier routes `ValueError` to the malformed-output branch).
+   Parser entry points wrap lxml/OS/ValueError leaks into `ParseError`
    (`classified_parse_errors`), so hostile input can never escape
-   unclassified — pinned by the fuzz suite.
+   unclassified — pinned by the fuzz suite. Every class carries a stable
+   machine `code` and a `retryable` flag; hosts route on those, never on
+   message text. Severity is NOT encoded in the hierarchy: the fatality
+   of `ProviderPermanentError` is enforced by the pipeline's explicit
+   `except ProviderPermanentError: raise` handlers ordered before every
+   absorbing branch — pinned by `tests/test_error_taxonomy.py`.
 2. **Recoverable vs fatal on the chunk path**:
    - malformed producer output / transient transport → retry, then
      granularity descent, then OCR fallback (never silent: events +

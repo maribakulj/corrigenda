@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from corrigenda.core._norm import has_line_separator, ncfold
 from corrigenda.errors import ValidationError
@@ -27,6 +27,8 @@ class HyphenIntegrityError(ValidationError):
     emits the literal ``"hyphen_integrity_violation"`` tag for the
     frontend consumer.
     """
+
+    code: ClassVar[str] = "hyphen_integrity_violation"
 
 
 def validate_llm_response(

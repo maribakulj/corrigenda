@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Changed
+
+- **Provider errors join the single-root hierarchy.**
+  `ProviderTransientError` and `ProviderPermanentError` (still importable
+  from `corrigenda.core.protocols`) now derive from the new
+  `corrigenda.errors.ProviderError`, itself a `CorrectionError` — the
+  documented "catch the root once" contract previously excluded exactly
+  the errors a mis-configured run raises first. Behaviour is unchanged:
+  permanent rejections stay fatal for the run (explicit re-raise handlers
+  precede every absorbing branch; pinned by `tests/test_error_taxonomy.py`).
+- **Machine-readable error metadata.** Every error class carries a stable
+  snake_case `code` and a `retryable` class flag so hosts route on
+  structure instead of message text.
 
 ## [0.9.0] — 2026-07-16
 
