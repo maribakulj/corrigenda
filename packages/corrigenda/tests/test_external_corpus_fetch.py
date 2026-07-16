@@ -106,6 +106,40 @@ def test_cached_file_is_checksum_verified_too(fetch_mod, tmp_path):
     assert fetch_mod.main() == 1
 
 
+def test_429_backoff_honours_retry_after(fetch_mod, monkeypatch):
+    """Gallica rate-limits with 429: the retry must wait what the server
+    asked (or a hard 15s/attempt ramp), not the generic 2s/attempt one —
+    which provably kept tripping the limiter."""
+    import urllib.error
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(fetch_mod.time, "sleep", lambda s: sleeps.append(s))
+    calls = {"n": 0}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return _ALTO
+
+    def urlopen(req, timeout):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise urllib.error.HTTPError(
+                "u", 429, "Too Many Requests", {"Retry-After": "7"}, None
+            )
+        return _Resp()
+
+    monkeypatch.setattr(fetch_mod.urllib.request, "urlopen", urlopen)
+    payload = fetch_mod._download("bpt6kTEST", 1)
+    assert payload == _ALTO
+    assert sleeps == [7, 7], "Retry-After must be honoured on each 429"
+
+
 def test_matching_pin_passes_and_unpinned_digest_is_printed(
     fetch_mod, tmp_path, capsys
 ):

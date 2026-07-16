@@ -5,12 +5,21 @@
     {
       "ark": "bpt6k2206225",
       "label": "Histoire naturelle, Paulin Teulières, 1850 (monographie)",
-      "pages": [15, 16, 17]
+      "pages": [15, 16, 17],
+      "sha256": {
+        "15": "5d8b0173e38366e941490a99186bd50c9b414ac835c6614f632f930420b37951",
+        "16": "c557e3c35b3827655c00e098de3a74353c44a0314018600dee3386ac38bbdaac",
+        "17": "301742fd78ccae7d3dac843bd95c7877cf0b464d34d534d4beb94cac7adab6f8"
+      }
     },
     {
       "ark": "bpt6k6478860m",
       "label": "Périodes de l'histoire de la médecine, Ch. Daremberg, 1850 (monographie, mode texte)",
-      "pages": [9, 10]
+      "pages": [9, 10],
+      "sha256": {
+        "9": "b94bee2447dbf8a4e364710ba129d67630192e786fbba3715a4e539d9964c8f4",
+        "10": "2c286383d6565b78193cc718314d86f7402addd19cd767be3b90e23fcea5f91b"
+      }
     },
     {
       "ark": "bpt6k20654036",

@@ -60,6 +60,25 @@ def _download(ark: str, page: int) -> bytes | None:
                 print(f"  not ALTO {ark} p{page} (skipping)")
                 return None
             return payload
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                # Rate-limited: honour Retry-After when present, else back
+                # off much harder than the generic ramp — 429 means "slow
+                # down", and 2/4/6 s provably was not slow enough for the
+                # multi-column newspaper pages.
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                try:
+                    delay = int(retry_after) if retry_after else 15 * attempt
+                except ValueError:
+                    delay = 15 * attempt
+                print(
+                    f"  attempt {attempt}/{RETRIES} rate-limited for {ark} "
+                    f"p{page} — waiting {delay}s"
+                )
+                time.sleep(delay)
+                continue
+            print(f"  attempt {attempt}/{RETRIES} failed for {ark} p{page}: {exc}")
+            time.sleep(2 * attempt)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             print(f"  attempt {attempt}/{RETRIES} failed for {ark} p{page}: {exc}")
             time.sleep(2 * attempt)
