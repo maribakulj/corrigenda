@@ -3,7 +3,7 @@
   "info": {
     "title": "Corrigenda",
     "description": "Post-OCR text correction of ALTO/PAGE XML files using LLM providers.",
-    "version": "1.0.0"
+    "version": "0.9.0"
   },
   "paths": {
     "/api/providers/models": {
@@ -50,7 +50,7 @@
       "post": {
         "tags": ["jobs"],
         "summary": "Create Job",
-        "description": "Upload ALTO files and start a correction job.",
+        "description": "Upload ALTO files and start a correction job.\n\nUpload concurrency is reserved by ``UploadAdmissionMiddleware``\nBEFORE the multipart body is read: by the time this handler runs,\nFastAPI has already parsed (and spooled) the files, so a slot check\nhere would fire after the full upload cost was paid. The whole\nhandler executes inside the middleware's reservation.",
         "operationId": "create_job_api_jobs_post",
         "requestBody": {
           "content": {
