@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Projection invariant — the artefact must say what the run decided.**
+  The per-line text re-extracted from the rewritten XML (previously a
+  trace-only diagnostic, `output_alto_text`) is now verified against the
+  final per-line decision before the writer persists anything. A missing
+  line or a word-level divergence raises the new
+  `corrigenda.errors.ProjectionError` and fails the run — a divergent
+  artefact is corruption, never a valid output. Whitespace runs are
+  compared in normal form: ALTO/PAGE word tokenization cannot represent
+  consecutive spaces, a documented format property (exact-space loss
+  accounting is future loss-policy work).
+
 ### Changed
 
 - **Provider errors join the single-root hierarchy.**

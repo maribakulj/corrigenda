@@ -49,7 +49,7 @@ from corrigenda.core.identity import (
     ensure_unique_identities,
     ensure_unique_page_ids_across_files,
 )
-from corrigenda.errors import CorrectionAborted, CorrectionError
+from corrigenda.errors import CorrectionAborted, CorrectionError, ProjectionError
 from corrigenda.core.planner import downgrade_granularity, plan_page
 from corrigenda.core.guards import check_adjacent_duplicates, check_line
 from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
@@ -175,6 +175,50 @@ def sanitize_error(msg: str, api_key: str | None = None) -> str:
 def _trace_key(lm: LineManifest) -> str:
     """Composite key for line traces, avoiding collisions across pages."""
     return f"{lm.page_id}:{lm.line_order_global}:{lm.line_id}"
+
+
+def _projection_normal_form(text: str) -> str:
+    """Whitespace-run normal form for the projection invariant.
+
+    ALTO/PAGE tokenize a line into word elements, so runs of consecutive
+    whitespace cannot survive the write→extract round-trip. Word-level
+    equality is the enforceable contract; exact spacing is a property of
+    the formats, not a correctness signal.
+    """
+    return " ".join(text.split())
+
+
+def _verify_projection(
+    source_name: str,
+    pages: list[PageManifest],
+    output_texts: dict[str, str],
+) -> None:
+    """The rewritten file must SAY what the run decided, line for line.
+
+    Compares the text re-extracted from the rewritten XML against each
+    line's final decision (corrected text, or source text for fallback /
+    untouched lines) in whitespace normal form. A missing line or a
+    word-level divergence is corruption of the deliverable — the run
+    fails here, before the writer can persist the artefact.
+    """
+    for page in pages:
+        for lm in page.lines:
+            decided = (
+                lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
+            )
+            extracted = output_texts.get(lm.line_id)
+            if extracted is None:
+                raise ProjectionError(
+                    f"line {lm.line_id!r} (page {lm.page_id!r}) of "
+                    f"{source_name!r} is missing from the rewritten XML"
+                )
+            if _projection_normal_form(extracted) != _projection_normal_form(decided):
+                raise ProjectionError(
+                    f"rewritten XML for {source_name!r} diverges from the "
+                    f"run's decision on line {lm.line_id!r} (page "
+                    f"{lm.page_id!r}): decided {decided!r} but the artefact "
+                    f"contains {extracted!r}"
+                )
 
 
 def _set_trace(
@@ -2024,6 +2068,16 @@ class CorrectionPipeline:
                 lib_version=_lib_version,
                 config_fingerprint=config_fingerprint,
             )
+
+            file_line_ids = {lm.line_id for p in pages_for_file for lm in p.lines}
+            output_texts = await asyncio.to_thread(
+                adapter.extract_texts, xml_bytes, file_line_ids
+            )
+            # Projection invariant: the artefact must SAY what the run
+            # decided. Verified BEFORE the writer sees the bytes — a
+            # divergent artefact is corruption, never a valid output.
+            _verify_projection(source_name, pages_for_file, output_texts)
+
             if apply:
                 await asyncio.to_thread(
                     self.output_writer.write_corrected,
@@ -2056,10 +2110,6 @@ class CorrectionPipeline:
                     if t is not None:
                         t.rewriter_path = rpath
 
-            file_line_ids = {lm.line_id for p in pages_for_file for lm in p.lines}
-            output_texts = await asyncio.to_thread(
-                adapter.extract_texts, xml_bytes, file_line_ids
-            )
             for lid, otxt in output_texts.items():
                 tkey = lid_to_tkey.get(lid)
                 if tkey:
