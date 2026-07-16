@@ -62,11 +62,11 @@ __all__ = [
     # HTTP DTOs (backend-local)
     "CreateJobResponse",
     "DocumentManifest",
+    "DownloadUrlResponse",
+    "EventsUrlResponse",
     "HyphenRole",
     "JobManifest",
     "JobStatus",
-    "DownloadUrlResponse",
-    "EventsUrlResponse",
     "JobStatusResponse",
     "LLMLineInput",
     "LLMLineOutput",
