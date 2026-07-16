@@ -660,7 +660,7 @@ class ChunkPlan(BaseModel):
 
 
 #: Opaque page-image reference (§4.1/§5.1). The library forwards it
-#: verbatim from ``run(source_images=…)`` into the payload and NEVER opens
+#: verbatim from ``run(page_images=…)`` into the payload and NEVER opens
 #: it — resolving/cropping/encoding pixels is the vision producer's job
 #: (invariant I4). Kept a bare ``str`` (path, URL, handle) so the core
 #: carries no image machinery.

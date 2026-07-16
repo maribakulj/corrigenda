@@ -12,6 +12,7 @@ construction; the import-contract test enforces it).
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from corrigenda.core.editing import EditScript
@@ -23,7 +24,7 @@ from corrigenda.core.schemas import (
     RetryPolicy,
     Usage,
 )
-from corrigenda.errors import ProviderError, ValidationError
+from corrigenda.errors import ConfigurationError, ProviderError
 
 
 class ProviderTransientError(ProviderError):
@@ -126,7 +127,7 @@ class EditProducer(Protocol):
     physical anchor envelope (line geometry, opaque page image reference)
     ONLY for producers that consume it — a text producer keeps a lean
     payload. A producer with ``wants_image=True`` run without a matching
-    ``source_images`` entry is a start-up error (:func:`require_source_images`),
+    ``page_images`` entry is a start-up error (:func:`require_page_images`),
     never a silent image-less call.
     """
 
@@ -138,29 +139,37 @@ class EditProducer(Protocol):
     ) -> tuple[EditScript, Usage | None]: ...
 
 
-def require_source_images(
+def require_page_images(
     producer: EditProducer,
-    source_files: list[str],
-    source_images: dict[str, ImageRef] | None,
+    pages: Iterable[PageManifest],
+    page_images: dict[str, ImageRef] | None,
 ) -> None:
-    """Raise :class:`ValidationError` if a vision producer has no images (§5.1).
+    """Raise :class:`ConfigurationError` if a vision producer lacks images (§5.1).
 
     A producer that does not want images is always fine. A vision producer
-    needs a ``source_images`` mapping covering every source file — otherwise
-    the run would issue an image-less VLM call, which the spec forbids.
+    needs a ``page_images`` mapping (page_id → opaque ref) covering EVERY
+    page — one image per physical page, never one per source file: a
+    multipage XML has as many scans as pages, and flattening them to a
+    single per-file ref sent the producer the wrong image for every page
+    but the first. Otherwise the run would issue an image-less VLM call,
+    which the spec forbids.
     """
     if not getattr(producer, "wants_image", False):
         return
-    if not source_images:
-        raise ValidationError(
+    if not page_images:
+        raise ConfigurationError(
             "producer requires page images (wants_image=True) but run() "
-            "received no source_images mapping"
+            "received no page_images mapping"
         )
-    missing = [s for s in source_files if s not in source_images]
+    missing = [
+        f"{page.page_id!r} ({page.source_file})"
+        for page in pages
+        if page.page_id not in page_images
+    ]
     if missing:
-        raise ValidationError(
-            f"producer requires page images but source_images is missing "
-            f"entries for: {sorted(missing)}"
+        raise ConfigurationError(
+            "producer requires page images but page_images (keyed by "
+            f"page_id) is missing entries for: {missing}"
         )
 
 
@@ -244,5 +253,5 @@ __all__ = [
     "ProviderTransientError",
     "ProviderPermanentError",
     "RewriteMetrics",
-    "require_source_images",
+    "require_page_images",
 ]

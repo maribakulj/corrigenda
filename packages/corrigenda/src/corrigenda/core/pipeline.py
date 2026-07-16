@@ -68,7 +68,7 @@ from corrigenda.core.protocols import (
     PipelineObserver,
     ProviderPermanentError,
     ProviderTransientError,
-    require_source_images,
+    require_page_images,
 )
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
@@ -587,7 +587,7 @@ class RunContext:
     #: owners, not from plan.chunks.
     finalized_owner: dict[LineRef, int] = field(default_factory=dict)
     finalize_seq: int = 0
-    #: §4.1 vision envelope — resolved once per run from run(source_images=…).
+    #: §4.1 vision envelope — resolved once per run from run(page_images=…).
     image_ref_by_page_id: dict[str, ImageRef] = field(default_factory=dict)
     page_dims: dict[str, tuple[int, int]] = field(default_factory=dict)
 
@@ -753,7 +753,7 @@ class CorrectionPipeline:
         run_id: str | None = None,
         should_abort: Callable[[], bool] | None = None,
         apply: bool = True,
-        source_images: dict[str, ImageRef] | None = None,
+        page_images: dict[str, ImageRef] | None = None,
     ) -> CorrectionResult:
         """Run the full pipeline. Mutates `document_manifest.pages` in place.
 
@@ -776,12 +776,14 @@ class CorrectionPipeline:
         injected :class:`EditProducer` (see :meth:`for_provider`), and the
         provenance labels are constructor state.
 
-        ``source_images`` (§5.1) — optional mapping of *source name* (the
-        same keys as ``source_files``) to an opaque :data:`ImageRef`. The
+        ``page_images`` (§5.1) — optional mapping of **page_id** (document-
+        unique, ADR-007) to an opaque :data:`ImageRef` — one image per
+        physical page, so a multipage XML carries one ref per scan. The
         library forwards each page's ref verbatim into the producer payload
         when the producer asks (``wants_image``) and NEVER opens it (I4).
         A ``wants_image`` producer run without a complete mapping raises
-        :class:`ValidationError` before any work starts.
+        :class:`ConfigurationError` before any work starts; a key matching
+        no page (e.g. a legacy file-name key) is refused explicitly.
 
         ``run_id`` is an optional identifier embedded in the emitted
         :class:`CorrectionReport` (which is also what ``trace.json``
@@ -818,7 +820,7 @@ class CorrectionPipeline:
                 run_id=run_id,
                 should_abort=should_abort,
                 apply=apply,
-                source_images=source_images,
+                page_images=page_images,
             )
         finally:
             self._running = False
@@ -831,7 +833,7 @@ class CorrectionPipeline:
         run_id: str | None,
         should_abort: Callable[[], bool] | None,
         apply: bool,
-        source_images: dict[str, ImageRef] | None,
+        page_images: dict[str, ImageRef] | None,
     ) -> CorrectionResult:
         """Body of :meth:`run`, executing under the reentrancy guard."""
         run_id = run_id or str(uuid.uuid4())
@@ -841,7 +843,7 @@ class CorrectionPipeline:
 
         # §5.1 — a vision producer without its images is a start-up error,
         # never a silent image-less call.
-        require_source_images(self.producer, list(source_files.keys()), source_images)
+        require_page_images(self.producer, document_manifest.pages, page_images)
 
         # §3 — the format travels with the document. An injected adapter
         # that contradicts the format the manifest was parsed as would
@@ -869,14 +871,21 @@ class CorrectionPipeline:
         for src_name, src_pages in pages_by_file.items():
             ensure_unique_identities(src_pages, src_name)
         ensure_unique_page_ids_across_files(document_manifest.pages)
-        # §4.1 — per-page vision envelope lookups, resolved once. Pure
-        # copying: the ImageRef stays an opaque string end to end.
-        images = source_images or {}
-        ctx.image_ref_by_page_id = {
-            page.page_id: images[page.source_file]
-            for page in document_manifest.pages
-            if page.source_file in images
-        }
+        # §4.1 — per-page vision envelope lookups. Pure copying: the
+        # ImageRef stays an opaque string end to end. A key matching no
+        # page is refused: it is almost always a legacy file-name key
+        # from the pre-page_images contract, silently dropping it would
+        # reproduce the old wrong-image behaviour.
+        images = page_images or {}
+        known_pages = {page.page_id for page in document_manifest.pages}
+        unknown = sorted(set(images) - known_pages)
+        if unknown:
+            raise ConfigurationError(
+                f"page_images keys must be page ids; {unknown} match no "
+                "page of this document (file-name keys are no longer "
+                "accepted — pass one ImageRef per page_id)"
+            )
+        ctx.image_ref_by_page_id = dict(images)
         ctx.page_dims = {
             page.page_id: (page.page_width, page.page_height)
             for page in document_manifest.pages
@@ -1127,7 +1136,7 @@ class CorrectionPipeline:
         run_id: str | None = None,
         should_abort: Callable[[], bool] | None = None,
         apply: bool = True,
-        source_images: dict[str, ImageRef] | None = None,
+        page_images: dict[str, ImageRef] | None = None,
     ) -> CorrectionResult:
         """Synchronous façade over :meth:`run` (§8.1).
 
@@ -1144,7 +1153,7 @@ class CorrectionPipeline:
                 run_id=run_id,
                 should_abort=should_abort,
                 apply=apply,
-                source_images=source_images,
+                page_images=page_images,
             )
         )
 

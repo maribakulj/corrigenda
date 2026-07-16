@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from corrigenda import CorrectionPipeline, ValidationError
+from corrigenda import CorrectionPipeline
+from corrigenda.errors import ConfigurationError
 from corrigenda.core.editing import EditScript, ReplaceSpan, apply_edit_script
 from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
 from corrigenda.formats.alto.parser import build_document_manifest
@@ -142,7 +143,7 @@ async def test_vision_producer_without_images_fails_at_startup():
     pipeline = CorrectionPipeline(
         producer=_VisionProducer(), observer=_Null(), output_writer=_Null()
     )
-    with pytest.raises(ValidationError, match="source_images"):
+    with pytest.raises(ConfigurationError, match="page_images"):
         await pipeline.run(
             document_manifest=doc,
             source_files={_SAMPLE.name: _SAMPLE},
@@ -162,11 +163,98 @@ async def test_vision_envelope_reaches_the_producer():
     await pipeline.run(
         document_manifest=doc,
         source_files={_SAMPLE.name: _SAMPLE},
-        source_images={_SAMPLE.name: "opaque://page-1"},
+        page_images={page.page_id: f"opaque://{page.page_id}" for page in doc.pages},
         apply=False,
     )
     payload = producer.seen_payload
-    assert payload.image_ref == "opaque://page-1"
+    assert payload.image_ref is not None
+    assert payload.image_ref.startswith("opaque://")
     assert all(ln.geometry is not None for ln in payload.lines)
     geo = payload.lines[0].geometry
     assert geo.page_width > 0 and geo.page_height > 0
+
+
+_MULTIPAGE_ALTO = """<?xml version="1.0" encoding="UTF-8"?>
+<alto xmlns="http://www.loc.gov/standards/alto/ns-v3#"><Layout>
+<Page ID="P1" WIDTH="1000" HEIGHT="1000">
+<PrintSpace HPOS="0" VPOS="0" WIDTH="1000" HEIGHT="900">
+<TextBlock ID="B1" HPOS="0" VPOS="0" WIDTH="1000" HEIGHT="900">
+<TextLine ID="L1" HPOS="10" VPOS="10" WIDTH="900" HEIGHT="20">
+<String ID="S1" CONTENT="premier" HPOS="10" VPOS="10" WIDTH="80" HEIGHT="20"/>
+</TextLine></TextBlock></PrintSpace></Page>
+<Page ID="P2" WIDTH="1000" HEIGHT="1000">
+<PrintSpace HPOS="0" VPOS="0" WIDTH="1000" HEIGHT="900">
+<TextBlock ID="B2" HPOS="0" VPOS="0" WIDTH="1000" HEIGHT="900">
+<TextLine ID="L2" HPOS="10" VPOS="10" WIDTH="900" HEIGHT="20">
+<String ID="S2" CONTENT="second" HPOS="10" VPOS="10" WIDTH="80" HEIGHT="20"/>
+</TextLine></TextBlock></PrintSpace></Page>
+</Layout></alto>"""
+
+
+class _RecordingVisionProducer:
+    """Records the image_ref of EVERY payload (not just the last)."""
+
+    wants_geometry = True
+    wants_image = True
+    requires_full_coverage = False
+
+    def __init__(self):
+        self.image_refs: list[str | None] = []
+        self.line_ids: list[list[str]] = []
+
+    async def produce(self, payload: LLMUserPayload, *, policy: RetryPolicy):
+        self.image_refs.append(payload.image_ref)
+        self.line_ids.append([ln.line_id for ln in payload.lines])
+        return EditScript(ops=[]), None
+
+
+@pytest.mark.asyncio
+async def test_multipage_file_carries_one_image_per_page(tmp_path):
+    """THE per-page contract: a multipage XML has one scan per page. The
+    historical per-file mapping sent page 1's image with every page's
+    payload — the producer looked at the wrong scan for pages 2+."""
+    src = tmp_path / "multi.xml"
+    src.write_text(_MULTIPAGE_ALTO, encoding="utf-8")
+    doc = build_document_manifest([(src, src.name)])
+    assert [p.page_id for p in doc.pages] == ["P1", "P2"]
+
+    producer = _RecordingVisionProducer()
+    pipeline = CorrectionPipeline(
+        producer=producer, observer=_Null(), output_writer=_Null()
+    )
+    await pipeline.run(
+        document_manifest=doc,
+        source_files={src.name: src},
+        page_images={"P1": "opaque://scan-1", "P2": "opaque://scan-2"},
+        apply=False,
+    )
+
+    ref_by_line = {
+        lid: ref
+        for ref, lids in zip(producer.image_refs, producer.line_ids)
+        for lid in lids
+    }
+    assert ref_by_line["L1"] == "opaque://scan-1"
+    assert ref_by_line["L2"] == "opaque://scan-2", (
+        "page 2's payload must carry page 2's scan, never page 1's"
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_file_name_keys_are_refused_explicitly(tmp_path):
+    """A key matching no page is almost always a pre-page_images caller
+    passing file names — silently ignoring it would quietly reproduce
+    the wrong-image behaviour."""
+    src = tmp_path / "multi.xml"
+    src.write_text(_MULTIPAGE_ALTO, encoding="utf-8")
+    doc = build_document_manifest([(src, src.name)])
+    pipeline = CorrectionPipeline(
+        producer=_RecordingVisionProducer(), observer=_Null(), output_writer=_Null()
+    )
+    with pytest.raises(ConfigurationError, match="page_id"):
+        await pipeline.run(
+            document_manifest=doc,
+            source_files={src.name: src},
+            page_images={src.name: "opaque://whole-file"},
+            apply=False,
+        )
