@@ -347,8 +347,10 @@ def test_duplicate_revert_extends_to_CROSS_PAGE_hyphen_partner():
     # The page-local index the seam/page pass would hold contains only the
     # flagged page's line; the partner is reachable solely via the
     # page-qualified cross-page index.
+    from corrigenda.core.identity import line_ref
+
     line_by_id = {part1.line_id: part1}
-    cross_page_partners = {(part2.page_id, part2.line_id): part2}
+    cross_page_partners = {line_ref(part2): part2}
 
     pipeline._apply_duplicate_reverts(
         reverts={part1.line_id: "adjacent_duplicate_detected"},

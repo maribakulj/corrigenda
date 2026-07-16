@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Document-wide line lookups are keyed by `LineRef` (ADR-009,
+  breaking).** New frozen dataclass `corrigenda.core.identity.LineRef`
+  (`page_id`, `line_id` — fully qualifying under ADR-007's
+  document-unique page ids) replaces the engine's three ad-hoc key
+  shapes: hand-built composite strings (traces, pre-revert snapshots,
+  finalization owners), raw `(page_id, line_id)` tuples (producer-op
+  capture, cross-page hyphen indexes) and the string keys of
+  `CorrectionResult.traces`, which now maps `LineRef → LineTrace`. A
+  cross-page keying mistake is now a type error, not a runtime
+  overwrite.
 - **Recoverability is an allowlist (breaking for non-conforming
   providers).** The producer-attempt path re-raised eight known
   programmer-bug types and degraded EVERYTHING else to
