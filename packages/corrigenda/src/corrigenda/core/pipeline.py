@@ -49,7 +49,12 @@ from corrigenda.core.identity import (
     ensure_unique_identities,
     ensure_unique_page_ids_across_files,
 )
-from corrigenda.errors import CorrectionAborted, CorrectionError, ProjectionError
+from corrigenda.errors import (
+    ConfigurationError,
+    CorrectionAborted,
+    CorrectionError,
+    ProjectionError,
+)
 from corrigenda.core.planner import downgrade_granularity, plan_page
 from corrigenda.core.guards import check_adjacent_duplicates, check_line
 from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
@@ -139,19 +144,36 @@ _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 
-def _default_format_adapter() -> FormatAdapter:
-    """Composition-boundary default: ALTO, resolved lazily (§3).
+def _adapter_for_format(source_format: str | None) -> FormatAdapter:
+    """Resolve the adapter the MANIFEST declares — no implicit default (§3).
+
+    The format travels with the document: the parsers stamp
+    ``DocumentManifest.source_format`` and the engine derives the
+    matching adapter here. A manifest without a stamped format
+    (hand-built) has no derivable adapter, and silently assuming one —
+    the historical ALTO default — is exactly how a PAGE document ended
+    up rewritten by the ALTO rewriter.
 
     This function is the ONLY place ``core`` touches a concrete format,
-    and the import is function-local so importing any ``corrigenda.core``
-    module never loads lxml. The import-contract test pins both facts:
-    core modules carry no static formats/lxml import, and this exact
-    function is the single allowed lazy site. Inject ``format_adapter``
-    on the pipeline to use another format (e.g. PAGE XML).
+    and the imports are function-local so importing any
+    ``corrigenda.core`` module never loads lxml. The import-contract
+    test pins both facts: core modules carry no static formats/lxml
+    import, and this exact function is the single allowed lazy site.
     """
-    from corrigenda.formats.alto.adapter import AltoFormatAdapter
+    if source_format == "alto":
+        from corrigenda.formats.alto.adapter import AltoFormatAdapter
 
-    return AltoFormatAdapter()
+        return AltoFormatAdapter()
+    if source_format == "page":
+        from corrigenda.formats.page.adapter import PageFormatAdapter
+
+        return PageFormatAdapter()
+    raise ConfigurationError(
+        f"the manifest declares no derivable format "
+        f"(source_format={source_format!r}); load the document through a "
+        "corrigenda format parser, or inject format_adapter explicitly "
+        "on the pipeline"
+    )
 
 
 def sanitize_error(msg: str, api_key: str | None = None) -> str:
@@ -619,8 +641,10 @@ class CorrectionPipeline:
         # the configuration fingerprint stamped into the corrected XML covers
         # every §8.2 policy. The pipeline itself never re-pairs lines.
         self.pairing_policy = pairing_policy or DEFAULT_PAIRING_POLICY
-        # §3 format seam — None resolves to the lazy ALTO default at
-        # write time (_default_format_adapter); inject for other formats.
+        # §3 format seam — None derives the adapter from the MANIFEST's
+        # stamped source_format at write time (_adapter_for_format); an
+        # injected adapter that contradicts that format is refused at
+        # run start. There is no implicit default format.
         self.format_adapter = format_adapter
         # §11 — provenance labels stamped into the corrected XML's
         # processingStep. Pure strings: the pipeline never dials a vendor.
@@ -821,6 +845,20 @@ class CorrectionPipeline:
         # §5.1 — a vision producer without its images is a start-up error,
         # never a silent image-less call.
         require_source_images(self.producer, list(source_files.keys()), source_images)
+
+        # §3 — the format travels with the document. An injected adapter
+        # that contradicts the format the manifest was parsed as would
+        # only surface at write time (as a confusing projection failure);
+        # refuse it before any correction work is spent. Adapters without
+        # a ``format_name`` (custom implementations) are trusted as-is.
+        declared = document_manifest.source_format
+        adapter_format = getattr(self.format_adapter, "format_name", None)
+        if declared and adapter_format and declared != adapter_format:
+            raise ConfigurationError(
+                f"the injected format_adapter writes {adapter_format!r} but "
+                f"the manifest was parsed as {declared!r} — parse with the "
+                "matching corrigenda parser or inject the matching adapter"
+            )
 
         # ADR-007 — identity-uniqueness invariant, enforced at the pipeline
         # door so hand-built manifests get the same guarantee as
@@ -2132,7 +2170,10 @@ class CorrectionPipeline:
         from corrigenda import __version__ as _lib_version
 
         config_fingerprint = self.config_fingerprint()
-        adapter = self.format_adapter or _default_format_adapter()
+        # Adapter resolution is lazy (first file to write): a run with no
+        # output files — every hand-built-manifest dry-run in the test
+        # suite passes source_files={} — needs no format at all.
+        adapter: FormatAdapter | None = self.format_adapter
 
         for source_name, xml_path in source_files.items():
             pages_for_file = [
@@ -2140,6 +2181,8 @@ class CorrectionPipeline:
             ]
             if not pages_for_file:
                 continue
+            if adapter is None:
+                adapter = _adapter_for_format(document_manifest.source_format)
 
             xml_bytes, metrics, rewriter_paths = await asyncio.to_thread(
                 adapter.rewrite_file,

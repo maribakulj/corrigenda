@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The format travels with the document — no implicit ALTO default
+  (breaking for hand-built manifests).** The parsers stamp
+  `DocumentManifest.source_format` ("alto" / "page") and the engine
+  derives the matching adapter from it at write time: a PAGE document
+  now corrects end-to-end with no adapter injected (following the
+  quickstart's PAGE hint used to rewrite PAGE with the ALTO rewriter).
+  An injected adapter that contradicts the manifest's format raises the
+  new `ConfigurationError` at run start; a hand-built manifest (no
+  stamped format) reaching the write phase without an explicit adapter
+  raises it too, instead of silently assuming ALTO.
 - **Fallback accounting counts LINES, not chunks (breaking).**
   `CorrectionResult.fallback_count` (bumped once per fallen *chunk* — a
   rejected 20-line chunk reported "1") is renamed `fallback_chunks`, and

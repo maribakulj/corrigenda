@@ -213,6 +213,12 @@ class DocumentManifest(BaseModel):
     total_pages: int = Field(ge=0)
     total_blocks: int = Field(ge=0)
     total_lines: int = Field(ge=0)
+    #: Format the sources were parsed as ("alto" | "page"), stamped by the
+    #: format builders so the engine can derive the matching adapter at
+    #: write time. ``None`` on hand-built manifests: writing output then
+    #: requires an explicit ``format_adapter`` on the pipeline — there is
+    #: no implicit default format.
+    source_format: str | None = None
 
     @model_validator(mode="after")
     def _totals_match_content(self) -> "DocumentManifest":
