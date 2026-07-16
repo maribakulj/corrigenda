@@ -10,8 +10,11 @@ literally what this library produces.
 
 ## Status
 
-**1.0.0 — stable.** The public surface is pinned by an executable
-snapshot test and governed by strict SemVer; see
+**0.9.0 — beta.** The public surface is pinned by an executable
+snapshot test, but the API is **not frozen yet**: the 0.9.x series may
+break it deliberately (each break is a reviewed snapshot change with a
+CHANGELOG entry). Strict SemVer starts at `1.0.0`, which requires an
+independent external API review first; see
 [docs/versioning.md](docs/versioning.md). Docs:
 [quickstart](docs/quickstart.md) ·
 [edit protocol](docs/edit-protocol.md) ·

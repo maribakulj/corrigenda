@@ -1,5 +1,13 @@
 # Versioning & deprecation policy
 
+## Current series: 0.9.x (beta)
+
+The library has never been published to an index, so the 0.9.x series is
+free to break the public surface without deprecation aliases — every
+break is still a deliberate act (snapshot-test change + CHANGELOG entry).
+`1.0.0rc1` freezes the API; `1.0.0` is tagged only after the independent
+external review of the public API required by the release plan.
+
 ## SemVer, strictly
 
 From `1.0.0`, `corrigenda` follows [Semantic Versioning](https://semver.org):

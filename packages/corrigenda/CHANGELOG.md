@@ -9,14 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _No unreleased changes._
 
-## [1.0.0] — 2026-07-15
+## [0.9.0] — 2026-07-16
 
-First public release. Everything below shipped together as **the** 1.0 of
-`corrigenda` — nothing was ever published under an earlier name or number,
+### Changed
+
+- **Re-versioned `1.0.0` → `0.9.0`, classifier `Production/Stable` →
+  `Beta`.** Nothing was ever published to an index under `1.0.0` (the
+  tag was never created — the release plan requires an independent
+  external API review first, and the core refactor planned in
+  `docs/audit/PLAN-1.0-2026-07-15.md` will deliberately break the API
+  beforehand). A version that promises a frozen surface while breaks are
+  planned is dishonest; the 0.9.x series says what it is. The section
+  below keeps its original date and content — it describes the same
+  code, renumbered.
+
+## [0.9.0 initial scope, formerly "1.0.0"] — 2026-07-15
+
+First complete release candidate scope. Everything below shipped together —
+nothing was ever published under an earlier name or number,
 so there is no deprecation layer anywhere: final import paths and final
 schemas from day one. The public surface is pinned by an executable
-snapshot test (`tests/test_public_api_snapshot.py`) and governed by strict
-SemVer from here on (see `docs/versioning.md`).
+snapshot test (`tests/test_public_api_snapshot.py`); strict SemVer starts
+at `1.0.0` (see `docs/versioning.md`).
 
 Highlights: ALTO **and PAGE XML** backends producing one common
 `DocumentManifest`; the §4 span edit protocol (`EditScript`,
