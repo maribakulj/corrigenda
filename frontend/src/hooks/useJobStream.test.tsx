@@ -110,7 +110,7 @@ describe('F26 — diagnostic events surface in the log', () => {
 // ---------------------------------------------------------------------------
 
 describe('F30 — subscriber_cap_reached backs off, no failed', () => {
-  it('does not set status=failed and increases the reconnect delay', () => {
+  it('does not set status=failed and increases the reconnect delay', async () => {
     const { result } = renderHook(() => useJobStream('job-1'))
     const es = FakeEventSource.last()
 
@@ -125,7 +125,7 @@ describe('F30 — subscriber_cap_reached backs off, no failed', () => {
 
     // First reconnect scheduled; capture how long until it fires.
     const before = FakeEventSource.instances.length
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(2000)
     })
     // Reconnect happened (a new EventSource) — recovery preserved.
@@ -139,12 +139,12 @@ describe('F30 — subscriber_cap_reached backs off, no failed', () => {
       es2.error()
     })
     const before2 = FakeEventSource.instances.length
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(2000)
     })
     // 2s is no longer enough for the 2nd reconnect (backoff grew).
     expect(FakeEventSource.instances.length).toBe(before2)
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(30000)
     })
     expect(FakeEventSource.instances.length).toBeGreaterThan(before2)
@@ -158,33 +158,49 @@ describe('F30 — subscriber_cap_reached backs off, no failed', () => {
 // only the server's answer (or a 404) may decide the job's fate.
 // ---------------------------------------------------------------------------
 
-/** Drive the stream through MAX_RETRIES consecutive failures → polling. */
-function exhaustStreamRetries() {
+/** Drive the stream through MAX_RETRIES consecutive failures → polling.
+ * Async: reopening awaits a fresh events URL, so each timer advance
+ * needs a microtask flush before the next FakeEventSource exists. */
+async function exhaustStreamRetries() {
   for (let i = 0; i < 4; i++) {
     act(() => {
       FakeEventSource.last().error()
     })
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(10000)
     })
   }
 }
 
+/** Stub fetch, routing by URL: /events-url mints a fresh signed URL
+ * (renewal path), everything else serves the status-poll payloads in
+ * order. Returns the mock plus a per-route call counter. */
 function fetchResponding(payloads: Array<Record<string, unknown> | 404>) {
   let call = 0
-  const fn = vi.fn(async () => {
+  const counts = { statusPolls: 0, renewals: 0 }
+  const fn = vi.fn(async (url: string | URL | Request) => {
+    const href = String(url)
+    if (href.includes('/events-url')) {
+      counts.renewals += 1
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ events_url: `/api/jobs/job-1/events?sig=fresh-${counts.renewals}` }),
+      } as unknown as Response
+    }
+    counts.statusPolls += 1
     const p = payloads[Math.min(call, payloads.length - 1)]
     call += 1
     if (p === 404) return { ok: false, status: 404 } as Response
     return { ok: true, status: 200, json: async () => p } as unknown as Response
   })
   vi.stubGlobal('fetch', fn)
-  return fn
+  return { fn, counts }
 }
 
 describe('V1.2 — stream loss falls back to polling, never fails the job', () => {
   it('reaches completed via polling when the job succeeded server-side', async () => {
-    const fetchMock = fetchResponding([
+    const { fn: fetchMock } = fetchResponding([
       { job_id: 'job-1', status: 'running', total_lines: 10, lines_modified: 0 },
       {
         job_id: 'job-1',
@@ -200,7 +216,7 @@ describe('V1.2 — stream loss falls back to polling, never fails the job', () =
     ])
     const { result } = renderHook(() => useJobStream('job-1'))
 
-    exhaustStreamRetries()
+    await exhaustStreamRetries()
     expect(result.current.status).not.toBe('failed')
     expect(result.current.streamState).toBe('polling')
 
@@ -237,7 +253,7 @@ describe('V1.2 — stream loss falls back to polling, never fails the job', () =
       },
     ])
     const { result } = renderHook(() => useJobStream('job-1'))
-    exhaustStreamRetries()
+    await exhaustStreamRetries()
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1)
     })
@@ -248,7 +264,7 @@ describe('V1.2 — stream loss falls back to polling, never fails the job', () =
   it('treats a 404 snapshot as the one authoritative dead end', async () => {
     fetchResponding([404])
     const { result } = renderHook(() => useJobStream('job-1'))
-    exhaustStreamRetries()
+    await exhaustStreamRetries()
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1)
     })
@@ -261,7 +277,7 @@ describe('V1.2 — stream loss falls back to polling, never fails the job', () =
     })
     vi.stubGlobal('fetch', fn)
     const { result } = renderHook(() => useJobStream('job-1'))
-    exhaustStreamRetries()
+    await exhaustStreamRetries()
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1)
     })
@@ -276,17 +292,82 @@ describe('V1.2 — stream loss falls back to polling, never fails the job', () =
   it('reconnect() reopens a live stream from polling mode', async () => {
     fetchResponding([{ job_id: 'job-1', status: 'running', total_lines: 0, lines_modified: 0 }])
     const { result } = renderHook(() => useJobStream('job-1'))
-    exhaustStreamRetries()
+    await exhaustStreamRetries()
     expect(result.current.streamState).toBe('polling')
 
     const before = FakeEventSource.instances.length
-    act(() => {
+    await act(async () => {
       result.current.reconnect()
     })
     expect(FakeEventSource.instances.length).toBe(before + 1)
+    // The reopened stream uses a FRESHLY minted events credential — the
+    // creation-time URL is short-lived and an unbounded run outlives it.
+    expect(FakeEventSource.last().url).toContain('sig=fresh-')
     act(() => {
       FakeEventSource.last().open()
     })
+    expect(result.current.streamState).toBe('live')
+  })
+
+  it('an in-flight poll cannot re-arm polling after a manual reconnect', async () => {
+    // A status poll whose fetch is STILL PENDING when the user forces
+    // an SSE reconnection used to re-arm the polling loop when it
+    // resolved — two transports running side by side.
+    let resolvePoll: ((r: Response) => void) | null = null
+    const counts = { statusPolls: 0 }
+    const fn = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url)
+      if (href.includes('/events-url')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ events_url: '/api/jobs/job-1/events?sig=fresh' }),
+        } as unknown as Response
+      }
+      counts.statusPolls += 1
+      return new Promise<Response>((resolve) => {
+        resolvePoll = resolve
+      })
+    })
+    vi.stubGlobal('fetch', fn)
+
+    const { result } = renderHook(() => useJobStream('job-1'))
+    await exhaustStreamRetries()
+    expect(result.current.streamState).toBe('polling')
+
+    // First poll fires and HANGS (unresolved promise).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(counts.statusPolls).toBe(1)
+
+    // User forces the live stream back while the poll is in flight.
+    await act(async () => {
+      result.current.reconnect()
+    })
+    act(() => {
+      FakeEventSource.last().open()
+    })
+    expect(result.current.streamState).toBe('live')
+
+    // The stale poll resolves AFTER the stream is live: it must die at
+    // its generation checkpoint instead of scheduling the next tick.
+    await act(async () => {
+      resolvePoll?.({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          job_id: 'job-1',
+          status: 'running',
+          total_lines: 0,
+          lines_modified: 0,
+        }),
+      } as unknown as Response)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000)
+    })
+    expect(counts.statusPolls).toBe(1)
     expect(result.current.streamState).toBe('live')
   })
 })

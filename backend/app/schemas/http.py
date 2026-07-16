@@ -43,6 +43,29 @@ class CreateJobResponse(BaseModel):
     events_url: str | None = None
 
 
+class EventsUrlResponse(BaseModel):
+    """A freshly minted SSE URL (events-scoped ``?sig=``, short TTL).
+
+    Renewal endpoint for reconnections: the creation-time ``events_url``
+    is deliberately short-lived, so a client re-opening the stream later
+    asks for a new credential with its capability token instead of
+    holding a credential sized to the whole run.
+    """
+
+    events_url: str
+
+
+class DownloadUrlResponse(BaseModel):
+    """A freshly minted download URL (download-scoped ``?sig=``, short TTL).
+
+    Lets the browser stream the artefact natively (navigation /
+    ``<a href>``) instead of buffering it through ``fetch().blob()`` —
+    the capability token itself still never travels in a URL.
+    """
+
+    download_url: str
+
+
 class JobStatusResponse(BaseModel):
     job_id: str
     status: JobStatus

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { eventsUrlFor, fetchJobStatus } from '../api/client'
+import { eventsUrlFor, fetchEventsUrl, fetchJobStatus } from '../api/client'
 import type {
   JobProgress,
   JobStats,
@@ -87,6 +87,14 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
   // (rebuilt on every effect run so it captures the current jobId).
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectFnRef = useRef<(() => void) | null>(null)
+  // Transport generation. Every transport transition (new job, manual
+  // reconnect) bumps it; every async continuation (a poll awaiting its
+  // fetch, a stream open awaiting its fresh URL) captures the value at
+  // start and aborts when it changed. Without it, a status poll already
+  // in flight when the user forced an SSE reconnection re-armed the
+  // polling loop AFTER the live stream was back — two transports
+  // running side by side.
+  const genRef = useRef(0)
 
   // Mirror status into a ref so the error handler can read the latest
   // value without triggering an effect re-run on every status change.
@@ -126,6 +134,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
     // Non-null snapshot for closures (TS narrowing doesn't survive them).
     const jid: string = jobId
     let cancelled = false
+    genRef.current += 1
     const MAX_RETRIES = 3
     const CAP_BACKOFF_MAX_MS = 30_000
     const POLL_INTERVAL_MS = 5000
@@ -413,8 +422,13 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
     function startPolling() {
       setStreamState('polling')
       let transportErrorLogged = false
+      // This polling cycle belongs to the CURRENT transport generation:
+      // a manual SSE reconnection bumps the generation, so a poll whose
+      // fetch was already in flight dies at its next checkpoint instead
+      // of re-arming the loop alongside the restored live stream.
+      const myGen = genRef.current
       const poll = async () => {
-        if (cancelled) return
+        if (cancelled || genRef.current !== myGen) return
         let snap: Awaited<ReturnType<typeof fetchJobStatus>> | undefined
         try {
           snap = await fetchJobStatus(jid)
@@ -427,7 +441,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
             )
           }
         }
-        if (cancelled) return
+        if (cancelled || genRef.current !== myGen) return
         if (snap === null) {
           // 404: evicted or unknown — the one authoritative dead end.
           setStatus('failed')
@@ -529,10 +543,7 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
           )
           retryTimeoutRef.current = setTimeout(() => {
             retryTimeoutRef.current = null
-            if (cancelled) return
-            const reconnect = new EventSource(eventsUrlFor(jid))
-            esRef.current = reconnect
-            attach(reconnect)
+            void reopenStream()
           }, delay)
           return
         }
@@ -569,34 +580,59 @@ export function useJobStream(jobId: string | null): UseJobStreamReturn {
 
         retryTimeoutRef.current = setTimeout(() => {
           retryTimeoutRef.current = null
-          if (cancelled) return
-          const reconnect = new EventSource(eventsUrlFor(jid))
-          esRef.current = reconnect
-          attach(reconnect)
+          void reopenStream()
         }, delay)
       }
     }
 
-    const es = new EventSource(eventsUrlFor(jid))
-    esRef.current = es
-    attach(es)
+    function attachStream(url: string) {
+      // A reconnect may race a still-open (but silent) stream: close it
+      // before replacing, or its late onerror would schedule a second
+      // retry ladder next to the fresh connection.
+      esRef.current?.close()
+      const es = new EventSource(url)
+      esRef.current = es
+      attach(es)
+    }
+
+    // Every REconnection mints a fresh events credential: the signed
+    // URL from creation is short-lived by design, and a long (or
+    // unbounded — JOB_TIMEOUT_SECONDS=0) run outlives any fixed-TTL
+    // credential. The await makes reopening async, so the generation is
+    // re-checked before the EventSource is actually created.
+    async function reopenStream() {
+      const myGen = genRef.current
+      const url = await fetchEventsUrl(jid)
+      if (cancelled || genRef.current !== myGen) return
+      if (isTerminalStatus(statusRef.current)) return
+      attachStream(url)
+    }
+
+    // Initial connection: the creation-time signed URL is fresh by
+    // construction — no renewal round-trip on the happy path.
+    attachStream(eventsUrlFor(jid))
 
     // Plan V1.2 — manual reconnect (UI button while polling): stop the
-    // poller, reset the retry budget and try a fresh EventSource. If it
-    // fails again, onerror re-enters the retry→polling ladder.
+    // poller AND any pending auto-retry, invalidate in-flight polls
+    // (generation bump), reset the retry budget and open a fresh
+    // stream. If it fails again, onerror re-enters the retry→polling
+    // ladder.
     reconnectFnRef.current = () => {
       if (cancelled) return
       if (isTerminalStatus(statusRef.current)) return
+      genRef.current += 1
       if (pollTimeoutRef.current !== null) {
         clearTimeout(pollTimeoutRef.current)
         pollTimeoutRef.current = null
       }
+      if (retryTimeoutRef.current !== null) {
+        clearTimeout(retryTimeoutRef.current)
+        retryTimeoutRef.current = null
+      }
       retryCountRef.current = 0
       setStreamState('reconnecting')
       setLogs((l) => appendLog(l, makeLog('info', 'Reconnecting to the live stream…')))
-      const fresh = new EventSource(eventsUrlFor(jid))
-      esRef.current = fresh
-      attach(fresh)
+      void reopenStream()
     }
 
     return () => {

@@ -207,11 +207,93 @@
         }
       }
     },
+    "/api/jobs/{job_id}/events-url": {
+      "get": {
+        "tags": ["jobs"],
+        "summary": "Renew Events Url",
+        "description": "Mint a fresh events-scoped SSE URL (token-gated).\n\nEventSource cannot set headers, so the stream route takes a signed\n``?sig=``. Credentials are deliberately short-lived; a client\nreconnecting after a drop (or after any amount of time \u2014 the job\ntimeout can be disabled entirely) calls this with its capability\ntoken instead of holding a credential sized to the whole run.",
+        "operationId": "renew_events_url_api_jobs__job_id__events_url_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventsUrlResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/download-url": {
+      "get": {
+        "tags": ["jobs"],
+        "summary": "Mint Download Url",
+        "description": "Mint a short-lived signed download URL (token-gated).\n\nThe browser then navigates to it and streams the artefact natively \u2014\nno ``fetch().blob()`` buffering the whole file in renderer memory,\nand the capability token itself still never travels in a URL (a\nleaked download credential expires in minutes and opens nothing\nelse).",
+        "operationId": "mint_download_url_api_jobs__job_id__download_url_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadUrlResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/download": {
       "get": {
         "tags": ["jobs"],
         "summary": "Download Job",
-        "description": "Download corrected XML file(s).",
+        "description": "Download corrected XML file(s).\n\nAccessible with the capability token (header) or a download-scoped\nsigned ``?sig=`` minted by ``GET /{job_id}/download-url`` \u2014 the\nheader-less variant exists so the BROWSER can stream the artefact\nnatively instead of the app buffering it through a blob.",
         "operationId": "download_job_api_jobs__job_id__download_get",
         "parameters": [
           {
@@ -490,6 +572,30 @@
         "type": "object",
         "required": ["job_id"],
         "title": "CreateJobResponse"
+      },
+      "DownloadUrlResponse": {
+        "properties": {
+          "download_url": {
+            "type": "string",
+            "title": "Download Url"
+          }
+        },
+        "type": "object",
+        "required": ["download_url"],
+        "title": "DownloadUrlResponse",
+        "description": "A freshly minted download URL (download-scoped ``?sig=``, short TTL).\n\nLets the browser stream the artefact natively (navigation /\n``<a href>``) instead of buffering it through ``fetch().blob()`` \u2014\nthe capability token itself still never travels in a URL."
+      },
+      "EventsUrlResponse": {
+        "properties": {
+          "events_url": {
+            "type": "string",
+            "title": "Events Url"
+          }
+        },
+        "type": "object",
+        "required": ["events_url"],
+        "title": "EventsUrlResponse",
+        "description": "A freshly minted SSE URL (events-scoped ``?sig=``, short TTL).\n\nRenewal endpoint for reconnections: the creation-time ``events_url``\nis deliberately short-lived, so a client re-opening the stream later\nasks for a new credential with its capability token instead of\nholding a credential sized to the whole run."
       },
       "HTTPValidationError": {
         "properties": {

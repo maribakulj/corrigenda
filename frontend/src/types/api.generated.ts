@@ -118,6 +118,58 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/jobs/{job_id}/events-url': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Renew Events Url
+     * @description Mint a fresh events-scoped SSE URL (token-gated).
+     *
+     *     EventSource cannot set headers, so the stream route takes a signed
+     *     ``?sig=``. Credentials are deliberately short-lived; a client
+     *     reconnecting after a drop (or after any amount of time — the job
+     *     timeout can be disabled entirely) calls this with its capability
+     *     token instead of holding a credential sized to the whole run.
+     */
+    get: operations['renew_events_url_api_jobs__job_id__events_url_get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/jobs/{job_id}/download-url': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Mint Download Url
+     * @description Mint a short-lived signed download URL (token-gated).
+     *
+     *     The browser then navigates to it and streams the artefact natively —
+     *     no ``fetch().blob()`` buffering the whole file in renderer memory,
+     *     and the capability token itself still never travels in a URL (a
+     *     leaked download credential expires in minutes and opens nothing
+     *     else).
+     */
+    get: operations['mint_download_url_api_jobs__job_id__download_url_get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/jobs/{job_id}/download': {
     parameters: {
       query?: never
@@ -128,6 +180,11 @@ export interface paths {
     /**
      * Download Job
      * @description Download corrected XML file(s).
+     *
+     *     Accessible with the capability token (header) or a download-scoped
+     *     signed ``?sig=`` minted by ``GET /{job_id}/download-url`` — the
+     *     header-less variant exists so the BROWSER can stream the artefact
+     *     natively instead of the app buffering it through a blob.
      */
     get: operations['download_job_api_jobs__job_id__download_get']
     put?: never
@@ -260,6 +317,31 @@ export interface components {
       job_token?: string | null
       /** Events Url */
       events_url?: string | null
+    }
+    /**
+     * DownloadUrlResponse
+     * @description A freshly minted download URL (download-scoped ``?sig=``, short TTL).
+     *
+     *     Lets the browser stream the artefact natively (navigation /
+     *     ``<a href>``) instead of buffering it through ``fetch().blob()`` —
+     *     the capability token itself still never travels in a URL.
+     */
+    DownloadUrlResponse: {
+      /** Download Url */
+      download_url: string
+    }
+    /**
+     * EventsUrlResponse
+     * @description A freshly minted SSE URL (events-scoped ``?sig=``, short TTL).
+     *
+     *     Renewal endpoint for reconnections: the creation-time ``events_url``
+     *     is deliberately short-lived, so a client re-opening the stream later
+     *     asks for a new credential with its capability token instead of
+     *     holding a credential sized to the whole run.
+     */
+    EventsUrlResponse: {
+      /** Events Url */
+      events_url: string
     }
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -518,6 +600,68 @@ export interface operations {
         }
         content: {
           'application/json': unknown
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  renew_events_url_api_jobs__job_id__events_url_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        job_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['EventsUrlResponse']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  mint_download_url_api_jobs__job_id__download_url_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        job_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['DownloadUrlResponse']
         }
       }
       /** @description Validation Error */
