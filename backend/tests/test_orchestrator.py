@@ -773,28 +773,18 @@ async def test_pipeline_classifies_llm_output_error_with_linear_backoff(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_classifies_client_http_4xx_as_non_retryable(
+async def test_raw_unwrapped_4xx_fails_the_run_loudly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A raw ``httpx.HTTPStatusError`` with a 4xx status (other than 429)
-    is NON-retryable: zero backoff, zero retry events, immediate fallback.
-
-    Contract: ``_wrap_if_transient`` in ``backend/app/providers/base.py``
-    intentionally leaves 4xx-non-429 errors un-wrapped — bad keys (401),
-    forbidden models (403), wrong endpoints (404), schema rejections (422)
-    don't heal on retry, so retrying just burns quota and adds latency.
-    The classifier sees the raw ``HTTPStatusError``: no ``isinstance``
-    branch matches (it's neither ``ProviderTransientError`` nor
-    ``ValueError``/``JSONDecodeError``), so ``is_retryable=False`` and the
-    chunk falls back to OCR source on the first failure.
-
-    This is a deliberate departure from the pre-refactor behavior, where
-    a class-name allowlist treated every ``HTTPStatusError`` as transient
-    and wasted 3 attempts on permanent client errors. The pin makes the
-    contract explicit so a future "retry everything" refactor doesn't
-    silently restore that waste.
-    """
+    """A raw ``httpx.HTTPStatusError`` reaching the pipeline means the
+    provider opted out of the taxonomy contract (our providers wrap 4xx
+    as ``ProviderPermanentError`` via ``_wrap_if_transient`` — pinned in
+    test_providers.py). Recoverability is an ALLOWLIST (ADR-008 revised):
+    an unclassified exception FAILS the run — zero retries, zero backoff,
+    one provider call — instead of silently degrading every chunk to OCR
+    fallback and reporting a 'successful' job whose provider rejected
+    every call."""
     import httpx
 
     sleeps = await _capture_sleeps(monkeypatch)
@@ -809,9 +799,9 @@ async def test_pipeline_classifies_client_http_4xx_as_non_retryable(
     provider = _AlwaysFailProvider(_make_401)
     await _run(job_id, provider, tmp_path, store)
 
-    # Pin 1: zero backoff — the classifier short-circuits before
-    # ``await asyncio.sleep(decision.backoff)`` runs.
-    assert sleeps == [], f"4xx HTTPStatusError should NOT retry; got {sleeps!r} backoff(s)"
+    # Pin 1: zero backoff — the allowlist re-raises before the retry
+    # machinery ever runs ``await asyncio.sleep(decision.backoff)``.
+    assert sleeps == [], f"unclassified 4xx must NOT retry; got {sleeps!r} backoff(s)"
 
     events: list[SSEEvent] = []
     while not queue.empty():
@@ -819,24 +809,18 @@ async def test_pipeline_classifies_client_http_4xx_as_non_retryable(
 
     # Pin 2: zero retry events emitted on any chunk.
     retries = [e for e in events if e.event == "retry"]
-    assert retries == [], f"4xx HTTPStatusError should emit zero retry events; got {len(retries)}"
+    assert retries == [], f"unclassified 4xx must emit zero retry events; got {len(retries)}"
 
-    # Pin 3: fallback path was taken — the job finishes in the DEGRADED
-    # terminal state (P0-1). NB fail-fast on 4xx requires the provider to
-    # wrap it as ProviderPermanentError (our providers do, via
-    # _wrap_if_transient — pinned in test_providers.py); this test injects
-    # a duck-typed raw error, i.e. a third-party provider that opted out.
+    # Pin 3: the run FAILED — never a degraded 'success' with every line
+    # silently at its OCR text.
     job = store.get_job(job_id)
     assert job is not None
-    assert job.status.value == "completed_with_fallbacks"
-    assert job.fallbacks >= 1, "expected fallback path to be taken on 4xx"
+    assert job.status.value == "failed"
 
-    # Pin 4: exactly one provider call per chunk — no retries. The
-    # transient branch would yield 3*chunk_count calls; we want 1*.
-    chunk_starts = [e for e in events if e.event == "chunk_started"]
-    assert provider.call_count == len(chunk_starts), (
-        f"4xx should not retry; expected {len(chunk_starts)} calls "
-        f"(one per chunk), got {provider.call_count}"
+    # Pin 4: exactly one provider call — the first raise aborts the run.
+    assert provider.call_count == 1, (
+        f"an unclassified error must abort on first raise; got "
+        f"{provider.call_count} calls"
     )
 
 

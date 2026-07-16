@@ -31,6 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Recoverability is an allowlist (breaking for non-conforming
+  providers).** The producer-attempt path re-raised eight known
+  programmer-bug types and degraded EVERYTHING else to
+  retry-then-OCR-fallback: a `RuntimeError` from a producer bug or a
+  raw SDK transport exception nobody wrapped ended as a "successful"
+  run with silently uncorrected text. Recoverable is now exactly what
+  the retry classifier can route — `ProviderTransientError` and the
+  `ValueError` family (`ValidationError`, `HyphenIntegrityError`,
+  `json.JSONDecodeError`) — and everything else fails the run.
+  Consequence: wrapping transport failures as `ProviderTransientError`
+  is now the provider CONTRACT (`BaseProvider` docstring says MUST),
+  enforced by failing loudly. ADR-008 revised.
 - **The format travels with the document — no implicit ALTO default
   (breaking for hand-built manifests).** The parsers stamp
   `DocumentManifest.source_format` ("alto" / "page") and the engine

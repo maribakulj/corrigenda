@@ -34,10 +34,15 @@ degrade every line to OCR fallback while the run still reports success.
    - permanent provider rejection (401/403/404) → fatal for the run —
      it would hit every chunk identically and "succeed" with
      uncorrected text;
-   - programming-error types (TypeError, AttributeError, KeyError, …)
-     → fail the run. A denylist rather than an allowlist: the
-     provider-agnostic pipeline cannot name every SDK's transport
-     errors, which must stay recoverable.
+   - anything else → fail the run. Recoverability is an ALLOWLIST
+     (`ProviderTransientError` + the `ValueError` family) — revised in
+     0.9.0 from the historical denylist of eight programmer-bug types,
+     under which an unknown exception (a `RuntimeError`, an unwrapped
+     SDK error) degraded every chunk to OCR fallback while the run
+     reported success. The provider-agnostic pipeline still cannot name
+     raw SDK transport errors — which is exactly why wrapping them as
+     `ProviderTransientError` is the provider CONTRACT, enforced by
+     failing loudly instead of guessing.
 3. **Cancellation is cooperative** (`CorrectionAborted`), observed at
    chunk/page boundaries, and no output is written after it.
 
