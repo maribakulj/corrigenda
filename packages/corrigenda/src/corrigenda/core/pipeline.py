@@ -494,7 +494,19 @@ class CorrectionResult:
     total_chunks: int
     total_reconciled: int
     retry_count: int
-    fallback_count: int
+    #: Number of chunks whose producer attempts were exhausted (an
+    #: orchestration counter — one rejected 20-line chunk counts once).
+    fallback_chunks: int
+    #: Number of LINES whose terminal status is ``FALLBACK`` — they kept
+    #: their OCR source text, whether a whole chunk fell back, a guard
+    #: rejected the correction, or a duplicate revert undid it. Manifest
+    #: statuses are the authority; "completed with fallbacks" means
+    #: exactly ``fallback_lines > 0``.
+    fallback_lines: int
+    #: Aggregated ``fallback_reason`` prefixes → line counts for the
+    #: fallen lines (e.g. ``{"all_attempts_exhausted": 20}``), so a
+    #: consumer can say WHY without parsing messages.
+    fallback_reasons: dict[str, int]
     traces: dict[str, LineTrace]
     reconcile_metrics: ReconcileMetrics
     #: F14 — aggregate token consumption across every producer call in the
@@ -527,7 +539,7 @@ class RunContext:
     #: Retries consumed across every chunk's attempt loop.
     retry_count: int = 0
     #: Chunks (or descent sub-chunks) that fell back to OCR source text.
-    fallback_count: int = 0
+    fallback_chunks: int = 0
     #: Per-pair reconciliation outcomes (coherent / fallback / neutralised).
     reconcile_metrics: ReconcileMetrics = field(default_factory=ReconcileMetrics)
     #: Aggregate token consumption across every producer call of the run.
@@ -984,11 +996,30 @@ class CorrectionPipeline:
                 traces_payload=report.model_dump_json(indent=2),
             )
 
+        # Line-level fallback accounting. Manifest statuses are the
+        # authority: they cover every path that leaves a line at its OCR
+        # text (chunk fallback, guard rejection, duplicate revert), not
+        # just chunks whose attempts were exhausted.
+        fallback_lms = [
+            lm
+            for page in document_manifest.pages
+            for lm in page.lines
+            if lm.status is LineStatus.FALLBACK
+        ]
+        fallback_reasons: dict[str, int] = {}
+        for lm in fallback_lms:
+            trace = traces.get(_trace_key(lm))
+            raw = (trace.fallback_reason if trace else None) or "unspecified"
+            prefix = raw.split(":", 1)[0].strip()
+            fallback_reasons[prefix] = fallback_reasons.get(prefix, 0) + 1
+
         return CorrectionResult(
             total_chunks=total_chunks,
             total_reconciled=total_reconciled,
             retry_count=ctx.retry_count,
-            fallback_count=ctx.fallback_count,
+            fallback_chunks=ctx.fallback_chunks,
+            fallback_lines=len(fallback_lms),
+            fallback_reasons=fallback_reasons,
             traces=traces,
             reconcile_metrics=ctx.reconcile_metrics,
             usage=ctx.usage,
@@ -1195,7 +1226,7 @@ class CorrectionPipeline:
                             validation_status="fallback",
                             fallback_reason=f"chunk_error_absorbed: {reason}",
                         )
-                    ctx.fallback_count += 1
+                    ctx.fallback_chunks += 1
 
         # Cross-chunk adjacency pass. Per-chunk finalization only sees
         # that chunk's TARGET lines, so two document-adjacent lines owned
@@ -1400,7 +1431,7 @@ class CorrectionPipeline:
                         traces=traces,
                         sanitised_msg=last_msg or "per_chunk_budget exhausted",
                     )
-                    ctx.fallback_count += 1
+                    ctx.fallback_chunks += 1
                     continue
                 total += await self._run_chunk(
                     ctx=ctx,
@@ -1421,7 +1452,7 @@ class CorrectionPipeline:
             traces=traces,
             sanitised_msg=last_msg or "all_attempts_exhausted",
         )
-        ctx.fallback_count += 1
+        ctx.fallback_chunks += 1
         return 0
 
     def _finish_successful_chunk(
@@ -1506,7 +1537,7 @@ class CorrectionPipeline:
         F8 — only target lines are reverted; context lines are owned by an
         adjacent chunk and must not be forced to OCR here.
 
-        The pipeline-level ``_fallback_count`` is bumped by the caller,
+        The pipeline-level ``_fallback_chunks`` is bumped by the caller,
         mirroring how ``_retry_count`` is incremented at the retry
         call site — both counters are pipeline-orchestration state, not
         chunk-level side effects.

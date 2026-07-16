@@ -86,7 +86,7 @@ async def test_absorbed_chunk_error_leaves_no_line_undecided(monkeypatch) -> Non
     # happened, and accounted for the degradation.
     assert any(e == PipelineEventType.CHUNK_ERROR for e, _ in observer.events)
     assert all(s is LineStatus.FALLBACK for s in statuses.values())
-    assert result.fallback_count > 0
+    assert result.fallback_chunks > 0
     # Fallback lines carry their source text — never None, never invented.
     for page in doc.pages:
         for lm in page.lines:

@@ -137,12 +137,14 @@ class JobRunner:
             # download the complete, committed set.
             self._commit_outputs(output_writer)
 
-            # P0-1 — COMPLETED strictly means "zero fallbacks". A run where
-            # some lines silently kept their OCR source text is a DEGRADED
-            # success and says so in its terminal state.
+            # COMPLETED strictly means "zero fallback LINES". The count is
+            # per line (manifest statuses), not per chunk: a rejected
+            # 20-line chunk is 20 uncorrected lines, and a guard-rejected
+            # line counts even when no chunk ever failed — the UI renders
+            # this number as "N line(s) fell back".
             terminal = (
                 JobStatus.COMPLETED_WITH_FALLBACKS
-                if result.fallback_count > 0
+                if result.fallback_lines > 0
                 else JobStatus.COMPLETED
             )
             self.job_store.update_job(
@@ -182,7 +184,7 @@ class JobRunner:
                     # client can render "success" vs "success with N
                     # uncorrected lines" without an extra round-trip.
                     "status": terminal.value,
-                    "fallbacks": result.fallback_count,
+                    "fallbacks": result.fallback_lines,
                 },
             )
 
@@ -347,7 +349,7 @@ class JobRunner:
         self.job_store.update_job(
             job_id,
             retries=result.retry_count,
-            fallbacks=result.fallback_count,
+            fallbacks=result.fallback_lines,
             # §9 unification — the run's CorrectionReport is the job's trace
             # artefact (served by /trace, dumped as trace.json). run_id ==
             # job_id (fed above), so the report self-correlates with the API.

@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Fallback accounting counts LINES, not chunks (breaking).**
+  `CorrectionResult.fallback_count` (bumped once per fallen *chunk* — a
+  rejected 20-line chunk reported "1") is renamed `fallback_chunks`, and
+  two fields join it: `fallback_lines` — the number of lines whose
+  terminal status is `FALLBACK` (manifest statuses are the authority:
+  chunk fallbacks, acceptance-guard rejections and duplicate reverts all
+  count) — and `fallback_reasons`, the aggregated reason prefixes per
+  line. Consumers deciding "completed vs completed-with-fallbacks" must
+  use `fallback_lines`: the old counter reported 0 for a guard-rejected
+  line that silently kept its OCR text.
 - **Provider errors join the single-root hierarchy.**
   `ProviderTransientError` and `ProviderPermanentError` (still importable
   from `corrigenda.core.protocols`) now derive from the new

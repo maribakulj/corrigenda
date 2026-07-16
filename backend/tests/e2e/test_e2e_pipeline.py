@@ -151,9 +151,10 @@ def test_absorption_only_is_refused_by_the_line_guard(backend_server, use_absorp
     nothing else can fail the chunk first, so the revert must come from
     the Stage-C absorption guard itself — a PER-LINE fallback (traced
     ``absorbs_next_line``) while every other line's honest correction
-    survives. Note: per-line guard reverts do not bump the job-level
-    fallback counter (chunk-granular by design), so the terminal status
-    stays ``completed``."""
+    survives. A guard-reverted line kept its OCR text, so the job-level
+    fallback count (a LINE count) is 1 and the terminal status is the
+    degraded success — never a clean ``completed`` that hides the
+    uncorrected line."""
     base_url = backend_server.base_url
     created = submit_job(base_url, model=use_absorption_vendor)
     job_id, token = created["job_id"], created["job_token"]
@@ -161,7 +162,8 @@ def test_absorption_only_is_refused_by_the_line_guard(backend_server, use_absorp
     events = collect_sse_until_terminal(base_url, job_id, token, timeout=300.0)
     terminal_name, terminal_data = events[-1]
     assert terminal_name == "completed", events
-    assert terminal_data["status"] == "completed"
+    assert terminal_data["status"] == "completed_with_fallbacks"
+    assert terminal_data["fallbacks"] == 1
 
     output = download_xml(base_url, job_id, token)
     _assert_geometry_unchanged(SAMPLE_XML.read_bytes(), output)
