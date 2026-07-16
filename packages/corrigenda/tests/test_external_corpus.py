@@ -6,14 +6,21 @@ suite runs the real pipeline over ALTO files produced by a REAL OCR
 pipeline (Gallica/BnF) on documents never opened during development —
 see external_corpus/manifest.json for the pinned set.
 
-The corpus is fetched at CI time by ``external_corpus/fetch.py`` (a
-dedicated NON-BLOCKING job — network flakiness or a Gallica re-OCR must
-not gate merges while the corpus job builds its track record). Locally:
+The corpus comes in two tiers:
 
-    python tests/external_corpus/fetch.py && pytest -m external_corpus
+- **fetched** — downloaded at CI time by ``external_corpus/fetch.py``
+  (a dedicated NON-BLOCKING job — network flakiness must not gate
+  merges while the corpus job builds its track record). Locally:
 
-Every test self-skips when the cache is empty, so the default ``pytest``
-run is unaffected.
+      python tests/external_corpus/fetch.py && pytest -m external_corpus
+
+- **pinned** — real Gallica pages committed under
+  ``external_corpus/pinned/`` (see its README for provenance rules).
+  These run in the DEFAULT test suite, offline, and BLOCK merges: no
+  ``external_corpus`` marker, no self-skip.
+
+When neither tier has files, the tests self-skip and the default
+``pytest`` run is unaffected.
 """
 
 from __future__ import annotations
@@ -36,18 +43,33 @@ _CACHE = Path(
         Path(__file__).parent / "external_corpus" / ".cache",
     )
 )
-_FILES = sorted(_CACHE.glob("*.alto.xml")) if _CACHE.is_dir() else []
-
-pytestmark = [
-    pytest.mark.external_corpus,
-    pytest.mark.skipif(
-        not _FILES,
-        reason="external corpus not fetched (run tests/external_corpus/fetch.py)",
-    ),
-]
+_PINNED_DIR = Path(__file__).parent / "external_corpus" / "pinned"
+_FETCHED = sorted(_CACHE.glob("*.alto.xml")) if _CACHE.is_dir() else []
+_PINNED = sorted(_PINNED_DIR.glob("*.alto.xml")) if _PINNED_DIR.is_dir() else []
 
 
-@pytest.mark.parametrize("xml_path", _FILES, ids=lambda p: p.name)
+def _corpus_params() -> list:
+    """Pinned files run everywhere (blocking); fetched files only under
+    ``-m external_corpus``. An empty corpus yields one skipped param so
+    collection never errors."""
+    params = [pytest.param(p, id=f"pinned-{p.name}") for p in _PINNED] + [
+        pytest.param(p, id=p.name, marks=pytest.mark.external_corpus) for p in _FETCHED
+    ]
+    if not params:
+        params = [
+            pytest.param(
+                None,
+                id="corpus-absent",
+                marks=pytest.mark.skip(
+                    reason="no pinned corpus committed and external corpus "
+                    "not fetched (run tests/external_corpus/fetch.py)"
+                ),
+            )
+        ]
+    return params
+
+
+@pytest.mark.parametrize("xml_path", _corpus_params(), ids=None)
 def test_parses_or_fails_classified(xml_path: Path) -> None:
     """§8.4 at the front door, on real-world OCR output."""
     try:
@@ -57,7 +79,7 @@ def test_parses_or_fails_classified(xml_path: Path) -> None:
     assert doc.total_lines == sum(len(p.lines) for p in doc.pages)
 
 
-@pytest.mark.parametrize("xml_path", _FILES, ids=lambda p: p.name)
+@pytest.mark.parametrize("xml_path", _corpus_params(), ids=None)
 def test_identity_run_preserves_invariants(xml_path: Path) -> None:
     """Identity pipeline run over a real file: geometry untouched, no
     mixed hyphen pairs, every line in a terminal state."""
