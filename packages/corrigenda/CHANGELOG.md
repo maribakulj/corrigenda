@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Page images are keyed by page, not by file (breaking).**
+  `run(source_images={source_name: ref})` gave every page of a multipage
+  XML the SAME image — the vision producer looked at page 1's scan for
+  every page but the first. The parameter is now
+  `run(page_images={page_id: ref})` (page ids are document-unique,
+  ADR-007), coverage is verified PER PAGE by the renamed
+  `require_page_images` (raising `ConfigurationError`, no longer
+  `ValidationError` — this is composition, not producer output), and a
+  key matching no page (e.g. a legacy file-name key) is refused
+  explicitly instead of silently reproducing the old behaviour.
 - **Document-wide line lookups are keyed by `LineRef` (ADR-009,
   breaking).** New frozen dataclass `corrigenda.core.identity.LineRef`
   (`page_id`, `line_id` — fully qualifying under ADR-007's

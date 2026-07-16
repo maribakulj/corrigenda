@@ -54,7 +54,7 @@ PUBLIC_API_1_0 = sorted(
         "normalize_anchor",
         # Producers (§5)
         "EditProducer",
-        "require_source_images",
+        "require_page_images",
         "RulesProducer",
         "SubstitutionRule",
         "default_french_ocr_rules",
@@ -132,7 +132,7 @@ def test_run_and_run_sync_signatures_are_pinned():
         "run_id",
         "should_abort",
         "apply",
-        "source_images",
+        "page_images",
     ]
     assert _param_names(corrigenda.CorrectionPipeline.run) == expected
     assert _param_names(corrigenda.CorrectionPipeline.run_sync) == expected

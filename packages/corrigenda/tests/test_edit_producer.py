@@ -10,8 +10,9 @@ import pytest
 
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.hyphenation import enrich_chunk_lines
-from corrigenda.core.protocols import EditProducer, require_source_images
+from corrigenda.core.protocols import EditProducer, require_page_images
 from corrigenda.core.schemas import (
+    PageManifest,
     ChunkGranularity,
     Coords,
     LineManifest,
@@ -19,7 +20,7 @@ from corrigenda.core.schemas import (
     RetryPolicy,
     Usage,
 )
-from corrigenda.errors import ValidationError
+from corrigenda.errors import ConfigurationError
 from corrigenda.producers.llm_edit import LLMEditProducer
 from corrigenda.producers.rules import RulesProducer, default_french_ocr_rules
 
@@ -86,7 +87,7 @@ def test_payload_carries_opaque_image_ref():
 
 
 # ---------------------------------------------------------------------------
-# require_source_images (§5.1)
+# require_page_images (§5.1) — one image per PAGE, never per file
 # ---------------------------------------------------------------------------
 
 
@@ -98,22 +99,41 @@ class _VisionProducer:
         return EditScript(ops=[]), None
 
 
+def _page(page_id: str, source: str) -> PageManifest:
+    return PageManifest(
+        page_id=page_id,
+        source_file=source,
+        page_index=0,
+        page_width=1000,
+        page_height=1000,
+        blocks=[],
+        lines=[],
+    )
+
+
 def test_text_producer_never_requires_images():
-    require_source_images(RulesProducer([]), ["a.xml"], None)  # no raise
+    require_page_images(RulesProducer([]), [_page("P1", "a.xml")], None)  # no raise
 
 
 def test_vision_producer_without_images_raises():
-    with pytest.raises(ValidationError):
-        require_source_images(_VisionProducer(), ["a.xml"], None)
+    with pytest.raises(ConfigurationError):
+        require_page_images(_VisionProducer(), [_page("P1", "a.xml")], None)
 
 
-def test_vision_producer_missing_entry_raises():
-    with pytest.raises(ValidationError):
-        require_source_images(_VisionProducer(), ["a.xml", "b.xml"], {"a.xml": "img-a"})
+def test_vision_producer_missing_page_raises():
+    """Coverage is PER PAGE: a multipage file with one ref is incomplete —
+    the historical per-file mapping silently sent page 1's scan for every
+    page of the file."""
+    pages = [_page("P1", "a.xml"), _page("P2", "a.xml")]
+    with pytest.raises(ConfigurationError, match="P2"):
+        require_page_images(_VisionProducer(), pages, {"P1": "img-p1"})
 
 
-def test_vision_producer_with_all_images_ok():
-    require_source_images(_VisionProducer(), ["a.xml"], {"a.xml": "img-a"})  # no raise
+def test_vision_producer_with_all_pages_ok():
+    pages = [_page("P1", "a.xml"), _page("P2", "a.xml")]
+    require_page_images(
+        _VisionProducer(), pages, {"P1": "img-p1", "P2": "img-p2"}
+    )  # no raise
 
 
 # ---------------------------------------------------------------------------

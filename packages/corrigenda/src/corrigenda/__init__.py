@@ -41,7 +41,7 @@ from corrigenda.core.protocols import (
     EditProducer,
     OutputWriter,
     PipelineObserver,
-    require_source_images,
+    require_page_images,
 )
 from corrigenda.core.schemas import (
     BlockManifest,
@@ -175,7 +175,7 @@ __all__ = [
     "normalize_anchor",
     # Producers (§5)
     "EditProducer",
-    "require_source_images",
+    "require_page_images",
     "RulesProducer",
     "SubstitutionRule",
     "default_french_ocr_rules",
