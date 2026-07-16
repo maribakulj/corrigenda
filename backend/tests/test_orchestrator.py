@@ -819,8 +819,7 @@ async def test_raw_unwrapped_4xx_fails_the_run_loudly(
 
     # Pin 4: exactly one provider call — the first raise aborts the run.
     assert provider.call_count == 1, (
-        f"an unclassified error must abort on first raise; got "
-        f"{provider.call_count} calls"
+        f"an unclassified error must abort on first raise; got {provider.call_count} calls"
     )
 
 
