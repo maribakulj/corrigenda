@@ -29,6 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consecutive spaces, a documented format property (exact-space loss
   accounting is future loss-policy work).
 
+### Added
+
+- **`corrigenda.core.units` — atomic hyphen groups (ADR-010, slice 1).**
+  `HyphenGroup` + `derive_hyphen_groups()` are THE single derivation of
+  "these lines travel together" (maximal hyphen components, members as
+  `LineRef`s in reading order, `spans_pages`/`explicit` flags),
+  cross-validated property-by-property against a new rich generated
+  corpus (chains PART1→BOTH→PART2, multi-page files, explicit
+  cross-page seam pairs). The chunk planner's window pinning now
+  consumes it; its local union-find is gone. Reconciliation/fallback
+  per group follows in the next slice.
+
 ### Changed
 
 - **Page images are keyed by page, not by file (breaking).**

@@ -21,6 +21,7 @@ import uuid
 
 from corrigenda.core.hyphenation import should_stay_in_same_chunk
 from corrigenda.core.pairing import forward_partner_id
+from corrigenda.core.units import derive_hyphen_groups
 from corrigenda.core.schemas import (
     ChunkGranularity,
     ChunkPlan,
@@ -113,40 +114,19 @@ def _assign_window_targets(
     target_win: dict[str, int] = {lid: idxs[-1] for lid, idxs in membership.items()}
 
     # Hyphen atomicity (audit P0): a chain of 3+ lines (PART1→BOTH→…→PART2)
-    # must be targeted in ONE window. The previous pairwise pin used
-    # last-write-wins, so on a 3-line chain the middle line got re-pinned
-    # by its forward partner AFTER its backward partner, splitting the pair
-    # across two chunks. Pin whole transitively-connected COMPONENTS
-    # instead (union-find over every hyphen link, the pattern _try_block
-    # already uses), assigning each component the LAST window common to
-    # ALL its members — order-independent by construction.
-    parent: dict[str, str] = {lid: lid for lid in membership}
+    # must be targeted in ONE window. The grouping is the SHARED unit
+    # derivation (ADR-010) — one definition of "these lines travel
+    # together" instead of a local union-find that could drift from the
+    # reconciler's view. Each group gets the LAST window common to ALL
+    # its members — order-independent by construction.
+    components = [
+        [ref.line_id for ref in group.members if ref.line_id in membership]
+        for group in derive_hyphen_groups(
+            lm for lm in line_by_id.values() if lm.line_id in membership
+        )
+    ]
 
-    def find(x: str) -> str:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a: str, b: str) -> None:
-        parent[find(a)] = find(b)
-
-    for lid in list(membership):
-        lm = line_by_id.get(lid)
-        if lm is None:
-            continue
-        for partner in (
-            getattr(lm, "hyphen_pair_line_id", None),
-            getattr(lm, "hyphen_forward_pair_id", None),
-        ):
-            if partner and partner in membership:
-                union(lid, partner)
-
-    components: dict[str, list[str]] = {}
-    for lid in membership:
-        components.setdefault(find(lid), []).append(lid)
-
-    for members in components.values():
+    for members in components:
         if len(members) < 2:
             continue
         # Intersection of every member's membership set = windows that
