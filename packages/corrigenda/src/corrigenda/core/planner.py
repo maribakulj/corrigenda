@@ -213,13 +213,20 @@ def _try_block(
         if ra != rb:
             parent[rb] = ra
 
-    for lm in page.lines:
-        partner_id = forward_partner_id(lm)
-        if partner_id:
-            pair = line_by_id.get(partner_id)
-            if pair and pair.block_id != lm.block_id:
-                if lm.block_id in parent and pair.block_id in parent:
-                    union(lm.block_id, pair.block_id)
+    # A hyphen unit spanning blocks forces those blocks into one chunk.
+    # The grouping is the SHARED unit derivation (ADR-010) — the same
+    # definition of "these lines travel together" that the window
+    # pinning and the reconciler consume — instead of a local per-link
+    # walk over the pointer fields.
+    for group in derive_hyphen_groups(page.lines):
+        member_blocks = [
+            line_by_id[ref.line_id].block_id
+            for ref in group.members
+            if ref.line_id in line_by_id
+        ]
+        linked = [bid for bid in member_blocks if bid in parent]
+        for a, b in zip(linked, linked[1:]):
+            union(a, b)
 
     # Collect groups in page order (use dict to deduplicate while preserving order)
     seen_roots: dict[str, None] = {}

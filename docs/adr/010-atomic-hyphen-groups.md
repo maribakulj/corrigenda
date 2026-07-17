@@ -46,8 +46,12 @@ disagreement.
   closure is handed to ``derive_hyphen_groups`` and each unit's joins
   reconcile with one walk in reading order, replacing the two
   role-keyed passes that re-derived the grouping from pointers.
-- **Slice 3**: the planner's block packing joins; `BOTH` becomes a
-  derived detail of group membership rather than a load-bearing state.
+- **Slice 3** (packing half landed): the planner's block packing merges
+  blocks through the derivation — a unit spanning blocks forces them
+  into one chunk; its per-link pointer walk is gone. Remaining: `BOTH`
+  becomes a derived detail of group membership rather than a
+  load-bearing state — best folded into the immutable-source refactor
+  (P3.4), which retires the pointer fields as storage of record.
 
 ### Design constraint discovered while scoping slice 2
 The LINE-granularity planner UNLINKS over-cap chains mid-run (it cuts a

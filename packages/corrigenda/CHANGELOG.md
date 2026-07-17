@@ -77,8 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   together" — and each unit's joins reconcile with one walk in reading
   order. This replaces the two role-keyed passes (PART1→partner, then
   BOTH→forward) that re-derived the grouping from pointer fields at
-  every step. Outcomes are unchanged; the reconciler now consumes the
-  same definition of the unit as the planner and the revert paths.
+  every step. The planner's block packing likewise merges blocks
+  through the derivation (its per-link pointer walk is gone). Outcomes
+  are unchanged; planner pinning, block packing, fallback closure,
+  duplicate reverts and reconciliation all consume the one derivation.
 
 - **The planner's over-cap chain cut is a recorded unit operation
   (ADR-010).** Severing the forward link of a chain longer than
