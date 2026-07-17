@@ -31,6 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An identity proposal can no longer be rejected as hyphen fusion.**
+  The Stage-A fusion detector flagged a PART1/BOTH line whenever its
+  last corrected word equalled the pair's logical word — even when the
+  SOURCE line already ended with that word (degenerate one-letter
+  fragments: 'A' + 'A' → word 'AA' on a line reading 'AA-'). A producer
+  proposing the source verbatim was rejected on every retry, the chunk
+  hard-failed, and the descent budget OCR-fell-back every cohabiting
+  line, with a blast radius that depended on the chunk partition — how
+  the chunking-invariance gate caught it. The check is now
+  source-relative, like every other drift check: it only fires when the
+  correction *introduced* the full word.
+
 - **A fallback now covers the whole hyphen unit, across pages
   (ADR-010).** A cross-page pair lives in two page-scoped chunks; when
   one side's chunk fell back while the other side's succeeded, the pair

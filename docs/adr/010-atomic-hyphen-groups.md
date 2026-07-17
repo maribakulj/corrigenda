@@ -57,13 +57,19 @@ pointer fields; only then can reverts become a group lookup. This is
 the same lesson as the rest of the plan: mutation of the record of
 truth is what forces every downstream pass to re-derive it.
 
-The metamorphic chunking-invariance gate reflects this constraint:
-the chains property is scoped to chain-safe partitions (line caps
-that fit the corpus's chains), because under a smaller cap the unlink
-legitimately changes the outcome — that over-cap boundary is pinned by
-its own test instead, asserting the degradation is conservative
-(source text kept verbatim) and atomic (one uniform state across the
-whole unit).
+Postscript on the invariance gate: scoping it to chain-safe
+partitions (the first remedy tried) was an over-correction. Every
+falsifying example the gate produced traced to a VALIDATOR false
+positive — the fusion check flagged identity proposals whenever the
+source's own last word already equalled the logical word (one-letter
+fragments: 'A'+'A' → word 'AA' on a line reading 'AA-') — and the
+hard chunk failure that followed made the fallback blast radius
+partition-visible. With the check made source-relative, the gate runs
+over-cap partitions too: the unlink only executes on failure-driven
+descent to LINE granularity, which the gate's deterministic producer
+can no longer trigger, and it stays pinned at planner level
+(``test_line_mode_cap_unlinks_the_cut_pair``). The design constraint
+above stands unchanged for slice 2.
 
 ## Consequences
 Atomicity claims become checkable against one definition. The pinning
