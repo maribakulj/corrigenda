@@ -41,7 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unit's members on other pages via the shared hyphen closure, and the
   reconcile/acceptance paths refuse to correct a member whose partner
   already fell back (`hyphen_partner_fell_back` /
-  `hyphen_unit_fallback` trace reasons).
+  `hyphen_unit_fallback` trace reasons). The duplicate-revert pass now
+  walks that same shared closure instead of its own inline worklist —
+  one traversal, one definition of the unit.
 
 ### Added
 

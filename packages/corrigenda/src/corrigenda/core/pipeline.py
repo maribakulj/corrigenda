@@ -2149,34 +2149,20 @@ class CorrectionPipeline:
         def _enroll(lm: LineManifest, reason: str) -> None:
             to_revert.setdefault(id(lm), (lm, reason))
 
+        seeds: list[LineManifest] = []
         for lid, reason in reverts.items():
             lm = line_by_id.get(lid)
             if lm is not None:
                 _enroll(lm, reason)
-        # Walk the partner extension to a FIXED POINT: enrolled partners
-        # are themselves iterated so whole 3+-line hyphen chains
-        # (PART1→BOTH→…→PART2) revert atomically. A one-hop pass would
-        # leave a chain neighbour two hops from any flagged line with its
-        # corrected text — the mixed OCR+corrected pair state that
-        # reconcile_hyphen_pair's contract and this docstring forbid.
-        worklist: list[LineManifest] = [
-            lm for lm in (line_by_id.get(lid) for lid in reverts) if lm is not None
-        ]
-        visited: set[int] = {id(lm) for lm in worklist}
-        while worklist:
-            lm = worklist.pop()
-            for is_forward in (False, True):
-                partner = _resolve_partner(
-                    lm,
-                    is_forward=is_forward,
-                    line_by_id=line_by_id,
-                    cross_page_partners=cross_page_partners,
-                )
-                if partner is not None:
-                    _enroll(partner, "adjacent_duplicate_pair_atomicity")
-                    if id(partner) not in visited:
-                        visited.add(id(partner))
-                        worklist.append(partner)
+                seeds.append(lm)
+        # Extend to the FIXED POINT of hyphen links (the shared
+        # _hyphen_closure): whole 3+-line chains revert atomically. A
+        # one-hop pass would leave a chain neighbour two hops from any
+        # flagged line with its corrected text — the mixed OCR+corrected
+        # pair state that reconcile_hyphen_pair's contract and this
+        # docstring forbid.
+        for lm in _hyphen_closure(seeds, line_by_id, cross_page_partners).values():
+            _enroll(lm, "adjacent_duplicate_pair_atomicity")
 
         for lm, reason in to_revert.values():
             lm.corrected_text = lm.ocr_text
