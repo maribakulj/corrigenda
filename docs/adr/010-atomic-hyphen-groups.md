@@ -32,10 +32,14 @@ disagreement.
 ## Staging
 - **Slice 1 (landed)**: the model + derivation; the planner's window
   pinning consumes it (its local union-find is gone).
-- **Slice 2**: reconciliation and fallback operate per group (one
-  reconcile call per unit, a fallback covers the whole unit); the
-  pipeline's transitive revert propagation collapses into "revert the
-  group".
+- **Slice 2** (fallback half LANDED): a fallback covers the whole unit
+  — the chunk-fallback and absorb paths extend to cross-page members
+  through the shared `_hyphen_closure`, and the reconcile/acceptance
+  paths refuse to correct a member whose partner already fell back
+  (this closed a REAL mixed-pair bug: one-sided chunk failure on a
+  cross-page pair left the joined word rewritten on one line and
+  verbatim on the other). Remaining: one reconcile call per unit; the
+  duplicate-revert pass consuming the same closure.
 - **Slice 3**: the planner's block packing joins; `BOTH` becomes a
   derived detail of group membership rather than a load-bearing state.
 

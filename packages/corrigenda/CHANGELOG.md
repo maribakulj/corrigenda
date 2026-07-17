@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consecutive spaces, a documented format property (exact-space loss
   accounting is future loss-policy work).
 
+### Fixed
+
+- **A fallback now covers the whole hyphen unit, across pages
+  (ADR-010).** A cross-page pair lives in two page-scoped chunks; when
+  one side's chunk fell back while the other side's succeeded, the pair
+  ended half OCR / half corrected — the joined word across the seam was
+  rewritten on one line and kept verbatim on the other, the exact state
+  `reconcile_hyphen_pair`'s contract forbids. Both directions are
+  closed: a chunk fallback (and the absorb branch) extends to the
+  unit's members on other pages via the shared hyphen closure, and the
+  reconcile/acceptance paths refuse to correct a member whose partner
+  already fell back (`hyphen_partner_fell_back` /
+  `hyphen_unit_fallback` trace reasons).
+
 ### Added
 
 - **`corrigenda.core.units` — atomic hyphen groups (ADR-010, slice 1).**
