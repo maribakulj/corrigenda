@@ -25,7 +25,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from corrigenda.core.identity import LineRef, line_ref
-from corrigenda.core.schemas import LineManifest
+from corrigenda.core.pairing import forward_partner_id
+from corrigenda.core.schemas import HyphenRole, HyphenSplit, LineManifest
 
 
 @dataclass(frozen=True)
@@ -132,8 +133,68 @@ def hyphen_group_by_line(
     return index
 
 
+def split_forward_link(tail: LineManifest, head: LineManifest) -> HyphenSplit:
+    """Sever the forward hyphen link ``tail`` → ``head`` — THE unit
+    SPLIT operation (ADR-010).
+
+    The LINE planner calls this when a chain exceeds
+    ``max_lines_per_request``: leaving the pair straddling two chunks
+    would break pair atomicity (the validator skips pairs that are not
+    fully in-chunk and the reconciler could write across the boundary),
+    so the cut pair degrades to two independent lines. Both sides keep
+    their OCR text verbatim, trailing dash included — the conservative
+    fallback. Only roles and link fields change:
+
+    * ``tail`` BOTH → PART2 (keeps its backward link), PART1 → NONE;
+    * ``head`` BOTH → PART1 (its own forward link/subs migrate into the
+      plain pair fields, where PART1 carries them), PART2 → NONE.
+
+    The pointer fields remain the storage of record until a later slice
+    makes groups authoritative; until then this function is the only
+    place that severs a link, and the returned record — carried on the
+    :class:`~corrigenda.core.schemas.ChunkPlan` — is how a consumer
+    learns the cut happened at all.
+    """
+    if forward_partner_id(tail) != head.line_id:
+        raise RuntimeError(
+            f"split_forward_link: {tail.line_id!r} does not continue onto "
+            f"{head.line_id!r} — refusing to sever a link that is not there "
+            "(engine bug)"
+        )
+    if tail.hyphen_role == HyphenRole.BOTH:
+        tail.hyphen_role = HyphenRole.PART2
+        tail.hyphen_forward_pair_id = None
+        tail.hyphen_forward_pair_page_id = None
+        tail.hyphen_forward_subs_content = None
+    else:  # PART1
+        tail.hyphen_role = HyphenRole.NONE
+        tail.hyphen_pair_line_id = None
+        tail.hyphen_pair_page_id = None
+        tail.hyphen_subs_content = None
+    if head.hyphen_role == HyphenRole.BOTH:
+        head.hyphen_role = HyphenRole.PART1
+        head.hyphen_pair_line_id = head.hyphen_forward_pair_id
+        head.hyphen_pair_page_id = head.hyphen_forward_pair_page_id
+        head.hyphen_subs_content = head.hyphen_forward_subs_content
+        head.hyphen_source_explicit = head.hyphen_forward_explicit
+        head.hyphen_forward_pair_id = None
+        head.hyphen_forward_pair_page_id = None
+        head.hyphen_forward_subs_content = None
+    else:  # PART2
+        head.hyphen_role = HyphenRole.NONE
+        head.hyphen_pair_line_id = None
+        head.hyphen_pair_page_id = None
+        head.hyphen_subs_content = None
+    return HyphenSplit(
+        page_id=tail.page_id,
+        tail_line_id=tail.line_id,
+        head_line_id=head.line_id,
+    )
+
+
 __all__ = [
     "HyphenGroup",
     "derive_hyphen_groups",
     "hyphen_group_by_line",
+    "split_forward_link",
 ]

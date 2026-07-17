@@ -39,8 +39,11 @@ disagreement.
   (this closed a REAL mixed-pair bug: one-sided chunk failure on a
   cross-page pair left the joined word rewritten on one line and
   verbatim on the other), and the duplicate-revert pass walks that same
-  closure instead of its own inline worklist. Remaining: one reconcile
-  call per unit.
+  closure instead of its own inline worklist. The planner's over-cap
+  cut now goes through the unit SPLIT operation
+  (``units.split_forward_link``), recorded as ``HyphenSplit`` entries
+  on the ``ChunkPlan`` — the only writer that severs a link. Remaining:
+  one reconcile call per unit.
 - **Slice 3**: the planner's block packing joins; `BOTH` becomes a
   derived detail of group membership rather than a load-bearing state.
 
