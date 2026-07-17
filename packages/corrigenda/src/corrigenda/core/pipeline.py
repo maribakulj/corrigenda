@@ -441,6 +441,36 @@ def _resolve_partner(
     return cross_page_partners.get(LineRef(page_id=partner_page, line_id=partner_id))
 
 
+def _hyphen_closure(
+    seeds: list[LineManifest],
+    line_by_id: dict[str, LineManifest],
+    cross_page_partners: dict[LineRef, LineManifest] | None,
+) -> dict[int, LineManifest]:
+    """Fixed-point closure of hyphen links over the CURRENT pointers.
+
+    The one traversal behind every "atomically with its partners"
+    operation (duplicate reverts, unit fallback): seeds plus every line
+    transitively reachable through pair/forward links, resolved via
+    ``_resolve_partner`` so cross-page members are reached too. Keyed by
+    object identity — bare line_ids legitimately repeat across files.
+    """
+    closure: dict[int, LineManifest] = {id(lm): lm for lm in seeds}
+    worklist = list(seeds)
+    while worklist:
+        lm = worklist.pop()
+        for is_forward in (False, True):
+            partner = _resolve_partner(
+                lm,
+                is_forward=is_forward,
+                line_by_id=line_by_id,
+                cross_page_partners=cross_page_partners,
+            )
+            if partner is not None and id(partner) not in closure:
+                closure[id(partner)] = partner
+                worklist.append(partner)
+    return closure
+
+
 def _reconcile_one_pair(
     lm: LineManifest,
     part2: LineManifest,
@@ -456,6 +486,16 @@ def _reconcile_one_pair(
     ``"neutralised"``. The pipeline aggregates these into the per-job
     ReconcileMetrics surfaced on the reconcile_stats observability event.
     """
+    # ADR-010 (unit fallback atomicity): a member whose partner already
+    # fell back to OCR may not be corrected alone — the joined word would
+    # be rewritten on one line and kept verbatim on the other. The whole
+    # pair stays at source text; "fallback" is the classified outcome.
+    if lm.status is LineStatus.FALLBACK or part2.status is LineStatus.FALLBACK:
+        for member in (lm, part2):
+            member.corrected_text = member.ocr_text
+            member.status = LineStatus.FALLBACK
+        return "fallback"
+
     corrected_p2 = text_by_id.get(part2.line_id, part2.ocr_text)
 
     if is_forward:
@@ -1263,6 +1303,13 @@ class CorrectionPipeline:
                     and line_by_id[lid].status is LineStatus.PENDING
                 ]
                 if undecided:
+                    # ADR-010 — the absorbed chunk's unit members on OTHER
+                    # pages (already corrected or not yet processed) fall
+                    # back too: a mixed pair may not survive the absorb.
+                    closure = _hyphen_closure(
+                        undecided, line_by_id, cross_page_partners
+                    )
+                    undecided = list(closure.values())
                     reason = sanitize_error(str(exc))[:120]
                     for lm in undecided:
                         lm.corrected_text = lm.ocr_text
@@ -1478,6 +1525,8 @@ class CorrectionPipeline:
                         chunk_lines=sub_lines,
                         traces=traces,
                         sanitised_msg=last_msg or "per_chunk_budget exhausted",
+                        line_by_id=line_by_id,
+                        cross_page_partners=cross_page_partners,
                     )
                     ctx.fallback_chunks += 1
                     continue
@@ -1499,6 +1548,8 @@ class CorrectionPipeline:
             chunk_lines=chunk_lines,
             traces=traces,
             sanitised_msg=last_msg or "all_attempts_exhausted",
+            line_by_id=line_by_id,
+            cross_page_partners=cross_page_partners,
         )
         ctx.fallback_chunks += 1
         return 0
@@ -1545,6 +1596,7 @@ class CorrectionPipeline:
             text_by_id=text_by_id,
             all_lines_by_id=line_by_id,
             traces=traces,
+            cross_page_partners=cross_page_partners,
         )
         self._finalize_chunk_traces(
             ctx=ctx,
@@ -1576,6 +1628,8 @@ class CorrectionPipeline:
         chunk_lines: list[LineManifest],
         traces: dict[LineRef, LineTrace] | None,
         sanitised_msg: str,
+        line_by_id: dict[str, LineManifest] | None = None,
+        cross_page_partners: dict[LineRef, LineManifest] | None = None,
     ) -> None:
         """Revert the chunk's TARGET lines to their OCR text and emit a
         ``warning`` event. Mutates ``corrected_text`` / ``status`` /
@@ -1584,6 +1638,13 @@ class CorrectionPipeline:
 
         F8 — only target lines are reverted; context lines are owned by an
         adjacent chunk and must not be forced to OCR here.
+
+        ADR-010 (unit fallback atomicity): a fallback covers the WHOLE
+        hyphen unit. Intra-page partners of a target are co-targets by
+        planner atomicity, so the closure only ever ADDS cross-page
+        members — the partner on the other page whose chunk succeeded
+        (or has not run yet) is pulled to OCR too, instead of leaving
+        the joined word rewritten on one line and verbatim on the other.
 
         The pipeline-level ``_fallback_chunks`` is bumped by the caller,
         mirroring how ``_retry_count`` is incremented at the retry
@@ -1598,9 +1659,8 @@ class CorrectionPipeline:
             },
         )
         target_ids = set(chunk.targets())
-        for lm in chunk_lines:
-            if lm.line_id not in target_ids:
-                continue
+        targets = [lm for lm in chunk_lines if lm.line_id in target_ids]
+        for lm in targets:
             lm.corrected_text = lm.ocr_text
             lm.status = LineStatus.FALLBACK
             _set_trace(
@@ -1610,6 +1670,24 @@ class CorrectionPipeline:
                 validation_status="fallback",
                 fallback_reason=f"all_attempts_exhausted: {sanitised_msg[:120]}",
             )
+        closure = _hyphen_closure(
+            targets, line_by_id if line_by_id is not None else {}, cross_page_partners
+        )
+        for lm in closure.values():
+            if lm.line_id in target_ids:
+                continue
+            lm.corrected_text = lm.ocr_text
+            lm.status = LineStatus.FALLBACK
+            _set_trace(
+                traces,
+                lm,
+                projected_text=lm.ocr_text,
+                validation_status="fallback",
+            )
+            if traces is not None:
+                trace = traces.get(line_ref(lm))
+                if trace is not None and not trace.fallback_reason:
+                    trace.fallback_reason = "hyphen_unit_fallback"
 
     async def _attempt_chunk(
         self,
@@ -1965,6 +2043,7 @@ class CorrectionPipeline:
         text_by_id: dict[str, str],
         all_lines_by_id: dict[str, LineManifest],
         traces: dict[LineRef, LineTrace] | None,
+        cross_page_partners: dict[LineRef, LineManifest] | None = None,
     ) -> None:
         """Apply the per-line acceptance policy on lines not already
         reconciled as hyphen pairs.
@@ -1991,6 +2070,29 @@ class CorrectionPipeline:
                 lm.corrected_text = lm.ocr_text
                 lm.status = LineStatus.FALLBACK
                 _set_trace(traces, lm, fallback_reason="orphan_hyphen_completed")
+                continue
+
+            # ADR-010 (unit fallback atomicity): a hyphen member whose
+            # partner already fell back (its chunk was rejected — the
+            # cross-page case: this side reaches acceptance because the
+            # partner sits in no reconcile pass of THIS chunk) keeps its
+            # source text too.
+            fallen_partner = any(
+                partner is not None and partner.status is LineStatus.FALLBACK
+                for partner in (
+                    _resolve_partner(
+                        lm,
+                        is_forward=is_forward,
+                        line_by_id=all_lines_by_id,
+                        cross_page_partners=cross_page_partners,
+                    )
+                    for is_forward in (False, True)
+                )
+            )
+            if fallen_partner:
+                lm.corrected_text = lm.ocr_text
+                lm.status = LineStatus.FALLBACK
+                _set_trace(traces, lm, fallback_reason="hyphen_partner_fell_back")
                 continue
 
             prev_ocr = (
