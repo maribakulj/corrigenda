@@ -71,6 +71,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Hyphen reconciliation is unit-driven (ADR-010, slice 2 complete).**
+  A chunk's target lines and their resolved partners are handed to
+  `derive_hyphen_groups` — the single derivation of "these lines travel
+  together" — and each unit's joins reconcile with one walk in reading
+  order. This replaces the two role-keyed passes (PART1→partner, then
+  BOTH→forward) that re-derived the grouping from pointer fields at
+  every step. Outcomes are unchanged; the reconciler now consumes the
+  same definition of the unit as the planner and the revert paths.
+
 - **The planner's over-cap chain cut is a recorded unit operation
   (ADR-010).** Severing the forward link of a chain longer than
   `max_lines_per_request` now goes through

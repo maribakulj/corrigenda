@@ -32,18 +32,20 @@ disagreement.
 ## Staging
 - **Slice 1 (landed)**: the model + derivation; the planner's window
   pinning consumes it (its local union-find is gone).
-- **Slice 2** (fallback half LANDED): a fallback covers the whole unit
-  — the chunk-fallback and absorb paths extend to cross-page members
-  through the shared `_hyphen_closure`, and the reconcile/acceptance
-  paths refuse to correct a member whose partner already fell back
-  (this closed a REAL mixed-pair bug: one-sided chunk failure on a
-  cross-page pair left the joined word rewritten on one line and
-  verbatim on the other), and the duplicate-revert pass walks that same
-  closure instead of its own inline worklist. The planner's over-cap
-  cut now goes through the unit SPLIT operation
-  (``units.split_forward_link``), recorded as ``HyphenSplit`` entries
-  on the ``ChunkPlan`` — the only writer that severs a link. Remaining:
-  one reconcile call per unit.
+- **Slice 2 (landed)**: a fallback covers the whole unit — the
+  chunk-fallback and absorb paths extend to cross-page members through
+  the shared `_hyphen_closure`, and the reconcile/acceptance paths
+  refuse to correct a member whose partner already fell back (this
+  closed a REAL mixed-pair bug: one-sided chunk failure on a cross-page
+  pair left the joined word rewritten on one line and verbatim on the
+  other), and the duplicate-revert pass walks that same closure instead
+  of its own inline worklist. The planner's over-cap cut goes through
+  the unit SPLIT operation (``units.split_forward_link``), recorded as
+  ``HyphenSplit`` entries on the ``ChunkPlan`` — the only writer that
+  severs a link. Reconciliation is unit-driven: the chunk's join
+  closure is handed to ``derive_hyphen_groups`` and each unit's joins
+  reconcile with one walk in reading order, replacing the two
+  role-keyed passes that re-derived the grouping from pointers.
 - **Slice 3**: the planner's block packing joins; `BOTH` becomes a
   derived detail of group membership rather than a load-bearing state.
 

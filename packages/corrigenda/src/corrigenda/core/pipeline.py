@@ -58,6 +58,7 @@ from corrigenda.errors import (
     ProjectionError,
 )
 from corrigenda.core.planner import downgrade_granularity, plan_page
+from corrigenda.core.units import derive_hyphen_groups
 from corrigenda.core.guards import check_adjacent_duplicates, check_line
 from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
 from corrigenda.core.protocols import (
@@ -1963,76 +1964,80 @@ class CorrectionPipeline:
         line_by_id: dict[str, LineManifest],
         cross_page_partners: dict[LineRef, LineManifest] | None,
     ) -> int:
-        """Two-pass hyphen reconciliation: PART1→partner, then BOTH→forward.
+        """Unit-driven hyphen reconciliation (ADR-010).
 
-        Returns the number of pairs successfully reconciled. Emits a
+        The chunk's target lines and their resolved partners are handed
+        to THE derivation (:func:`derive_hyphen_groups`), and each unit's
+        joins are then reconciled with one walk in reading order —
+        replacing the historical two role-keyed passes (PART1→partner,
+        then BOTH→forward) that re-derived the grouping from pointer
+        fields at every step. A join is owned by its TAIL: it reconciles
+        here iff the tail is one of this chunk's targets (the partner may
+        be a context line, another chunk's line, or a cross-page member),
+        so the derived groups are the unit AS THIS CHUNK SEES IT — a
+        member two hops away contributes nothing and is simply absent.
+
+        Returns the number of joins successfully reconciled. Emits a
         ``hyphen_partner_missing`` event for each unresolvable partner
         (likely cross-page) so observers can surface the diagnostic.
         """
+        # 1. Resolve every target's outgoing join through the same scope
+        #    as ever: page-wide ids, then cross-page partners.
+        joins: dict[LineRef, tuple[LineManifest, LineManifest, bool]] = {}
+        pool: dict[LineRef, LineManifest] = {line_ref(lm): lm for lm in chunk_lines}
+        for lm in chunk_lines:
+            if lm.hyphen_role == HyphenRole.PART1 and lm.hyphen_pair_line_id:
+                is_forward = False
+                partner_id = lm.hyphen_pair_line_id
+            elif lm.hyphen_role == HyphenRole.BOTH and lm.hyphen_forward_pair_id:
+                is_forward = True
+                partner_id = lm.hyphen_forward_pair_id
+            else:
+                continue
+            partner = _resolve_partner(
+                lm,
+                is_forward=is_forward,
+                line_by_id=line_by_id,
+                cross_page_partners=cross_page_partners,
+            )
+            if partner is None:
+                self.observer.on_event(
+                    PipelineEventType.HYPHEN_PARTNER_MISSING,
+                    {
+                        "chunk_id": chunk_id,
+                        "line_id": lm.line_id,
+                        "missing_partner_id": partner_id,
+                        "direction": "forward" if is_forward else "backward",
+                    },
+                )
+                continue
+            pool[line_ref(partner)] = partner
+            joins[line_ref(lm)] = (lm, partner, is_forward)
+
+        # 2. One walk per unit, members in reading order. Every join's
+        #    tail and partner are both in the pool, so the derivation
+        #    groups them and the walk visits every join exactly once.
         reconciled_count = 0
-        processed_part2: set[tuple[str, str]] = set()
-
-        # Pass 1: PART1 → partner (partner may be PART2 or BOTH)
-        for lm in chunk_lines:
-            if lm.hyphen_role != HyphenRole.PART1 or not lm.hyphen_pair_line_id:
-                continue
-            part2 = _resolve_partner(
-                lm,
-                is_forward=False,
-                line_by_id=line_by_id,
-                cross_page_partners=cross_page_partners,
-            )
-            if part2 is None:
-                self.observer.on_event(
-                    PipelineEventType.HYPHEN_PARTNER_MISSING,
-                    {
-                        "chunk_id": chunk_id,
-                        "line_id": lm.line_id,
-                        "missing_partner_id": lm.hyphen_pair_line_id,
-                        "direction": "backward",
-                    },
+        written_heads: set[LineRef] = set()
+        for group in derive_hyphen_groups(pool.values()):
+            for member in group.members:
+                join = joins.get(member)
+                if join is None:
+                    continue
+                tail, head, is_forward = join
+                head_ref = line_ref(head)
+                if head_ref in written_heads:
+                    continue  # two tails claiming one head — corrupt link
+                outcome = _reconcile_one_pair(
+                    tail,
+                    head,
+                    text_by_id,
+                    is_forward=is_forward,
+                    config=self.guard_config,
                 )
-                continue
-            part2_key = (part2.page_id, part2.line_id)
-            if part2_key in processed_part2:
-                continue
-            outcome = _reconcile_one_pair(
-                lm, part2, text_by_id, is_forward=False, config=self.guard_config
-            )
-            self._record_reconcile_outcome(ctx, outcome)
-            processed_part2.add(part2_key)
-            reconciled_count += 1
-
-        # Pass 2: BOTH → forward partner
-        for lm in chunk_lines:
-            if lm.hyphen_role != HyphenRole.BOTH or not lm.hyphen_forward_pair_id:
-                continue
-            part2 = _resolve_partner(
-                lm,
-                is_forward=True,
-                line_by_id=line_by_id,
-                cross_page_partners=cross_page_partners,
-            )
-            if part2 is None:
-                self.observer.on_event(
-                    PipelineEventType.HYPHEN_PARTNER_MISSING,
-                    {
-                        "chunk_id": chunk_id,
-                        "line_id": lm.line_id,
-                        "missing_partner_id": lm.hyphen_forward_pair_id,
-                        "direction": "forward",
-                    },
-                )
-                continue
-            part2_key = (part2.page_id, part2.line_id)
-            if part2_key in processed_part2:
-                continue
-            outcome = _reconcile_one_pair(
-                lm, part2, text_by_id, is_forward=True, config=self.guard_config
-            )
-            self._record_reconcile_outcome(ctx, outcome)
-            processed_part2.add(part2_key)
-            reconciled_count += 1
+                self._record_reconcile_outcome(ctx, outcome)
+                written_heads.add(head_ref)
+                reconciled_count += 1
 
         return reconciled_count
 
