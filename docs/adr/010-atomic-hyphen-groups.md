@@ -39,6 +39,19 @@ disagreement.
 - **Slice 3**: the planner's block packing joins; `BOTH` becomes a
   derived detail of group membership rather than a load-bearing state.
 
+### Design constraint discovered while scoping slice 2
+The LINE-granularity planner UNLINKS over-cap chains mid-run (it cuts a
+chain longer than `max_lines_per_request` and rewrites the members'
+pointer fields — `_try_line`). Consequently a group set derived once at
+run start goes stale, and the revert pass's fixed-point worklist —
+which follows the CURRENT pointers — is not a naive duplicate of the
+derivation but the semantically correct traversal under mutation.
+Slice 2 therefore starts by making the cut a UNIT operation (a group
+SPLIT recorded in the unit model) instead of a planner side effect on
+pointer fields; only then can reverts become a group lookup. This is
+the same lesson as the rest of the plan: mutation of the record of
+truth is what forces every downstream pass to re-derive it.
+
 ## Consequences
 Atomicity claims become checkable against one definition. The pinning
 logic in the planner is shorter and provably order-independent. Until
