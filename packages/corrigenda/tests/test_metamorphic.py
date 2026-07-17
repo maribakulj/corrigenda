@@ -289,6 +289,24 @@ def test_parser_recognises_every_generated_structure(
         path.unlink(missing_ok=True)
 
 
+# Chain-safe partitions: every cap ≥ 3, so a PART1→BOTH→PART2 chain fits
+# one window in every partition. The 2-line-cap partition is EXCLUDED on
+# purpose: a chain longer than any window takes the planner's DOCUMENTED
+# over-cap degradation (cut + unlink + conservative source-text outcome),
+# which is partition-dependent by design — pinned separately below, not
+# smuggled into the invariance claim.
+_CHAIN_SAFE_PARTITIONS: dict[str, ChunkPlannerConfig | None] = {
+    "default": None,
+    "small-window": _PARTITIONS["small-window"],
+    "window-4": ChunkPlannerConfig(
+        max_input_chars_per_request=200,
+        max_lines_per_request=4,
+        line_window_size=4,
+        line_window_overlap=2,
+    ),
+}
+
+
 @settings(max_examples=25, deadline=None)
 @given(doc_and_roles=rich_alto_documents())
 def test_final_text_invariant_under_chunking_with_chains(
@@ -296,13 +314,15 @@ def test_final_text_invariant_under_chunking_with_chains(
 ) -> None:
     """THE P3.2 gate: chunking invariance where the reconciler actually
     works — chains, cross-page pairs, corrections landing ON hyphen
-    lines (the rules substitute in every line, fragments included)."""
+    lines (the rules substitute in every line, fragments included).
+    Partitions are chain-safe (caps ≥ 3): the over-cap cut is a
+    documented, partition-dependent degradation pinned separately."""
     doc, _ = doc_and_roles
     path = _write_tmp(doc)
     try:
         results = {
             name: _outcomes(asyncio.run(_run_partition(path, config)))
-            for name, config in _PARTITIONS.items()
+            for name, config in _CHAIN_SAFE_PARTITIONS.items()
         }
         baseline = results["default"]
         assert all(
@@ -348,3 +368,54 @@ def test_identity_producer_preserves_rich_docs(
         assert _textline_geometry(out) == _textline_geometry(src)
     finally:
         path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Over-cap chains — the documented degradation, pinned as what it is
+# ---------------------------------------------------------------------------
+
+_OVER_CAP_CHAIN = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<alto xmlns="http://www.loc.gov/standards/alto/ns-v3#"><Layout>'
+    '<Page ID="P1" WIDTH="1000" HEIGHT="1000">'
+    '<PrintSpace HPOS="0" VPOS="0" WIDTH="1000" HEIGHT="900">'
+    '<TextBlock ID="B1" HPOS="0" VPOS="0" WIDTH="1000" HEIGHT="900">'
+    '<TextLine ID="L0" HPOS="10" VPOS="10" WIDTH="900" HEIGHT="20">'
+    '<String ID="S0" CONTENT="A" HPOS="10" VPOS="10" WIDTH="80" HEIGHT="20" '
+    'SUBS_TYPE="HypPart1" SUBS_CONTENT="AA"/><HYP CONTENT="-"/></TextLine>'
+    '<TextLine ID="L1" HPOS="10" VPOS="40" WIDTH="900" HEIGHT="20">'
+    '<String ID="S1" CONTENT="A" HPOS="10" VPOS="40" WIDTH="80" HEIGHT="20" '
+    'SUBS_TYPE="HypPart2" SUBS_CONTENT="AA"/>'
+    '<String ID="S2" CONTENT="A" HPOS="100" VPOS="40" WIDTH="80" HEIGHT="20" '
+    'SUBS_TYPE="HypPart1" SUBS_CONTENT="AA"/><HYP CONTENT="-"/></TextLine>'
+    '<TextLine ID="L2" HPOS="10" VPOS="70" WIDTH="900" HEIGHT="20">'
+    '<String ID="S3" CONTENT="A" HPOS="10" VPOS="70" WIDTH="60" HEIGHT="20" '
+    'SUBS_TYPE="HypPart2" SUBS_CONTENT="AA"/></TextLine>'
+    "</TextBlock></PrintSpace></Page></Layout></alto>"
+)
+
+
+@pytest.mark.asyncio
+async def test_over_cap_chain_degrades_conservatively_and_atomically(
+    tmp_path: Path,
+) -> None:
+    """A 3-line chain under a 2-line window cap takes the planner's
+    documented over-cap path (cut + unlink). The pinned contract is NOT
+    partition-invariance — the cut is partition-dependent by design —
+    but the two things that must survive it: the outcome is
+    CONSERVATIVE (source text, never invented words) and ATOMIC (the
+    whole former unit lands in one uniform state, never a mixed pair).
+    Found by the invariance property; kept as its documented boundary."""
+    path = tmp_path / "overcap.xml"
+    path.write_text(_OVER_CAP_CHAIN, encoding="utf-8")
+    doc = await _run_partition(path, _PARTITIONS["tiny-window"])
+    lines = {lm.line_id: lm for page in doc.pages for lm in page.lines}
+    texts = {lid: lm.corrected_text for lid, lm in lines.items()}
+    assert texts == {"L0": "A-", "L1": "AA-", "L2": "A"}, (
+        "over-cap degradation must keep the SOURCE text verbatim"
+    )
+    statuses = {lm.status for lm in lines.values()}
+    assert len(statuses) == 1, (
+        f"the former unit must land in ONE uniform state, got: "
+        f"{ {lid: lm.status.value for lid, lm in lines.items()} }"
+    )

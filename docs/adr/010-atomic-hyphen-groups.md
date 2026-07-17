@@ -38,8 +38,9 @@ disagreement.
   paths refuse to correct a member whose partner already fell back
   (this closed a REAL mixed-pair bug: one-sided chunk failure on a
   cross-page pair left the joined word rewritten on one line and
-  verbatim on the other). Remaining: one reconcile call per unit; the
-  duplicate-revert pass consuming the same closure.
+  verbatim on the other), and the duplicate-revert pass walks that same
+  closure instead of its own inline worklist. Remaining: one reconcile
+  call per unit.
 - **Slice 3**: the planner's block packing joins; `BOTH` becomes a
   derived detail of group membership rather than a load-bearing state.
 
@@ -55,6 +56,14 @@ SPLIT recorded in the unit model) instead of a planner side effect on
 pointer fields; only then can reverts become a group lookup. This is
 the same lesson as the rest of the plan: mutation of the record of
 truth is what forces every downstream pass to re-derive it.
+
+The metamorphic chunking-invariance gate reflects this constraint:
+the chains property is scoped to chain-safe partitions (line caps
+that fit the corpus's chains), because under a smaller cap the unlink
+legitimately changes the outcome — that over-cap boundary is pinned by
+its own test instead, asserting the degradation is conservative
+(source text kept verbatim) and atomic (one uniform state across the
+whole unit).
 
 ## Consequences
 Atomicity claims become checkable against one definition. The pinning
