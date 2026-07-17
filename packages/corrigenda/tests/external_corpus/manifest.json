@@ -24,7 +24,10 @@
     {
       "ark": "bpt6k2324031",
       "label": "Le Temps, 1er janvier 1890 (quotidien multi-colonnes)",
-      "pages": [1, 2]
+      "pages": [1, 2],
+      "sha256": {
+        "2": "a160be6df2b99ed276d99d84ab27ad6c58b67c66b084d4d7c8b1ee3f9385c60a"
+      }
     }
   ]
 }
