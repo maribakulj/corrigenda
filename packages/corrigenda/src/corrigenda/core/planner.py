@@ -21,13 +21,14 @@ import uuid
 
 from corrigenda.core.hyphenation import should_stay_in_same_chunk
 from corrigenda.core.pairing import forward_partner_id
-from corrigenda.core.units import derive_hyphen_groups
+from corrigenda.core.units import derive_hyphen_groups, split_forward_link
 from corrigenda.core.schemas import (
     ChunkGranularity,
     ChunkPlan,
     ChunkPlannerConfig,
     ChunkRequest,
     HyphenRole,
+    HyphenSplit,
     LineManifest,
     PageManifest,
 )
@@ -374,6 +375,7 @@ def _plan_line(
 ) -> ChunkPlan:
     lines = page.lines
     chunks: list[ChunkRequest] = []
+    splits: list[HyphenSplit] = []
     i = 0
     while i < len(lines):
         lm = lines[i]
@@ -401,42 +403,17 @@ def _plan_line(
         # BETWEEN a forward line and its partner, the two halves would sit
         # in different chunks as a still-linked pair — the validator skips
         # such pairs (both members must be in-chunk) and the reconciler
-        # could write across the boundary. UNLINK the cut pair explicitly:
-        # both sides degrade to independent lines (their OCR text,
-        # including the trailing dash, is preserved verbatim — the
-        # conservative fallback), so every remaining pair is fully
-        # contained in one chunk and atomicity stays true by construction.
+        # could write across the boundary. Sever the cut pair explicitly
+        # through the unit SPLIT operation (ADR-010): both sides degrade
+        # to independent lines with their OCR text preserved verbatim, so
+        # every remaining pair is fully contained in one chunk and
+        # atomicity stays true by construction. The record rides on the
+        # plan — the cut is a unit operation, not a silent side effect.
         if len(chain_ids) >= config.max_lines_per_request and j + 1 < len(lines):
             tail = lines[j]
             head = lines[j + 1]
             if forward_partner_id(tail) == head.line_id:
-                if tail.hyphen_role == HyphenRole.BOTH:
-                    tail.hyphen_role = HyphenRole.PART2  # keeps backward link
-                    tail.hyphen_forward_pair_id = None
-                    tail.hyphen_forward_pair_page_id = None
-                    tail.hyphen_forward_subs_content = None
-                else:  # PART1
-                    tail.hyphen_role = HyphenRole.NONE
-                    tail.hyphen_pair_line_id = None
-                    tail.hyphen_pair_page_id = None
-                    tail.hyphen_subs_content = None
-                if head.hyphen_role == HyphenRole.BOTH:
-                    # Keeps its own forward pair; loses the backward link.
-                    # PART1 carries its forward link/subs in the plain pair
-                    # fields, so migrate them from the BOTH forward fields.
-                    head.hyphen_role = HyphenRole.PART1
-                    head.hyphen_pair_line_id = head.hyphen_forward_pair_id
-                    head.hyphen_pair_page_id = head.hyphen_forward_pair_page_id
-                    head.hyphen_subs_content = head.hyphen_forward_subs_content
-                    head.hyphen_source_explicit = head.hyphen_forward_explicit
-                    head.hyphen_forward_pair_id = None
-                    head.hyphen_forward_pair_page_id = None
-                    head.hyphen_forward_subs_content = None
-                else:  # PART2
-                    head.hyphen_role = HyphenRole.NONE
-                    head.hyphen_pair_line_id = None
-                    head.hyphen_pair_page_id = None
-                    head.hyphen_subs_content = None
+                splits.append(split_forward_link(tail, head))
 
         chunks.append(
             _make_chunk(
@@ -452,6 +429,7 @@ def _plan_line(
         page_id=page.page_id,
         chunks=chunks,
         granularity=ChunkGranularity.LINE,
+        hyphen_splits=splits,
     )
 
 

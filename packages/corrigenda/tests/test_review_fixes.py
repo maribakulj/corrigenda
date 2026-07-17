@@ -87,6 +87,32 @@ def test_line_mode_cap_unlinks_the_cut_pair():
                 )
 
 
+def test_line_mode_cap_records_the_split_on_the_plan():
+    """The over-cap cut is a recorded unit operation (ADR-010), not a
+    silent pointer side effect: every severed link rides on the plan,
+    and each recorded pair really is unlinked afterwards."""
+    lines = [_line(i, f"mot{i}-") for i in range(12)]
+    _chain(lines)
+    cfg = ChunkPlannerConfig(
+        max_input_chars_per_request=10_000,
+        max_lines_per_request=5,
+        line_window_size=3,
+        line_window_overlap=1,
+    )
+    plan = plan_page(_page(lines), "d1", cfg, force_granularity=ChunkGranularity.LINE)
+    # 12-line chain under a 5-line cap → chunks of 5+5+2, two cuts.
+    assert [(s.tail_line_id, s.head_line_id) for s in plan.hyphen_splits] == [
+        ("l4", "l5"),
+        ("l9", "l10"),
+    ]
+    assert all(s.page_id == "p1" for s in plan.hyphen_splits)
+    by_id = {lm.line_id: lm for lm in lines}
+    for s in plan.hyphen_splits:
+        tail, head = by_id[s.tail_line_id], by_id[s.head_line_id]
+        assert tail.hyphen_forward_pair_id is None
+        assert head.hyphen_pair_line_id != s.tail_line_id
+
+
 # ---------------------------------------------------------------------------
 # ALTO parser — IDNEXT robustness + margins
 # ---------------------------------------------------------------------------

@@ -71,6 +71,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The planner's over-cap chain cut is a recorded unit operation
+  (ADR-010).** Severing the forward link of a chain longer than
+  `max_lines_per_request` now goes through
+  `corrigenda.core.units.split_forward_link` — the single writer for
+  link removal — and each cut is recorded as a `HyphenSplit` on the
+  `ChunkPlan` instead of happening as a silent pointer side effect
+  inside the planner. Behaviour is unchanged; the cut is now visible
+  to consumers of the plan.
+
 - **Page images are keyed by page, not by file (breaking).**
   `run(source_images={source_name: ref})` gave every page of a multipage
   XML the SAME image — the vision producer looked at page 1's scan for

@@ -642,10 +642,32 @@ class ChunkRequest(BaseModel):
         return self
 
 
+class HyphenSplit(BaseModel):
+    """Record of a severed forward hyphen link (ADR-010 unit SPLIT).
+
+    Emitted by :func:`corrigenda.core.units.split_forward_link` when the
+    LINE planner cuts a chain longer than ``max_lines_per_request``, and
+    carried on the :class:`ChunkPlan` so the cut is a recorded unit
+    operation rather than a silent pointer side effect. Line ids are
+    bare on purpose: the chain walk is page-scoped, so a split never
+    crosses a page, and ``page_id`` qualifies both (ADR-009).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    page_id: str
+    tail_line_id: str
+    head_line_id: str
+
+
 class ChunkPlan(BaseModel):
     page_id: str
     chunks: list[ChunkRequest]
     granularity: ChunkGranularity
+    #: ADR-010 — the forward links the LINE planner severed so that no
+    #: still-linked pair spans two chunks (over-cap chains). Empty at
+    #: every other granularity.
+    hyphen_splits: list[HyphenSplit] = Field(default_factory=list)
 
 
 # ``Provider``, ``JobStatus`` and ``JobManifest`` (with its ``images`` map)
