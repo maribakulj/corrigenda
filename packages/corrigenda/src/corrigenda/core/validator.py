@@ -242,12 +242,22 @@ def _validate_hyphen_integrity(
         if not part1_words:
             continue
         part1_last_word = part1_words[-1]
-        if ncfold(part1_last_word) == ncfold(subs_content):
-            raise HyphenIntegrityError(
-                f"hyphen_integrity_violation: PART1 line {part1_id!r} "
-                f"contains full logical word {subs_content!r} "
-                f"(fusion detected)"
-            )
+        if ncfold(part1_last_word) != ncfold(subs_content):
+            continue
+        # Fusion is a DRIFT check, not a pattern check: when the SOURCE
+        # line's own last word already equals the logical word
+        # (degenerate one-letter fragments — 'A' + 'A' → word 'AA' on a
+        # line reading 'AA-'), the word's presence carries no fusion
+        # signal, and an identity proposal would be re-rejected on every
+        # retry until the whole chunk hard-fails.
+        ocr_words = ocr_texts.get(part1_id, "").rstrip().rstrip("-").split()
+        if ocr_words and ncfold(ocr_words[-1]) == ncfold(subs_content):
+            continue
+        raise HyphenIntegrityError(
+            f"hyphen_integrity_violation: PART1 line {part1_id!r} "
+            f"contains full logical word {subs_content!r} "
+            f"(fusion detected)"
+        )
 
 
 def _check_pair_drift(

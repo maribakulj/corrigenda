@@ -264,6 +264,58 @@ def test_hyphen_fusion_detected_when_corrected_is_nfd():
 
 
 # ---------------------------------------------------------------------------
+# Fusion is a DRIFT check — the source text is the reference
+# ---------------------------------------------------------------------------
+
+
+def test_fusion_not_flagged_when_source_already_ends_with_the_word():
+    """An identity proposal must never be rejected as fusion.
+
+    Degenerate one-letter fragments make it real: a BOTH line carrying
+    'A' (PART2 of the previous pair) + 'A' (PART1 of the next, logical
+    word 'AA') reads 'AA-' in the SOURCE — its last word already equals
+    the full logical word before the LLM says anything. Flagging that is
+    a false positive with a hard-fail blast radius: the chunk retries
+    deterministically, exhausts its budget and OCR-fallbacks every
+    cohabiting line, which the chunking-invariance gate exposed as a
+    partition-dependent outcome."""
+    raw = {
+        "lines": [
+            {"line_id": "L1", "corrected_text": "AA-"},
+            {"line_id": "L2", "corrected_text": "A"},
+        ]
+    }
+    resp = validate_llm_response(
+        raw,
+        ["L1", "L2"],
+        hyphen_pairs={"L1": "L2", "L2": "L1"},
+        ocr_texts={"L1": "AA-", "L2": "A"},
+        hyphen_subs={"L1": "AA"},
+    )
+    assert [ln.corrected_text for ln in resp.lines] == ["AA-", "A"]
+
+
+def test_fusion_still_flagged_when_only_the_correction_ends_with_the_word():
+    """The genuine case keeps failing: the source ends with the fragment
+    ('por-'), only the CORRECTION contains the full word — that is the
+    LLM merging the pair, exactly what the check exists for."""
+    raw = {
+        "lines": [
+            {"line_id": "L1", "corrected_text": "porte"},
+            {"line_id": "L2", "corrected_text": "ouverte"},
+        ]
+    }
+    with pytest.raises(ValueError, match="hyphen_integrity_violation.*fusion"):
+        validate_llm_response(
+            raw,
+            ["L1", "L2"],
+            hyphen_pairs={"L1": "L2", "L2": "L1"},
+            ocr_texts={"L1": "por-", "L2": "te ouverte"},
+            hyphen_subs={"L1": "porte"},
+        )
+
+
+# ---------------------------------------------------------------------------
 # F8 — target-based counting (spec §7-F8: the 1:1 count is on targets)
 # ---------------------------------------------------------------------------
 

@@ -289,15 +289,18 @@ def test_parser_recognises_every_generated_structure(
         path.unlink(missing_ok=True)
 
 
-# Chain-safe partitions: every cap ≥ 3, so a PART1→BOTH→PART2 chain fits
-# one window in every partition. The 2-line-cap partition is EXCLUDED on
-# purpose: a chain longer than any window takes the planner's DOCUMENTED
-# over-cap degradation (cut + unlink + conservative source-text outcome),
-# which is partition-dependent by design — pinned separately below, not
-# smuggled into the invariance claim.
-_CHAIN_SAFE_PARTITIONS: dict[str, ChunkPlannerConfig | None] = {
-    "default": None,
-    "small-window": _PARTITIONS["small-window"],
+# All base partitions PLUS a 4-line window: over-cap chains are included
+# on purpose. A 3-line chain under the 2-line cap stresses the window
+# pinning's hardest case, and the invariance must STILL hold: the
+# planner's over-cap cut (unlink, pinned at planner level in
+# test_review_fixes.py) only runs on failure-driven descent to LINE
+# granularity, and the deterministic rules producer never fails a chunk
+# now that validation is identity-safe — a hard chunk failure under this
+# producer is always a validator false positive, which is exactly the
+# class of bug this gate exists to catch (it caught the fusion check
+# firing on a source text that already contained the logical word).
+_CHAIN_PARTITIONS: dict[str, ChunkPlannerConfig | None] = {
+    **_PARTITIONS,
     "window-4": ChunkPlannerConfig(
         max_input_chars_per_request=200,
         max_lines_per_request=4,
@@ -314,15 +317,13 @@ def test_final_text_invariant_under_chunking_with_chains(
 ) -> None:
     """THE P3.2 gate: chunking invariance where the reconciler actually
     works — chains, cross-page pairs, corrections landing ON hyphen
-    lines (the rules substitute in every line, fragments included).
-    Partitions are chain-safe (caps ≥ 3): the over-cap cut is a
-    documented, partition-dependent degradation pinned separately."""
+    lines (the rules substitute in every line, fragments included)."""
     doc, _ = doc_and_roles
     path = _write_tmp(doc)
     try:
         results = {
             name: _outcomes(asyncio.run(_run_partition(path, config)))
-            for name, config in _CHAIN_SAFE_PARTITIONS.items()
+            for name, config in _CHAIN_PARTITIONS.items()
         }
         baseline = results["default"]
         assert all(
@@ -371,10 +372,14 @@ def test_identity_producer_preserves_rich_docs(
 
 
 # ---------------------------------------------------------------------------
-# Over-cap chains — the documented degradation, pinned as what it is
+# Degenerate chain regression — identity must survive validation
 # ---------------------------------------------------------------------------
 
-_OVER_CAP_CHAIN = (
+# One-letter fragments: the BOTH line reads 'AA-' and the logical word of
+# its forward pair IS 'AA' — the source text contains the joined word
+# before the LLM says anything. Found twice by the invariance gate (once
+# per Hypothesis run), fixed by making the fusion check source-relative.
+_DEGENERATE_CHAIN = (
     '<?xml version="1.0" encoding="UTF-8"?>'
     '<alto xmlns="http://www.loc.gov/standards/alto/ns-v3#"><Layout>'
     '<Page ID="P1" WIDTH="1000" HEIGHT="1000">'
@@ -391,31 +396,33 @@ _OVER_CAP_CHAIN = (
     '<TextLine ID="L2" HPOS="10" VPOS="70" WIDTH="900" HEIGHT="20">'
     '<String ID="S3" CONTENT="A" HPOS="10" VPOS="70" WIDTH="60" HEIGHT="20" '
     'SUBS_TYPE="HypPart2" SUBS_CONTENT="AA"/></TextLine>'
+    '<TextLine ID="L3" HPOS="10" VPOS="100" WIDTH="900" HEIGHT="20">'
+    '<String ID="S4" CONTENT="A" HPOS="10" VPOS="100" WIDTH="80" HEIGHT="20"/>'
+    "</TextLine>"
     "</TextBlock></PrintSpace></Page></Layout></alto>"
 )
 
 
 @pytest.mark.asyncio
-async def test_over_cap_chain_degrades_conservatively_and_atomically(
+async def test_degenerate_chain_identity_survives_every_partition(
     tmp_path: Path,
 ) -> None:
-    """A 3-line chain under a 2-line window cap takes the planner's
-    documented over-cap path (cut + unlink). The pinned contract is NOT
-    partition-invariance — the cut is partition-dependent by design —
-    but the two things that must survive it: the outcome is
-    CONSERVATIVE (source text, never invented words) and ATOMIC (the
-    whole former unit lands in one uniform state, never a mixed pair).
-    Found by the invariance property; kept as its documented boundary."""
-    path = tmp_path / "overcap.xml"
-    path.write_text(_OVER_CAP_CHAIN, encoding="utf-8")
-    doc = await _run_partition(path, _PARTITIONS["tiny-window"])
-    lines = {lm.line_id: lm for page in doc.pages for lm in page.lines}
-    texts = {lid: lm.corrected_text for lid, lm in lines.items()}
-    assert texts == {"L0": "A-", "L1": "AA-", "L2": "A"}, (
-        "over-cap degradation must keep the SOURCE text verbatim"
-    )
-    statuses = {lm.status for lm in lines.values()}
-    assert len(statuses) == 1, (
-        f"the former unit must land in ONE uniform state, got: "
-        f"{ {lid: lm.status.value for lid, lm in lines.items()} }"
-    )
+    """The producer proposes the source verbatim (no e/a/o to substitute),
+    so every line must come out CORRECTED in every partition. Before the
+    fusion check became source-relative, this document hard-failed its
+    chunk (identity rejected as fusion, three deterministic retries,
+    descent budget exhausted) and the fallback blast radius depended on
+    which innocent lines shared the chunk — the plain L3 fell back under
+    the default partition but not under small-window."""
+    path = tmp_path / "degenerate.xml"
+    path.write_text(_DEGENERATE_CHAIN, encoding="utf-8")
+    outcomes = {}
+    for name, config in _CHAIN_PARTITIONS.items():
+        doc = await _run_partition(path, config)
+        for lm in (lm for page in doc.pages for lm in page.lines):
+            assert lm.status is LineStatus.CORRECTED, (
+                f"{name}: {lm.line_id} ended {lm.status.value} — identity "
+                "was rejected by a validation false positive"
+            )
+        outcomes[name] = _outcomes(doc)
+    assert all(o == outcomes["default"] for o in outcomes.values())
