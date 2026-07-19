@@ -53,9 +53,10 @@ rewriter already knew.
   defines `LineDecision`/`DecisionSet`, materialized once after the
   global consistency pass; the terminality backstop became the set's
   construction invariant (a PENDING line refuses materialization), and
-  the projection invariant plus the result's fallback accounting read
-  the DecisionSet instead of re-walking the manifests. Remaining:
-  the report/EditScript builders flip; the pointer fields' retirement
+  the projection invariant, the result's fallback accounting and the
+  final-EditScript builder read the DecisionSet instead of re-walking
+  the manifests. Remaining: the report builder flips (P3.5's LineOutcome
+  restructure is its natural vehicle); the pointer fields' retirement
   folds in ADR-010's `BOTH`-as-derived-detail.
 - **Slice D**: `OutputWriter`/`apply=` leave the engine surface;
   `result.write(dir)` helper; backend transaction untouched.
