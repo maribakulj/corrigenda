@@ -559,6 +559,34 @@ class CorrectionResult:
     #: the whole deliverable, and a rules/​span producer would surface its
     #: ``replace_span`` ops here too.
     edit_script: EditScript
+    #: ADR-011 — the corrected artefacts themselves, keyed by source file
+    #: name, computed on EVERY run (dry runs included): the result IS the
+    #: output; persisting it is the caller's choice (:meth:`write`, or a
+    #: host-owned transaction like the demo backend's staging writer).
+    corrected_files: dict[str, bytes] = field(default_factory=dict)
+
+    def write(self, directory: str | Path) -> list[Path]:
+        """Persist the run's artefacts into ``directory`` (created if
+        needed): each corrected XML under its source file's name, plus
+        the §9 report as ``report.json``. Returns the written paths.
+
+        ADR-011 — a caller-side convenience, not engine behaviour: the
+        engine only computes values. Hosts that own a file transaction
+        (commit/discard staging) keep their injected writer instead.
+        """
+        target = Path(directory)
+        target.mkdir(parents=True, exist_ok=True)
+        written: list[Path] = []
+        for source_name, xml_bytes in self.corrected_files.items():
+            # Strip any directory part: the key names a source FILE and
+            # must not steer the write outside ``directory``.
+            path = target / Path(source_name).name
+            path.write_bytes(xml_bytes)
+            written.append(path)
+        report_path = target / "report.json"
+        report_path.write_text(self.report.model_dump_json(indent=2), encoding="utf-8")
+        written.append(report_path)
+        return written
 
 
 @dataclass
@@ -990,7 +1018,7 @@ class CorrectionPipeline:
         # for a document where every line carries a terminal decision.
         decisions = derive_decision_set(document_manifest, traces)
 
-        format_losses = await self._write_outputs(
+        format_losses, corrected_files = await self._write_outputs(
             document_manifest=document_manifest,
             source_files=source_files,
             traces=traces,
@@ -1031,6 +1059,7 @@ class CorrectionPipeline:
             usage=ctx.usage,
             report=report,
             edit_script=self._build_final_edit_script(decisions, ctx),
+            corrected_files=corrected_files,
         )
 
     def _build_final_edit_script(
@@ -2117,11 +2146,13 @@ class CorrectionPipeline:
         traces: dict[LineRef, LineTrace],
         decisions: DecisionSet,
         apply: bool = True,
-    ) -> dict[str, int]:
+    ) -> tuple[dict[str, int], dict[str, bytes]]:
         """Rewrite corrected files, update traces, and (when ``apply``)
-        persist via the writer. Returns the format's granularity-loss
-        counters aggregated across every file, for
-        ``CorrectionReport.format_losses``.
+        persist via the writer. Returns ``(losses, corrected_files)`` —
+        the format's granularity-loss counters aggregated across every
+        file (for ``CorrectionReport.format_losses``) and the corrected
+        bytes per source file name (for
+        ``CorrectionResult.corrected_files``).
 
         §9 dry-run — the rewrite always runs in memory so the report's
         ``rewriter_path`` / ``output_alto_text`` are populated, but when
@@ -2147,6 +2178,7 @@ class CorrectionPipeline:
         # suite passes source_files={} — needs no format at all.
         adapter: FormatAdapter | None = self.format_adapter
         losses_total: dict[str, int] = {}
+        corrected_files: dict[str, bytes] = {}
 
         for source_name, xml_path in source_files.items():
             pages_for_file = [
@@ -2173,6 +2205,7 @@ class CorrectionPipeline:
             # decided. Verified BEFORE the writer sees the bytes — a
             # divergent artefact is corruption, never a valid output.
             _verify_projection(source_name, pages_for_file, result.texts, decisions)
+            corrected_files[source_name] = result.xml_bytes
 
             if apply:
                 await asyncio.to_thread(
@@ -2217,7 +2250,7 @@ class CorrectionPipeline:
 
         # Trace persistence moved to run(): trace.json IS the
         # CorrectionReport — one §9 artefact, not a parallel JobTrace shape.
-        return losses_total
+        return losses_total, corrected_files
 
 
 # --- public surface ---
