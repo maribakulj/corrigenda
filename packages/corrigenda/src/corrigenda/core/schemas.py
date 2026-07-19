@@ -55,27 +55,17 @@ class HyphenRole(str, Enum):
 
 
 class PipelineEventType(str, Enum):
-    """Canonical event names emitted by the correction pipeline.
+    """Canonical event names emitted by the correction ENGINE (P3.6).
 
-    This enum is the authoritative source of truth for every event
-    name the pipeline or its observers can emit. The backend's SSE
-    layer transports the same strings; ``frontend/src/hooks/useJobStream
-    .ts::EVENTS`` lists them on the consumer side.
-    Synchronisation is enforced by
-    ``backend/tests/test_sse_event_contract.py`` at every CI run.
-
-    The string values are part of the wire contract and stay stable
-    across releases.
+    Only events the pipeline itself (or a host reporting the pipeline's
+    metrics) can emit live here. Server-side job lifecycle
+    (started/completed/failed/cancelled/queued) and SSE transport
+    events (keepalive/error) are the HOST's vocabulary — the demo
+    backend owns them in ``app.jobs.events.JobEventType``. The wire
+    strings of both enums are part of the SSE contract with the
+    frontend, enforced by ``backend/tests/test_sse_event_contract.py``
+    at every CI run, and stay stable across releases.
     """
-
-    # Pipeline lifecycle (emitted by JobRunner on the backend)
-    STARTED = "started"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    #: Cooperative cancellation (``should_abort`` probe tripped): the
-    #: run raised :class:`~corrigenda.errors.CorrectionAborted`, no
-    #: output was written. Terminal, like ``completed``/``failed``.
-    CANCELLED = "cancelled"
 
     # Document / page / chunk lifecycle (emitted by CorrectionPipeline)
     DOCUMENT_PARSED = "document_parsed"
@@ -97,15 +87,6 @@ class PipelineEventType(str, Enum):
     # influence the corrected XML output.
     REWRITER_STATS = "rewriter_stats"
     RECONCILE_STATS = "reconcile_stats"
-
-    # Frontend-only initial state (kept here so the contract test can
-    # verify the frontend list against this canonical set).
-    QUEUED = "queued"
-
-    # Transport-layer events (emitted by JobStore.stream_events on the
-    # backend, not by the pipeline itself).
-    KEEPALIVE = "keepalive"
-    ERROR = "error"
 
 
 # ---------------------------------------------------------------------------

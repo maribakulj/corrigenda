@@ -26,6 +26,7 @@ from corrigenda import (
 )
 from corrigenda.core.protocols import ProviderPermanentError
 
+from app.jobs.events import JobEventType
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore, OutputWriter
 from app.schemas import DocumentManifest, JobStatus, PipelineEventType
@@ -177,7 +178,7 @@ class JobRunner:
 
             self.job_store.emit(
                 job_id,
-                PipelineEventType.COMPLETED,
+                JobEventType.COMPLETED,
                 {
                     "job_id": job_id,
                     "total_lines": document_manifest.total_lines,
@@ -206,7 +207,7 @@ class JobRunner:
                 duration_seconds=elapsed,
             )
             self.job_store.emit(
-                job_id, PipelineEventType.FAILED, {"job_id": job_id, "error": safe_error}
+                job_id, JobEventType.FAILED, {"job_id": job_id, "error": safe_error}
             )
 
         except CorrectionAborted:
@@ -221,7 +222,7 @@ class JobRunner:
                 status=JobStatus.CANCELLED,
                 duration_seconds=elapsed,
             )
-            self.job_store.emit(job_id, PipelineEventType.CANCELLED, {"job_id": job_id})
+            self.job_store.emit(job_id, JobEventType.CANCELLED, {"job_id": job_id})
 
         except asyncio.CancelledError:
             self._discard_outputs(output_writer)
@@ -243,7 +244,7 @@ class JobRunner:
                 duration_seconds=elapsed,
             )
             self.job_store.emit(
-                job_id, PipelineEventType.FAILED, {"job_id": job_id, "error": safe_error}
+                job_id, JobEventType.FAILED, {"job_id": job_id, "error": safe_error}
             )
             # Re-raise so the task scheduler sees the cancellation and
             # propagates it correctly (this is the documented asyncio
@@ -272,7 +273,7 @@ class JobRunner:
             )
             self.job_store.emit(
                 job_id,
-                PipelineEventType.FAILED,
+                JobEventType.FAILED,
                 {"job_id": job_id, "error": safe_error},
             )
 
@@ -293,7 +294,7 @@ class JobRunner:
             )
             self.job_store.emit(
                 job_id,
-                PipelineEventType.FAILED,
+                JobEventType.FAILED,
                 {
                     "job_id": job_id,
                     "error": safe_error,
@@ -315,7 +316,7 @@ class JobRunner:
     ) -> CorrectionResult:
         """Drive the pure pipeline and persist its counters back."""
         self.job_store.update_job(job_id, status=JobStatus.STARTED)
-        self.job_store.emit(job_id, PipelineEventType.STARTED, {"job_id": job_id})
+        self.job_store.emit(job_id, JobEventType.STARTED, {"job_id": job_id})
 
         self.job_store.update_job(
             job_id,

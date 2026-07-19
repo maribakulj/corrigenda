@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING — `PipelineEventType` names only engine events (P3.6,
+  first slice).** The server-side values — job lifecycle ``started`` /
+  ``completed`` / ``failed`` / ``cancelled``, the frontend-only
+  ``queued``, and the SSE transport ``keepalive`` / ``error`` — left
+  the engine's enum for the demo backend's own
+  ``app.jobs.events.JobEventType``: the library no longer enumerates
+  what a HOST says about a job. The wire strings are unchanged on both
+  sides (the SSE contract test still pins the union against the
+  frontend's list); only the Python spelling of the server values
+  moved. The typed ``EngineEvent`` dataclasses remain P3.6's second
+  slice.
+
 - **BREAKING — report v2: staged `LineOutcome` entries (P3.5,
   `report_version` 1.0 → 2.0).** `CorrectionReport.lines` now carries
   one `LineOutcome` per line — ``source_text`` plus three explicit
