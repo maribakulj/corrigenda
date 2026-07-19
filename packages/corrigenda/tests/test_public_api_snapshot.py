@@ -46,6 +46,7 @@ PUBLIC_API_1_0 = sorted(
         "LineDecision",
         "LineRef",
         # Edit protocol (§4)
+        "EDIT_PROTOCOL_VERSION",
         "EditScript",
         "EditOp",
         "ReplaceLine",
@@ -54,7 +55,9 @@ PUBLIC_API_1_0 = sorted(
         "RangeAnchor",
         "EditResult",
         "EditRejection",
+        "LinePrecondition",
         "apply_edit_script",
+        "line_digest",
         "normalize_anchor",
         # Producers (§5)
         "EditProducer",

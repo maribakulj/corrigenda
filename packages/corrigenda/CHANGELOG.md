@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **EditScript preconditions — a script only applies to the document
+  it was computed against (P3.10, §4).** ``EditScript`` records its
+  ``protocol_version`` (``EDIT_PROTOCOL_VERSION``, currently ``"1"``;
+  ``apply_edit_script`` raises ``ValidationError`` on a version it
+  does not speak), the run's ``source_digests`` (same values as
+  ``RunProvenance`` — one shared computation), and one
+  ``LinePrecondition`` per op-carrying line: the :func:`line_digest`
+  of the SOURCE text the ops were computed against, page-qualified
+  like the ops' stamps. Applying a script to a document that carries
+  the same line_id over DIFFERENT content rejects the line's ops
+  (``precondition_source_digest``) — an op never lands on a lookalike.
+  All fields optional/additive: hand-written scripts keep their
+  historical behaviour. The run's final ``edit_script`` is fully
+  stamped. ``EDIT_PROTOCOL_VERSION``, ``LinePrecondition`` and
+  ``line_digest`` join the public surface.
+
 - **`RunProvenance` — the report says exactly what produced it (P3.9,
   §11).** ``CorrectionReport.provenance`` (optional, additive — no
   ``report_version`` bump) records the library version, the §8.2

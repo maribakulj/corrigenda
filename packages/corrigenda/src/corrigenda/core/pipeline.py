@@ -33,11 +33,14 @@ from typing import Any
 from pathlib import Path
 
 from corrigenda.core.editing import (
+    EDIT_PROTOCOL_VERSION,
     EditOp,
     EditScript,
+    LinePrecondition,
     ReplaceLine,
     ReplaceSpan,
     apply_edit_script,
+    line_digest,
 )
 from corrigenda.core.hyphenation import (
     ReconcileMetrics,
@@ -210,6 +213,19 @@ def _dependency_versions() -> dict[str, str]:
         except _md.PackageNotFoundError:
             continue
     return versions
+
+
+def _digest_sources(source_files: dict[str, Path]) -> dict[str, str]:
+    """``sha256:<hex>`` of every input file's bytes, as GIVEN (P3.9/P3.10).
+
+    Computed once per run and shared by the provenance record and the
+    final edit script's preconditions — the two must agree by
+    construction, not by coincidence.
+    """
+    return {
+        name: "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in source_files.items()
+    }
 
 
 def sanitize_error(msg: str, api_key: str | None = None) -> str:
@@ -1090,6 +1106,10 @@ class CorrectionPipeline:
             decisions=decisions,
         )
 
+        # P3.9/P3.10 — one digest computation feeds BOTH the provenance
+        # record and the final edit script's preconditions.
+        source_digests = _digest_sources(source_files)
+
         report = CorrectionReport(
             run_id=run_id,
             total_lines=len(decisions.decisions),
@@ -1103,7 +1123,7 @@ class CorrectionPipeline:
             format_losses=format_losses or None,
             # P3.9 (§11) — the run's full provenance record.
             provenance=self._build_provenance(
-                document_manifest=document_manifest, source_files=source_files
+                document_manifest=document_manifest, source_digests=source_digests
             ),
         )
 
@@ -1122,7 +1142,9 @@ class CorrectionPipeline:
             reconcile_metrics=ctx.reconcile_metrics,
             usage=ctx.usage,
             report=report,
-            edit_script=self._build_final_edit_script(decisions, ctx),
+            edit_script=self._build_final_edit_script(
+                decisions, ctx, source_digests=source_digests
+            ),
             decisions=decisions,
             corrected_files=corrected_files,
         )
@@ -1131,13 +1153,13 @@ class CorrectionPipeline:
         self,
         *,
         document_manifest: DocumentManifest,
-        source_files: dict[str, Path],
+        source_digests: dict[str, str],
     ) -> RunProvenance:
         """The run's §11 provenance record (P3.9): library + producer
         identity, policy fingerprint, per-file digests of the INPUT
-        bytes, and critical dependency versions. Digests read the source
-        files once more — the report must be tied to the bytes as GIVEN,
-        before any rewrite touched a tree."""
+        bytes (computed once in :meth:`run` via ``_digest_sources`` and
+        shared with the edit script's preconditions), and critical
+        dependency versions."""
         from corrigenda import __version__ as _lib_version
 
         md = self.producer_metadata
@@ -1150,16 +1172,17 @@ class CorrectionPipeline:
                 implementation=md.implementation,
                 configuration_fingerprint=md.configuration_fingerprint,
             ),
-            source_digests={
-                name: "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
-                for name, path in source_files.items()
-            },
+            source_digests=source_digests,
             source_format=document_manifest.source_format,
             dependencies=_dependency_versions(),
         )
 
     def _build_final_edit_script(
-        self, decisions: DecisionSet, ctx: RunContext
+        self,
+        decisions: DecisionSet,
+        ctx: RunContext,
+        *,
+        source_digests: dict[str, str] | None = None,
     ) -> EditScript:
         """§4 — the EditScript the run *actually applied*, in document order.
 
@@ -1179,8 +1202,15 @@ class CorrectionPipeline:
         - ``CORRECTED`` but the final text differs from the op output
           (a reconciled hyphen member) → a ``replace_line`` carrying the
           final text, since the original span no longer describes it.
+
+        P3.10 — the script is stamped with its protocol version, the
+        run's source-file digests, and one :class:`LinePrecondition`
+        per op-carrying line (the digest of the SOURCE text the ops
+        were computed against), so replaying it on a different document
+        fails explicitly instead of editing a lookalike line.
         """
         ops: list[EditOp] = []
+        preconditions: list[LinePrecondition] = []
         for decision in decisions.decisions:
             if decision.status is not LineStatus.CORRECTED:
                 continue
@@ -1189,6 +1219,13 @@ class CorrectionPipeline:
                 # An accepted line the producer left untouched (no op) —
                 # e.g. a rules producer's uncovered line. Nothing applied.
                 continue
+            preconditions.append(
+                LinePrecondition(
+                    line_id=decision.ref.line_id,
+                    page_id=decision.ref.page_id,
+                    digest=line_digest(decision.source_text),
+                )
+            )
             line_ops, produced_text = captured
             if produced_text == decision.final_text:
                 # The producer's output survived every guard unchanged —
@@ -1210,7 +1247,12 @@ class CorrectionPipeline:
                         page_id=decision.ref.page_id,
                     )
                 )
-        return EditScript(ops=ops)
+        return EditScript(
+            ops=ops,
+            protocol_version=EDIT_PROTOCOL_VERSION,
+            source_digests=source_digests or {},
+            preconditions=preconditions,
+        )
 
     def run_sync(
         self,

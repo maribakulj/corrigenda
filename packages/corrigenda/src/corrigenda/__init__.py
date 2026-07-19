@@ -25,15 +25,18 @@ from corrigenda.core.decisions import (
 )
 from corrigenda.core.identity import LineRef
 from corrigenda.core.editing import (
+    EDIT_PROTOCOL_VERSION,
     EditOp,
     EditRejection,
     EditResult,
     EditScript,
+    LinePrecondition,
     MatchAnchor,
     RangeAnchor,
     ReplaceLine,
     ReplaceSpan,
     apply_edit_script,
+    line_digest,
     normalize_anchor,
 )
 from corrigenda.core.pipeline import (
@@ -184,6 +187,7 @@ __all__ = [
     "LineDecision",
     "LineRef",
     # Edit protocol (§4) — pure core
+    "EDIT_PROTOCOL_VERSION",
     "EditScript",
     "EditOp",
     "ReplaceLine",
@@ -192,7 +196,9 @@ __all__ = [
     "RangeAnchor",
     "EditResult",
     "EditRejection",
+    "LinePrecondition",
     "apply_edit_script",
+    "line_digest",
     "normalize_anchor",
     # Producers (§5)
     "EditProducer",
