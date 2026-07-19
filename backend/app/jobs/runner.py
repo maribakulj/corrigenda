@@ -24,12 +24,13 @@ from corrigenda import (
     LineRef,
     sanitize_error,
 )
+from corrigenda.core.events import ReconcileStats
 from corrigenda.core.protocols import ProviderPermanentError
 
 from app.jobs.events import JobEventType
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore, OutputWriter
-from app.schemas import DocumentManifest, JobStatus, PipelineEventType
+from app.schemas import DocumentManifest, JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -165,16 +166,13 @@ class JobRunner:
             # Job-end reconcile_stats observability event — emitted just
             # BEFORE the terminal `completed` so subscribers that exit
             # on `completed` still receive it.
-            self.job_store.emit(
-                job_id,
-                PipelineEventType.RECONCILE_STATS,
-                {
-                    "coherent": result.reconcile_metrics.coherent,
-                    "fallback": result.reconcile_metrics.fallback,
-                    "neutralised": result.reconcile_metrics.neutralised,
-                    "total": result.reconcile_metrics.total,
-                },
+            reconcile_event = ReconcileStats(
+                coherent=result.reconcile_metrics.coherent,
+                fallback=result.reconcile_metrics.fallback,
+                neutralised=result.reconcile_metrics.neutralised,
+                total=result.reconcile_metrics.total,
             )
+            self.job_store.emit(job_id, reconcile_event.type, reconcile_event.payload())
 
             self.job_store.emit(
                 job_id,

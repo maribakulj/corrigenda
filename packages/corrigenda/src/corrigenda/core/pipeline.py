@@ -57,6 +57,7 @@ from corrigenda.errors import (
     CorrectionError,
     ProjectionError,
 )
+from corrigenda.core import events as ev
 from corrigenda.core.decisions import (
     DecisionSet,
     build_line_outcomes,
@@ -94,7 +95,6 @@ from corrigenda.core.schemas import (
     LLMUserPayload,
     PageManifest,
     PairingPolicy,
-    PipelineEventType,
     RetryPolicy,
     Usage,
 )
@@ -768,6 +768,12 @@ class CorrectionPipeline:
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
+    def _emit(self, event: ev.EngineEvent) -> None:
+        """Render a typed event onto the wire-shaped observer port
+        (P3.6): the dataclass is the payload's single definition; the
+        observer keeps receiving ``(event_type, payload_dict)``."""
+        self.observer.on_event(event.type, event.payload())
+
     @staticmethod
     def _record_reconcile_outcome(ctx: RunContext, outcome: str) -> None:
         """Bump the run's ReconcileMetrics counter for a single pair."""
@@ -925,13 +931,12 @@ class CorrectionPipeline:
             for page in document_manifest.pages
         )
 
-        self.observer.on_event(
-            PipelineEventType.DOCUMENT_PARSED,
-            {
-                "total_pages": document_manifest.total_pages,
-                "total_lines": document_manifest.total_lines,
-                "hyphen_pairs": total_hyphen_pairs,
-            },
+        self._emit(
+            ev.DocumentParsed(
+                total_pages=document_manifest.total_pages,
+                total_lines=document_manifest.total_lines,
+                hyphen_pairs=total_hyphen_pairs,
+            )
         )
 
         # Initialize line traces
@@ -1153,25 +1158,23 @@ class CorrectionPipeline:
             for lm in page.lines
             if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
         )
-        self.observer.on_event(
-            PipelineEventType.PAGE_STARTED,
-            {
-                "page_id": page.page_id,
-                "page_index": page.page_index,
-                "line_count": len(page.lines),
-                "hyphen_pair_count": page_hyphen_pairs,
-            },
+        self._emit(
+            ev.PageStarted(
+                page_id=page.page_id,
+                page_index=page.page_index,
+                line_count=len(page.lines),
+                hyphen_pair_count=page_hyphen_pairs,
+            )
         )
 
         plan = plan_page(page, document_id, self.config)
 
-        self.observer.on_event(
-            PipelineEventType.CHUNK_PLANNED,
-            {
-                "page_id": page.page_id,
-                "chunk_count": len(plan.chunks),
-                "granularity": plan.granularity.value,
-            },
+        self._emit(
+            ev.ChunkPlanned(
+                page_id=page.page_id,
+                chunk_count=len(plan.chunks),
+                granularity=plan.granularity.value,
+            )
         )
 
         page_reconciled = 0
@@ -1210,13 +1213,12 @@ class CorrectionPipeline:
             except Exception as exc:
                 # ADR-006: pipeline does not log directly; emit an
                 # event the host application can log/trace.
-                self.observer.on_event(
-                    PipelineEventType.CHUNK_ERROR,
-                    {
-                        "chunk_id": chunk.chunk_id,
-                        "message": str(exc)[:200],
-                        "exception_type": type(exc).__name__,
-                    },
+                self._emit(
+                    ev.ChunkError(
+                        chunk_id=chunk.chunk_id,
+                        message=str(exc)[:200],
+                        exception_type=type(exc).__name__,
+                    )
                 )
                 # ADR-008 — only RECOVERABLE domain errors may be absorbed as
                 # a chunk_error + continue. Anything else (KeyError,
@@ -1268,14 +1270,13 @@ class CorrectionPipeline:
             for lm in page.lines
             if lm.corrected_text is not None and lm.corrected_text != lm.ocr_text
         )
-        self.observer.on_event(
-            PipelineEventType.PAGE_COMPLETED,
-            {
-                "page_id": page.page_id,
-                "page_index": page.page_index,
-                "corrections": page_corrections,
-                "hyphen_pairs_reconciled": page_reconciled,
-            },
+        self._emit(
+            ev.PageCompleted(
+                page_id=page.page_id,
+                page_index=page.page_index,
+                corrections=page_corrections,
+                hyphen_pairs_reconciled=page_reconciled,
+            )
         )
 
         return page_chunks, page_reconciled
@@ -1327,13 +1328,12 @@ class CorrectionPipeline:
 
         hyphen_pairs = _build_hyphen_pairs(chunk_lines)
 
-        self.observer.on_event(
-            PipelineEventType.CHUNK_STARTED,
-            {
-                "chunk_id": chunk.chunk_id,
-                "granularity": chunk.granularity.value,
-                "line_count": len(chunk_lines),
-            },
+        self._emit(
+            ev.ChunkStarted(
+                chunk_id=chunk.chunk_id,
+                granularity=chunk.granularity.value,
+                line_count=len(chunk_lines),
+            )
         )
 
         attempts_cap = min(self.retry_policy.max_attempts, max(budget[0], 0))
@@ -1375,16 +1375,15 @@ class CorrectionPipeline:
             # skip them (acceptance ignores already-corrected lines).
             target_ids = set(chunk.targets())
             descent_lines = [lm for lm in chunk_lines if lm.line_id in target_ids]
-            self.observer.on_event(
-                PipelineEventType.CHUNK_DOWNGRADED,
-                {
-                    "chunk_id": chunk.chunk_id,
-                    "from_granularity": chunk.granularity.value,
-                    "to_granularity": next_g.value,
-                    "line_count": len(chunk_lines),
-                    "target_count": len(descent_lines),
-                    "budget_remaining": budget[0],
-                },
+            self._emit(
+                ev.ChunkDowngraded(
+                    chunk_id=chunk.chunk_id,
+                    from_granularity=chunk.granularity.value,
+                    to_granularity=next_g.value,
+                    line_count=len(chunk_lines),
+                    target_count=len(descent_lines),
+                    budget_remaining=budget[0],
+                )
             )
             sub_plan = plan_page(
                 _subpage_for_lines(page, descent_lines),
@@ -1487,18 +1486,15 @@ class CorrectionPipeline:
         )
         self._finalize_chunk_traces(chunk_lines=target_lines, traces=traces)
 
-        self.observer.on_event(
-            PipelineEventType.CHUNK_COMPLETED,
-            {
-                "chunk_id": chunk.chunk_id,
-                "line_count": len(chunk_lines),
-                "target_count": len(target_lines),
-                "hyphen_pairs_reconciled": reconciled_count,
-                # F14 — token usage for this chunk's producer call (0 when
-                # the provider did not report it).
-                "input_tokens": usage.input_tokens if usage else 0,
-                "output_tokens": usage.output_tokens if usage else 0,
-            },
+        self._emit(
+            ev.ChunkCompleted(
+                chunk_id=chunk.chunk_id,
+                line_count=len(chunk_lines),
+                target_count=len(target_lines),
+                hyphen_pairs_reconciled=reconciled_count,
+                input_tokens=usage.input_tokens if usage else 0,
+                output_tokens=usage.output_tokens if usage else 0,
+            )
         )
         return reconciled_count
 
@@ -1532,12 +1528,11 @@ class CorrectionPipeline:
         call site — both counters are pipeline-orchestration state, not
         chunk-level side effects.
         """
-        self.observer.on_event(
-            PipelineEventType.WARNING,
-            {
-                "chunk_id": chunk.chunk_id,
-                "message": f"Fallback to OCR source: {sanitised_msg[:120]}",
-            },
+        self._emit(
+            ev.Warning(
+                chunk_id=chunk.chunk_id,
+                message=f"Fallback to OCR source: {sanitised_msg[:120]}",
+            )
         )
         target_ids = set(chunk.targets())
         targets = [lm for lm in chunk_lines if lm.line_id in target_ids]
@@ -1767,13 +1762,12 @@ class CorrectionPipeline:
                         hyphen_violation = True
                     if decision.backoff > 0:
                         await asyncio.sleep(decision.backoff)
-                    self.observer.on_event(
-                        PipelineEventType.RETRY,
-                        {
-                            "chunk_id": chunk.chunk_id,
-                            "attempt": attempt,
-                            "error": decision.error_tag,
-                        },
+                    self._emit(
+                        ev.Retry(
+                            chunk_id=chunk.chunk_id,
+                            attempt=attempt,
+                            error=decision.error_tag,
+                        )
                     )
                     ctx.retry_count += 1
                     continue
@@ -1881,14 +1875,13 @@ class CorrectionPipeline:
                 cross_page_partners=cross_page_partners,
             )
             if partner is None:
-                self.observer.on_event(
-                    PipelineEventType.HYPHEN_PARTNER_MISSING,
-                    {
-                        "chunk_id": chunk_id,
-                        "line_id": lm.line_id,
-                        "missing_partner_id": partner_id,
-                        "direction": "forward" if is_forward else "backward",
-                    },
+                self._emit(
+                    ev.HyphenPartnerMissing(
+                        chunk_id=chunk_id,
+                        line_id=lm.line_id,
+                        missing_partner_id=partner_id,
+                        direction="forward" if is_forward else "backward",
+                    )
                 )
                 continue
             pool[line_ref(partner)] = partner
@@ -2195,15 +2188,14 @@ class CorrectionPipeline:
             # rewriter_stats observability event — pure read-only diagnostic
             # surfacing how each line classified (UNTOUCHED / SUBS_ONLY /
             # FAST_PATH / SLOW_PATH). Zero impact on the corrected XML.
-            self.observer.on_event(
-                PipelineEventType.REWRITER_STATS,
-                {
-                    "source_stem": xml_path.stem,
-                    "untouched": result.metrics.untouched,
-                    "subs_only": result.metrics.subs_only,
-                    "fast_path": result.metrics.fast_path,
-                    "slow_path": result.metrics.slow_path,
-                },
+            self._emit(
+                ev.RewriterStats(
+                    source_stem=xml_path.stem,
+                    untouched=result.metrics.untouched,
+                    subs_only=result.metrics.subs_only,
+                    fast_path=result.metrics.fast_path,
+                    slow_path=result.metrics.slow_path,
+                )
             )
             for key, count in result.losses.items():
                 losses_total[key] = losses_total.get(key, 0) + count

@@ -18,8 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what a HOST says about a job. The wire strings are unchanged on both
   sides (the SSE contract test still pins the union against the
   frontend's list); only the Python spelling of the server values
-  moved. The typed ``EngineEvent`` dataclasses remain P3.6's second
-  slice.
+  moved.
+
+- **Typed engine events (P3.6, second slice).**
+  ``corrigenda.core.events`` defines one frozen ``EngineEvent``
+  dataclass per ``PipelineEventType`` (``DocumentParsed``,
+  ``ChunkStarted``, ``ChunkDowngraded``, ``RewriterStats``, …): the
+  emit sites construct these instead of ad-hoc dict literals, so every
+  payload's shape lives in exactly one importable place and the
+  type↔class bijection is pinned by test. The observer port keeps its
+  wire shape (``on_event(event_type, payload)``) — the pipeline renders
+  ``event.type`` + ``event.payload()`` at the boundary, so observers
+  and the SSE wire format are untouched. The demo backend's job-end
+  ``reconcile_stats`` now goes through the typed ``ReconcileStats``
+  too.
 
 - **BREAKING — report v2: staged `LineOutcome` entries (P3.5,
   `report_version` 1.0 → 2.0).** `CorrectionReport.lines` now carries
