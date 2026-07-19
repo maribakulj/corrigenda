@@ -801,6 +801,9 @@ class LineTrace(BaseModel):
         None  # text retained after validation/reconciliation/fallback
     )
     output_alto_text: str | None = None  # text re-extracted from the output XML
+    #: P3.5 — the acceptance guard's once-computed metrics (see
+    #: :class:`ProposalFeatures`); surfaces on the report's decision stage.
+    proposal_features: ProposalFeatures | None = None
 
     # Diagnostic metadata
     hyphen_role: str | None = None
@@ -833,6 +836,24 @@ class DecisionReason(BaseModel):
     detail: str | None = None
 
 
+class ProposalFeatures(BaseModel):
+    """Metrics the acceptance guard computed ONCE while deciding (P3.5) —
+    recorded so no consumer re-derives them. Each field is ``None`` when
+    the guard's path never computed it (e.g. neighbour similarities on a
+    line whose source-similarity check already rejected it, or a line
+    that never went through per-line acceptance at all)."""
+
+    #: SequenceMatcher ratio proposal ↔ source (1.0 for an identity
+    #: proposal).
+    source_similarity: float | None = None
+    #: SequenceMatcher ratio proposal ↔ previous line's source.
+    prev_similarity: float | None = None
+    #: SequenceMatcher ratio proposal ↔ next line's source.
+    next_similarity: float | None = None
+    #: len(proposal) / len(source) (source clamped to ≥ 1 char).
+    length_ratio: float | None = None
+
+
 class DecisionStage(BaseModel):
     """The line's terminal decision (always present — every line ends
     ``corrected`` or ``fallback``, enforced by the DecisionSet)."""
@@ -840,6 +861,10 @@ class DecisionStage(BaseModel):
     status: str  # corrected / fallback
     final_text: str  # the text the artefact carries
     reason: DecisionReason | None = None  # why a fallen line fell
+    #: The guard's once-computed metrics for the proposal this decision
+    #: judged; ``None`` for lines that never reached per-line acceptance
+    #: (chunk-level fallbacks, hyphen-unit extensions, …).
+    features: ProposalFeatures | None = None
 
 
 class ProjectionStage(BaseModel):
@@ -935,6 +960,7 @@ __all__ = [
     "LineTrace",
     "LineOutcome",
     "ProposalStage",
+    "ProposalFeatures",
     "DecisionStage",
     "DecisionReason",
     "ProjectionStage",

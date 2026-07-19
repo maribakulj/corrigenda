@@ -17,7 +17,7 @@ function trace(pageId: string, lineId: string, ocr: string): LineOutcome {
     hyphen_role: null,
     source_text: ocr,
     proposal: null,
-    decision: { status: 'corrected', final_text: ocr, reason: null },
+    decision: { status: 'corrected', final_text: ocr, reason: null, features: null },
     projection: null,
   }
 }

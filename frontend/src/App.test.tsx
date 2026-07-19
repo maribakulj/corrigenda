@@ -78,7 +78,7 @@ const TRACE: TraceData = {
       hyphen_role: null,
       source_text: 'ancien texte',
       proposal: { input_text: 'ancien texte', output_text: 'nouveau texte' },
-      decision: { status: 'corrected', final_text: 'nouveau texte', reason: null },
+      decision: { status: 'corrected', final_text: 'nouveau texte', reason: null, features: null },
       projection: { extracted_text: 'nouveau texte', rewriter_path: 'fast_path' },
     },
   ],

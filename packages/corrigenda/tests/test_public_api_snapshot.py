@@ -97,6 +97,7 @@ PUBLIC_API_1_0 = sorted(
         # Report v2 (§9, P3.5)
         "LineOutcome",
         "ProposalStage",
+        "ProposalFeatures",
         "DecisionStage",
         "DecisionReason",
         "ProjectionStage",

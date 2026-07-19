@@ -67,6 +67,7 @@ from corrigenda.core.schemas import (
     PageManifest,
     PairingPolicy,
     ProjectionStage,
+    ProposalFeatures,
     ProposalStage,
     RetryPolicy,
     Usage,
@@ -227,6 +228,7 @@ __all__ = [
     # Report v2 (§9, P3.5)
     "LineOutcome",
     "ProposalStage",
+    "ProposalFeatures",
     "DecisionStage",
     "DecisionReason",
     "ProjectionStage",

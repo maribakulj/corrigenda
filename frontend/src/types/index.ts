@@ -302,10 +302,18 @@ export interface DecisionReason {
   detail: string | null
 }
 
+export interface ProposalFeatures {
+  source_similarity: number | null
+  prev_similarity: number | null
+  next_similarity: number | null
+  length_ratio: number | null
+}
+
 export interface DecisionStage {
   status: string // corrected / fallback
   final_text: string
   reason: DecisionReason | null
+  features: ProposalFeatures | null
 }
 
 export interface ProjectionStage {

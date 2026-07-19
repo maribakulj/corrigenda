@@ -58,7 +58,11 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import TypeVar
 
-from corrigenda.core.schemas import DEFAULT_GUARD_CONFIG, GuardConfig
+from corrigenda.core.schemas import (
+    DEFAULT_GUARD_CONFIG,
+    GuardConfig,
+    ProposalFeatures,
+)
 
 #: Line key type for :func:`check_adjacent_duplicates` — any hashable
 #: identifier (a bare page-scoped line_id, or a LineRef for the
@@ -78,6 +82,9 @@ class AcceptanceResult:
     accepted: bool
     text: str  # retained text (correction or OCR fallback)
     reason: str | None = None  # None when accepted; short tag when rejected
+    #: P3.5 — the metrics this check computed while deciding, recorded
+    #: once so no consumer re-derives them (report v2's decision stage).
+    features: ProposalFeatures | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -128,40 +135,53 @@ def check_line(
     """
     # Identity: no change, always accept
     if corrected == source_ocr:
-        return AcceptanceResult(accepted=True, text=corrected)
+        return AcceptanceResult(
+            accepted=True,
+            text=corrected,
+            features=ProposalFeatures(source_similarity=1.0, length_ratio=1.0),
+        )
+
+    # P3.5 — every ratio this check computes is recorded ONCE on the
+    # result (fields the taken path never computed stay None).
+    src_len = max(len(source_ocr), 1)
+    features = ProposalFeatures(length_ratio=round(len(corrected) / src_len, 4))
 
     # --- Guard 1: source similarity ---
     sim_source = _similarity(source_ocr, corrected)
+    features.source_similarity = round(sim_source, 4)
     if sim_source < config.min_source_similarity:
         return AcceptanceResult(
             accepted=False,
             text=source_ocr,
             reason="too_different_from_source",
+            features=features,
         )
 
     # --- Guard 2: neighbour proximity ---
     if prev_ocr is not None:
         sim_prev = _similarity(prev_ocr, corrected)
+        features.prev_similarity = round(sim_prev, 4)
         if sim_prev > sim_source + config.neighbour_margin:
             return AcceptanceResult(
                 accepted=False,
                 text=source_ocr,
                 reason="closer_to_previous_line",
+                features=features,
             )
 
     if next_ocr is not None:
         sim_next = _similarity(next_ocr, corrected)
+        features.next_similarity = round(sim_next, 4)
         if sim_next > sim_source + config.neighbour_margin:
             return AcceptanceResult(
                 accepted=False,
                 text=source_ocr,
                 reason="closer_to_next_line",
+                features=features,
             )
 
     # --- Guard 3: absorption of adjacent line ---
     # Detects when the correction is source + neighbour concatenated.
-    src_len = max(len(source_ocr), 1)
-
     if next_ocr and len(corrected) > src_len * config.absorption_length_ratio:
         concat_fwd = source_ocr + " " + next_ocr
         if _similarity(corrected, concat_fwd) > config.absorption_concat_similarity:
@@ -169,6 +189,7 @@ def check_line(
                 accepted=False,
                 text=source_ocr,
                 reason="absorbs_next_line",
+                features=features,
             )
 
     if prev_ocr and len(corrected) > src_len * config.absorption_length_ratio:
@@ -178,9 +199,10 @@ def check_line(
                 accepted=False,
                 text=source_ocr,
                 reason="absorbs_previous_line",
+                features=features,
             )
 
-    return AcceptanceResult(accepted=True, text=corrected)
+    return AcceptanceResult(accepted=True, text=corrected, features=features)
 
 
 def check_adjacent_duplicates(

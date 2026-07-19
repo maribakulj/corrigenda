@@ -1994,6 +1994,9 @@ class CorrectionPipeline:
                 lm.ocr_text, corrected, prev_ocr, next_ocr, config=self.guard_config
             )
             lm.corrected_text = result.text
+            # P3.5 — the guard's once-computed metrics ride the trace to
+            # the report's decision stage, accepted or not.
+            _set_trace(traces, lm, proposal_features=result.features)
             if result.accepted:
                 lm.status = LineStatus.CORRECTED
             else:

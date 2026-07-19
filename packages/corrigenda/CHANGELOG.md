@@ -20,8 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``output_alto_text``, wrong in an ALTO+PAGE library — and
   ``rewriter_path``; absent when no output file was rendered). The
   builder reads the ADR-011 `DecisionSet` (the terminal stage's
-  authority), completing slice C's reader migration. `LineOutcome`,
-  `ProposalStage`, `DecisionStage`, `DecisionReason` and
+  authority), completing slice C's reader migration. The decision stage
+  additionally carries ``features`` (`ProposalFeatures`) — the
+  similarity/length metrics the acceptance guard computed ONCE while
+  deciding (recorded on ``AcceptanceResult.features``), so no consumer
+  re-derives them; absent on lines that never reached per-line
+  acceptance. `LineOutcome`, `ProposalStage`, `ProposalFeatures`,
+  `DecisionStage`, `DecisionReason` and
   `ProjectionStage` join the public surface; `LineTrace` remains the
   Python-side working trace on ``CorrectionResult.traces`` — the two
   surfaces version independently (``docs/versioning.md``).

@@ -184,6 +184,7 @@ def build_line_outcomes(
                     status=d.status.value,
                     final_text=d.final_text,
                     reason=_structured_reason(d.fallback_reason),
+                    features=trace.proposal_features if trace else None,
                 ),
                 projection=projection,
             )

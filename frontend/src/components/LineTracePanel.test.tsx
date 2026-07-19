@@ -13,7 +13,12 @@ const baseTrace: LineOutcome = {
     input_text: 'La Fravce est graude',
     output_text: 'La France est grande',
   },
-  decision: { status: 'corrected', final_text: 'La France est grande', reason: null },
+  decision: {
+    status: 'corrected',
+    final_text: 'La France est grande',
+    reason: null,
+    features: null,
+  },
   projection: { extracted_text: 'La France est grande', rewriter_path: 'slow_path' },
 }
 
@@ -68,6 +73,7 @@ describe('LineTracePanel', () => {
             status: 'fallback',
             final_text: 'La Fravce est graude',
             reason: { code: 'absorbs_next_line', detail: null },
+            features: null,
           },
         }}
         onClose={vi.fn()}
@@ -89,6 +95,7 @@ describe('LineTracePanel', () => {
             status: 'fallback',
             final_text: 'La Fravce est graude',
             reason: { code: 'too_different_from_source', detail: '0.42 < 0.75' },
+            features: null,
           },
         }}
         onClose={vi.fn()}
