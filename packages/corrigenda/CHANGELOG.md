@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The three-line happy path (P3.12, §2).**
+  ``corrigenda.load(*paths)`` sniffs each file's root namespace (ALTO
+  or PAGE — one format per document, unique basenames) and returns a
+  ``LoadedDocument`` (manifest + the name → path map a run needs);
+  ``corrigenda.correct(document, producer=…)`` /
+  ``corrigenda.correct_sync(…)`` run a default pipeline around any
+  ``EditProducer`` — no observer, no adapter, no manifest plumbing
+  required for the simple case (no-op observer, default policies,
+  provenance from the producer's declared identity). Purely ADDITIVE:
+  ``CorrectionPipeline`` keeps every knob; the P3.11 top-level API
+  reduction remains a separate, deliberate decision. All four symbols
+  are lazy top-level exports (``import corrigenda`` still never loads
+  lxml); the quickstart now leads with the three-line path.
+
 - **EditScript preconditions — a script only applies to the document
   it was computed against (P3.10, §4).** ``EditScript`` records its
   ``protocol_version`` (``EDIT_PROTOCOL_VERSION``, currently ``"1"``;

@@ -111,6 +111,10 @@ if TYPE_CHECKING:  # typed view of the lazy symbols below
     from corrigenda.formats.page.rewriter import (
         rewrite_page_file as rewrite_page_file,
     )
+    from corrigenda.facade import LoadedDocument as LoadedDocument
+    from corrigenda.facade import correct as correct
+    from corrigenda.facade import correct_sync as correct_sync
+    from corrigenda.facade import load as load
     from corrigenda.integrations.llm import (
         OUTPUT_JSON_SCHEMA as OUTPUT_JSON_SCHEMA,
     )
@@ -149,6 +153,10 @@ _LAZY: dict[str, str] = {
     "rewrite_page_file": "corrigenda.formats.page.rewriter",
     "OUTPUT_JSON_SCHEMA": "corrigenda.integrations.llm",
     "SYSTEM_PROMPT": "corrigenda.integrations.llm",
+    "LoadedDocument": "corrigenda.facade",
+    "correct": "corrigenda.facade",
+    "correct_sync": "corrigenda.facade",
+    "load": "corrigenda.facade",
     "LLMEditProducer": "corrigenda.producers.llm_edit",
     "RulesProducer": "corrigenda.producers.rules",
     "SubstitutionRule": "corrigenda.producers.rules",
@@ -179,6 +187,11 @@ __all__ = [
     "rewrite_page_file",
     "AltoFormatAdapter",
     "PageFormatAdapter",
+    # Happy path (§2, P3.12 — lazy: formats)
+    "load",
+    "correct",
+    "correct_sync",
+    "LoadedDocument",
     # Pipeline
     "CorrectionPipeline",
     "CorrectionResult",

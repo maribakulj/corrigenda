@@ -38,6 +38,11 @@ PUBLIC_API_1_0 = sorted(
         "rewrite_page_file",
         "AltoFormatAdapter",
         "PageFormatAdapter",
+        # Happy path (§2, P3.12 — lazy: formats)
+        "load",
+        "correct",
+        "correct_sync",
+        "LoadedDocument",
         # Pipeline
         "CorrectionPipeline",
         "CorrectionResult",

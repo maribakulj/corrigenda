@@ -21,6 +21,26 @@ pip install corrigenda        # Python ≥ 3.11; pydantic v2 + lxml
 lazily on first use, so core-only consumers (guards, planner, edit
 protocol) can run where lxml isn't installed.
 
+## The three-line path (§2)
+
+```python
+import corrigenda
+from corrigenda import RulesProducer, default_french_ocr_rules
+
+document = corrigenda.load("page.xml")        # ALTO or PAGE, by namespace
+result = corrigenda.correct_sync(             # `await corrigenda.correct(...)` in async code
+    document, producer=RulesProducer(default_french_ocr_rules())
+)
+result.write("out/")                          # corrected XML + report.json
+```
+
+No observer, no adapter, no manifest plumbing: `load()` sniffs the root
+namespace and parses; `correct()`/`correct_sync()` run a default
+pipeline (no-op observer, default policies, provenance from the
+producer's declared identity). Any `EditProducer` fits — the LLM path
+below plugs in the same way. Every knob the façade hides (policies,
+observer, explicit metadata) lives on `CorrectionPipeline`.
+
 ## Parse → correct → write
 
 ```python
