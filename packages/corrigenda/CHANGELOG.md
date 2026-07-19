@@ -82,6 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   triple during the migration. The module-level `extract_output_texts`
   helpers remain for round-trip checks over arbitrary bytes.
 
+- **Manifest counters are computed (ADR-011, slice B).**
+  `DocumentManifest.total_pages/total_blocks/total_lines` derive from
+  the pages (`computed_field` — still present in the serialized shape);
+  they are no longer constructor inputs and the contradictory-totals
+  validator is retired: a derived count cannot lie. Constructors
+  passing the legacy kwargs keep working — the values are ignored.
+
 - **`CorrectionReport.format_losses` is finally populated.** The field
   existed since the PAGE rewriter grew its granularity counters
   (`words_dropped`, `custom_offset_stripped`, …) but no pipeline run

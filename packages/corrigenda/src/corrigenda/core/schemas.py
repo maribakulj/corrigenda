@@ -5,7 +5,7 @@ import json
 import uuid
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -210,9 +210,6 @@ class DocumentManifest(BaseModel):
     document_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     source_files: list[str]
     pages: list[PageManifest]
-    total_pages: int = Field(ge=0)
-    total_blocks: int = Field(ge=0)
-    total_lines: int = Field(ge=0)
     #: Format the sources were parsed as ("alto" | "page"), stamped by the
     #: format builders so the engine can derive the matching adapter at
     #: write time. ``None`` on hand-built manifests: writing output then
@@ -220,32 +217,25 @@ class DocumentManifest(BaseModel):
     #: no implicit default format.
     source_format: str | None = None
 
-    @model_validator(mode="after")
-    def _totals_match_content(self) -> "DocumentManifest":
-        """Contradictory counters are a construction bug, not data.
+    # ADR-011 — the counters are DERIVED from the pages. A stored copy
+    # could contradict the content (the old validator existed to catch
+    # exactly that lie); a computed one cannot. ``computed_field`` keeps
+    # them in the serialized shape.
 
-        The format builders always compute these from the pages; a
-        hand-built manifest that lies about its totals would silently
-        skew progress metrics and reports downstream.
-        """
-        if self.total_pages != len(self.pages):
-            raise ValueError(
-                f"total_pages={self.total_pages} but manifest carries "
-                f"{len(self.pages)} page(s)"
-            )
-        real_blocks = sum(len(p.blocks) for p in self.pages)
-        if self.total_blocks != real_blocks:
-            raise ValueError(
-                f"total_blocks={self.total_blocks} but manifest carries "
-                f"{real_blocks} block(s)"
-            )
-        real_lines = sum(len(p.lines) for p in self.pages)
-        if self.total_lines != real_lines:
-            raise ValueError(
-                f"total_lines={self.total_lines} but manifest carries "
-                f"{real_lines} line(s)"
-            )
-        return self
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def total_pages(self) -> int:
+        return len(self.pages)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def total_blocks(self) -> int:
+        return sum(len(p.blocks) for p in self.pages)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def total_lines(self) -> int:
+        return sum(len(p.lines) for p in self.pages)
 
 
 # ---------------------------------------------------------------------------
