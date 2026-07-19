@@ -3,21 +3,21 @@
 The pipeline takes a parsed :class:`DocumentManifest`, drives the chunk
 planner, asks the injected :class:`EditProducer` for an
 :class:`EditScript` per chunk, validates the result, reconciles hyphen
-pairs, and writes outputs via the injected :class:`OutputWriter`. It
-depends only on the Protocols in :mod:`corrigenda.core.protocols` — no
-job store, no FastAPI, no filesystem path manipulation beyond reading
-source files. Credentials never reach the pipeline: an LLM's API key
-lives inside its producer (see :class:`LLMEditProducer` and the
+pairs, and renders the corrected XML in memory. It depends only on the
+Protocols in :mod:`corrigenda.core.protocols` — no job store, no
+FastAPI, no filesystem path manipulation beyond reading source files.
+Credentials never reach the pipeline: an LLM's API key lives inside its
+producer (see :class:`LLMEditProducer` and the
 :meth:`CorrectionPipeline.for_provider` convenience).
 
 Side effects:
   - producer calls via :class:`EditProducer` (LLM HTTP, rules engine, …)
   - Event notifications via :class:`PipelineObserver`
-  - Persistence via :class:`OutputWriter`
 
-Statistics (retry count, fallback count, total chunks, hyphen pairs
-reconciled) are returned in :class:`CorrectionResult` so the caller can
-update its job state.
+The engine never persists (ADR-011): the corrected artefacts, the §9
+report and the run's statistics all travel on
+:class:`CorrectionResult`; the caller persists them
+(:meth:`CorrectionResult.write`, or its own transaction).
 """
 
 from __future__ import annotations
@@ -66,7 +66,6 @@ from corrigenda.core.protocols import (
     BaseProvider,
     EditProducer,
     FormatAdapter,
-    OutputWriter,
     PipelineObserver,
     ProviderPermanentError,
     ProviderTransientError,
@@ -555,14 +554,13 @@ class CorrectionResult:
     report: CorrectionReport
     #: §4 — the normalized EditScript the run applied, accumulated across
     #: chunks. In v1 the LLM path emits ``replace_line`` ops (byte-identical
-    #: to the direct correction); a dry run (``apply=False``) returns it as
-    #: the whole deliverable, and a rules/​span producer would surface its
+    #: to the direct correction); a rules/​span producer surfaces its
     #: ``replace_span`` ops here too.
     edit_script: EditScript
     #: ADR-011 — the corrected artefacts themselves, keyed by source file
-    #: name, computed on EVERY run (dry runs included): the result IS the
-    #: output; persisting it is the caller's choice (:meth:`write`, or a
-    #: host-owned transaction like the demo backend's staging writer).
+    #: name, computed on EVERY run: the result IS the output; persisting
+    #: it is the caller's choice (:meth:`write`, or a host-owned
+    #: transaction like the demo backend's staging writer).
     corrected_files: dict[str, bytes] = field(default_factory=dict)
 
     def write(self, directory: str | Path) -> list[Path]:
@@ -645,7 +643,6 @@ class CorrectionPipeline:
         self,
         producer: EditProducer,
         observer: PipelineObserver,
-        output_writer: OutputWriter,
         config: ChunkPlannerConfig | None = None,
         retry_policy: RetryPolicy | None = None,
         guard_config: GuardConfig | None = None,
@@ -657,7 +654,6 @@ class CorrectionPipeline:
     ) -> None:
         self.producer = producer
         self.observer = observer
-        self.output_writer = output_writer
         self.config = config or ChunkPlannerConfig()
         # F9 — retry ramp / attempt cap / per-chunk budget. Default reproduces
         # the historical temperature ramp (0.0/0.3/0.5) and 3-attempt cap.
@@ -680,11 +676,11 @@ class CorrectionPipeline:
         self.provider_name = provider_name
         self.model = model
         # Reentrancy guard (ADR-005). Per-run state lives in RunContext,
-        # but the injected observer and output_writer are shared instance
-        # dependencies: two concurrent runs would interleave their events
-        # and overwrite each other's outputs (write_trace has no run
-        # discriminator). One instance therefore still means one run at
-        # a time; concurrent callers build one pipeline per run.
+        # but the injected observer is a shared instance dependency (and
+        # run() still mutates its input manifest until ADR-011 slice E):
+        # two concurrent runs would interleave their events. One instance
+        # therefore still means one run at a time; concurrent callers
+        # build one pipeline per run.
         self._running = False
 
     @classmethod
@@ -696,7 +692,6 @@ class CorrectionPipeline:
         model: str,
         provider_name: str = "unknown",
         observer: PipelineObserver,
-        output_writer: OutputWriter,
         config: ChunkPlannerConfig | None = None,
         retry_policy: RetryPolicy | None = None,
         guard_config: GuardConfig | None = None,
@@ -726,7 +721,6 @@ class CorrectionPipeline:
         return cls(
             producer=producer,
             observer=observer,
-            output_writer=output_writer,
             config=config,
             retry_policy=retry_policy,
             guard_config=guard_config,
@@ -784,7 +778,6 @@ class CorrectionPipeline:
         source_files: dict[str, Path],
         run_id: str | None = None,
         should_abort: Callable[[], bool] | None = None,
-        apply: bool = True,
         page_images: dict[str, ImageRef] | None = None,
     ) -> CorrectionResult:
         """Run the full pipeline. Mutates `document_manifest.pages` in place.
@@ -792,10 +785,9 @@ class CorrectionPipeline:
         **Concurrency contract (ADR-005)** — one instance, one run at
         a time. All per-run state lives in a fresh :class:`RunContext`
         created here (the pipeline instance itself carries only
-        immutable configuration), but the injected ``observer`` and
-        ``output_writer`` are shared instance dependencies: two
-        concurrent runs would interleave their events and overwrite each
-        other's outputs. Guarded: a concurrent call raises
+        immutable configuration), but the injected ``observer`` is a
+        shared instance dependency: two concurrent runs would
+        interleave their events. Guarded: a concurrent call raises
         :class:`RuntimeError` immediately. Instances are not
         thread-safe; concurrent callers build one pipeline per run.
         The input manifest is CONSUMED (mutated in place); re-running on
@@ -825,18 +817,18 @@ class CorrectionPipeline:
 
         ``should_abort`` (F10) is an optional cancellation probe. It is
         polled between pages and between chunks; when it returns ``True``
-        the run raises :class:`CorrectionAborted` and **no output is
-        written** (neither corrected XML nor trace). A provider call
-        already in flight is not interrupted — cancellation is cooperative
-        and observed only at chunk/page boundaries.
+        the run raises :class:`CorrectionAborted` and no result is
+        produced. A provider call already in flight is not interrupted —
+        cancellation is cooperative and observed only at chunk/page
+        boundaries.
 
-        ``apply`` (§9 dry-run) — when ``False``, the full pipeline runs
-        (production, guards, reconciliation, and an in-memory rewrite so the
-        report's ``rewriter_path`` / ``output_alto_text`` are populated) but
-        the injected ``OutputWriter`` is **never called**: no corrected XML
-        and no trace are persisted. The returned :class:`CorrectionResult`
-        (and its :class:`CorrectionReport`) is the whole deliverable —
-        useful for preview or for a consumer benchmarking without writing.
+        **Persistence (ADR-011)** — the engine never writes: the
+        returned :class:`CorrectionResult` carries the corrected XML
+        (:attr:`~CorrectionResult.corrected_files`) and the §9 report,
+        and persisting them is the caller's choice —
+        :meth:`CorrectionResult.write` for the simple case, or a
+        host-owned transaction (like the demo backend's staging writer)
+        when the host needs commit/discard semantics.
         """
         if self._running:
             raise RuntimeError(
@@ -851,7 +843,6 @@ class CorrectionPipeline:
                 source_files=source_files,
                 run_id=run_id,
                 should_abort=should_abort,
-                apply=apply,
                 page_images=page_images,
             )
         finally:
@@ -864,7 +855,6 @@ class CorrectionPipeline:
         source_files: dict[str, Path],
         run_id: str | None,
         should_abort: Callable[[], bool] | None,
-        apply: bool,
         page_images: dict[str, ImageRef] | None,
     ) -> CorrectionResult:
         """Body of :meth:`run`, executing under the reentrancy guard."""
@@ -1018,12 +1008,11 @@ class CorrectionPipeline:
         # for a document where every line carries a terminal decision.
         decisions = derive_decision_set(document_manifest, traces)
 
-        format_losses, corrected_files = await self._write_outputs(
+        format_losses, corrected_files = await self._render_outputs(
             document_manifest=document_manifest,
             source_files=source_files,
             traces=traces,
             decisions=decisions,
-            apply=apply,
         )
 
         report = CorrectionReport(
@@ -1035,13 +1024,6 @@ class CorrectionPipeline:
             # written).
             format_losses=format_losses or None,
         )
-
-        # §9 unification — trace.json IS the CorrectionReport. One artefact,
-        # one versioned schema; the parallel JobTrace shape is gone.
-        if apply:
-            self.output_writer.write_trace(
-                traces_payload=report.model_dump_json(indent=2),
-            )
 
         # Line-level fallback accounting, read from the DecisionSet
         # (ADR-011): it covers every path that leaves a line at its OCR
@@ -1123,7 +1105,6 @@ class CorrectionPipeline:
         source_files: dict[str, Path],
         run_id: str | None = None,
         should_abort: Callable[[], bool] | None = None,
-        apply: bool = True,
         page_images: dict[str, ImageRef] | None = None,
     ) -> CorrectionResult:
         """Synchronous façade over :meth:`run` (§8.1).
@@ -1140,7 +1121,6 @@ class CorrectionPipeline:
                 source_files=source_files,
                 run_id=run_id,
                 should_abort=should_abort,
-                apply=apply,
                 page_images=page_images,
             )
         )
@@ -2135,39 +2115,34 @@ class CorrectionPipeline:
             )
 
     # ------------------------------------------------------------------
-    # Output writing (rewriter + trace assembly)
+    # Output rendering (rewriter + trace assembly)
     # ------------------------------------------------------------------
 
-    async def _write_outputs(
+    async def _render_outputs(
         self,
         *,
         document_manifest: DocumentManifest,
         source_files: dict[str, Path],
         traces: dict[LineRef, LineTrace],
         decisions: DecisionSet,
-        apply: bool = True,
     ) -> tuple[dict[str, int], dict[str, bytes]]:
-        """Rewrite corrected files, update traces, and (when ``apply``)
-        persist via the writer. Returns ``(losses, corrected_files)`` —
-        the format's granularity-loss counters aggregated across every
-        file (for ``CorrectionReport.format_losses``) and the corrected
-        bytes per source file name (for
-        ``CorrectionResult.corrected_files``).
+        """Rewrite corrected files in memory and update the traces.
+        Returns ``(losses, corrected_files)`` — the format's
+        granularity-loss counters aggregated across every file (for
+        ``CorrectionReport.format_losses``) and the corrected bytes per
+        source file name (for ``CorrectionResult.corrected_files``).
 
-        §9 dry-run — the rewrite always runs in memory so the report's
-        ``rewriter_path`` / ``output_alto_text`` are populated, but when
-        ``apply`` is ``False`` the injected ``OutputWriter`` is never
-        called: nothing is persisted.
-
-        ADR-011 — the projection invariant verifies against the
+        ADR-011 — pure computation: nothing is persisted here (the
+        engine has no writer; the caller persists from the result). The
+        projection invariant verifies against the
         :class:`RewriteResult`'s texts, read off the very tree the bytes
         were serialized from: the second full parse of the output is
-        gone. The heavy calls (``rewrite_file``: a full lxml
-        parse/rewrite/serialize of the source file; ``write_corrected``:
-        disk IO) run in worker threads so a ~100 MiB rewrite no longer
-        freezes the host's event loop (SSE keepalives, /health).
-        Observer events stay ON the loop — emit sites must never run
-        from a thread (the store's queues are not thread-safe).
+        gone. The heavy ``rewrite_file`` call (a full lxml
+        parse/rewrite/serialize of the source file) runs in a worker
+        thread so a ~100 MiB rewrite no longer freezes the host's event
+        loop (SSE keepalives, /health). Observer events stay ON the
+        loop — emit sites must never run from a thread (the store's
+        queues are not thread-safe).
         """
         # §11 — provenance stamped into every corrected file's processingStep.
         from corrigenda import __version__ as _lib_version
@@ -2207,12 +2182,6 @@ class CorrectionPipeline:
             _verify_projection(source_name, pages_for_file, result.texts, decisions)
             corrected_files[source_name] = result.xml_bytes
 
-            if apply:
-                await asyncio.to_thread(
-                    self.output_writer.write_corrected,
-                    source_stem=xml_path.stem,
-                    xml_bytes=result.xml_bytes,
-                )
             # rewriter_stats observability event — pure read-only diagnostic
             # surfacing how each line classified (UNTOUCHED / SUBS_ONLY /
             # FAST_PATH / SLOW_PATH). Zero impact on the corrected XML.
@@ -2248,8 +2217,8 @@ class CorrectionPipeline:
                     if t is not None:
                         t.output_alto_text = otxt
 
-        # Trace persistence moved to run(): trace.json IS the
-        # CorrectionReport — one §9 artefact, not a parallel JobTrace shape.
+        # No trace persistence anywhere in the engine: trace.json IS the
+        # CorrectionReport (§9), carried on the result for the caller.
         return losses_total, corrected_files
 
 

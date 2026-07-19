@@ -39,7 +39,6 @@ from corrigenda.core.pipeline import (
 from corrigenda.core.protocols import (
     BaseProvider,
     EditProducer,
-    OutputWriter,
     PipelineObserver,
     require_page_images,
 )
@@ -188,7 +187,6 @@ __all__ = [
     "CorrectionAborted",
     # Ports
     "BaseProvider",
-    "OutputWriter",
     "PipelineObserver",
     # LLM contract (lazy — producers)
     "OUTPUT_JSON_SCHEMA",

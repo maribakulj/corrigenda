@@ -49,7 +49,6 @@ def _pipeline(observer) -> CorrectionPipeline:
     return CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=observer,
-        output_writer=observer,
         provider_name="rules",
         model="v1",
     )
@@ -71,7 +70,6 @@ async def test_absorbed_chunk_error_leaves_no_line_undecided(monkeypatch) -> Non
     result = await _pipeline(observer).run(
         document_manifest=doc,
         source_files={_SAMPLE.name: _SAMPLE},
-        apply=False,
     )
 
     statuses = {
@@ -119,7 +117,6 @@ async def test_partial_decisions_survive_the_absorb(monkeypatch) -> None:
     pipeline = CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=observer,
-        output_writer=observer,
         config=ChunkPlannerConfig(
             max_input_chars_per_request=30,
             max_lines_per_request=2,
@@ -129,9 +126,7 @@ async def test_partial_decisions_survive_the_absorb(monkeypatch) -> None:
         provider_name="rules",
         model="v1",
     )
-    await pipeline.run(
-        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}, apply=False
-    )
+    await pipeline.run(document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE})
 
     statuses = [lm.status for page in doc.pages for lm in page.lines]
     assert LineStatus.PENDING not in statuses

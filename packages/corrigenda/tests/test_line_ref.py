@@ -60,12 +60,11 @@ async def test_result_traces_are_keyed_by_line_ref() -> None:
     pipeline = CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=_Null(),
-        output_writer=_Null(),
         provider_name="rules",
         model="v1",
     )
     result = await pipeline.run(
-        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}, apply=False
+        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
     )
     assert result.traces, "the run must have traced its lines"
     for key, trace in result.traces.items():

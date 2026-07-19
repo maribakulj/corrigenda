@@ -67,7 +67,6 @@ PUBLIC_API_1_0 = sorted(
         "CorrectionAborted",
         # Ports
         "BaseProvider",
-        "OutputWriter",
         "PipelineObserver",
         # LLM contract (lazy — producers)
         "OUTPUT_JSON_SCHEMA",
@@ -131,7 +130,6 @@ def test_run_and_run_sync_signatures_are_pinned():
         "source_files",
         "run_id",
         "should_abort",
-        "apply",
         "page_images",
     ]
     assert _param_names(corrigenda.CorrectionPipeline.run) == expected
@@ -144,8 +142,11 @@ def test_run_and_run_sync_signatures_are_pinned():
 def test_for_provider_signature_is_pinned():
     params = _param_names(corrigenda.CorrectionPipeline.for_provider)
     assert params[0] == "provider"
-    for required in ("api_key", "model", "provider_name", "observer", "output_writer"):
+    for required in ("api_key", "model", "provider_name", "observer"):
         assert required in params
+    # ADR-011 slice D-fin — persistence left the engine surface for good.
+    assert "output_writer" not in params
+    assert "output_writer" not in _param_names(corrigenda.CorrectionPipeline.__init__)
 
 
 def test_correction_report_json_keys_are_pinned():

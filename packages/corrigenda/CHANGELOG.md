@@ -7,15 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING — persistence left the engine surface (ADR-011, slice
+  D-fin).** `CorrectionPipeline(output_writer=…)` /
+  `for_provider(output_writer=…)` and `run(apply=…)` are gone, and the
+  `OutputWriter` protocol is no longer part of `corrigenda` (the demo
+  backend now owns its own port in `app.protocols`). The engine never
+  writes: every run computes `result.corrected_files` + `result.report`
+  and the caller persists — `result.write(dir)` for the simple case
+  (corrected XML under the source names + `report.json`), or a
+  host-owned transaction. What `apply=False` used to buy is now every
+  run's behaviour. The ADR-005 one-run-per-instance guard remains (its
+  surviving rationale: shared observer + in-place manifest mutation
+  until slice E).
+
 ### Added
 
 - **The result carries its artefacts (ADR-011, slice D).**
   `CorrectionResult.corrected_files` maps each source file name to its
   corrected XML bytes on EVERY run — dry runs included, where the bytes
   were previously unreachable — and `result.write(dir)` persists the
-  artefacts plus the §9 report (`report.json`) caller-side. The
-  injected `OutputWriter` keeps working unchanged; this is the
-  migration path for retiring it from the engine surface.
+  artefacts plus the §9 report (`report.json`) caller-side.
 
 - **Terminal-decision invariant — no line ends a run undecided.** The
   page loop's ADR-008 absorb branch (recoverable `CorrectionError` →

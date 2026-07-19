@@ -32,7 +32,7 @@ from corrigenda.core.schemas import (
 )
 from corrigenda.formats.alto.parser import build_document_manifest
 
-from tests._pipeline_harness import DictProvider, RecordingObserver, _NoopWriter
+from tests._pipeline_harness import DictProvider, RecordingObserver
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -226,7 +226,6 @@ def test_cross_chunk_adjacent_duplicate_is_reverted(tmp_path: Path):
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
         config=ChunkPlannerConfig(
             max_input_chars_per_request=200,  # force WINDOW granularity
             max_lines_per_request=50,
@@ -242,7 +241,6 @@ def test_cross_chunk_adjacent_duplicate_is_reverted(tmp_path: Path):
     result = pipeline.run_sync(
         document_manifest=doc,
         source_files={"doc.xml": path},
-        apply=False,
     )
 
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
@@ -274,7 +272,6 @@ def test_intra_chunk_duplicates_still_reverted(tmp_path: Path):
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
         config=ChunkPlannerConfig(
             max_input_chars_per_request=200,
             max_lines_per_request=50,
@@ -283,9 +280,7 @@ def test_intra_chunk_duplicates_still_reverted(tmp_path: Path):
         ),
         guard_config=GuardConfig(min_source_similarity=0.0, neighbour_margin=1.0),
     )
-    pipeline.run_sync(
-        document_manifest=doc, source_files={"doc.xml": path}, apply=False
-    )
+    pipeline.run_sync(document_manifest=doc, source_files={"doc.xml": path})
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
     assert lines["L1"].corrected_text == lines["L1"].ocr_text
     assert lines["L2"].corrected_text == lines["L2"].ocr_text
@@ -326,13 +321,11 @@ def test_page_seam_duplicate_not_reverted_across_DIFFERENT_files(tmp_path: Path)
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
         guard_config=GuardConfig(min_source_similarity=0.0, neighbour_margin=1.0),
     )
     pipeline.run_sync(
         document_manifest=doc,
         source_files={"A.xml": file_a, "B.xml": file_b},
-        apply=False,
     )
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
     # Neither seam line was reverted: the correction stands, status CORRECTED.

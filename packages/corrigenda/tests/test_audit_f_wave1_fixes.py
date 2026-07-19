@@ -114,14 +114,13 @@ def _reconciled_chain(*ocr_texts: str) -> list[LineManifest]:
 
 def _make_pipeline():
     from corrigenda.core.pipeline import CorrectionPipeline
-    from tests._pipeline_harness import DictProvider, RecordingObserver, _NoopWriter
+    from tests._pipeline_harness import DictProvider, RecordingObserver
 
     return CorrectionPipeline.for_provider(
         DictProvider({}),
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
     )
 
 
@@ -171,7 +170,7 @@ def test_f3_three_run_duplicate_across_chunk_boundary_reverts_third(tmp_path):
     from corrigenda.core.pipeline import CorrectionPipeline
     from corrigenda.core.schemas import ChunkPlannerConfig, GuardConfig
     from corrigenda.formats.alto.parser import build_document_manifest
-    from tests._pipeline_harness import DictProvider, RecordingObserver, _NoopWriter
+    from tests._pipeline_harness import DictProvider, RecordingObserver
     from tests.test_planner_budget_and_cross_chunk_guard import _write_doc
 
     path = _write_doc(tmp_path)
@@ -186,7 +185,6 @@ def test_f3_three_run_duplicate_across_chunk_boundary_reverts_third(tmp_path):
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
         config=ChunkPlannerConfig(
             max_input_chars_per_request=200,
             max_lines_per_request=50,
@@ -195,9 +193,7 @@ def test_f3_three_run_duplicate_across_chunk_boundary_reverts_third(tmp_path):
         ),
         guard_config=GuardConfig(min_source_similarity=0.0, neighbour_margin=1.0),
     )
-    pipeline.run_sync(
-        document_manifest=doc, source_files={"doc.xml": path}, apply=False
-    )
+    pipeline.run_sync(document_manifest=doc, source_files={"doc.xml": path})
 
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
     for lid in ("L2", "L3", "L4"):
@@ -268,7 +264,7 @@ def test_f3_twin_three_run_duplicate_across_page_seam_reverts_third(tmp_path):
     from corrigenda.core.pipeline import CorrectionPipeline
     from corrigenda.core.schemas import GuardConfig
     from corrigenda.formats.alto.parser import build_document_manifest
-    from tests._pipeline_harness import DictProvider, RecordingObserver, _NoopWriter
+    from tests._pipeline_harness import DictProvider, RecordingObserver
 
     path = _seam_doc(tmp_path)
     doc = build_document_manifest([(path, "seam.xml")])
@@ -279,12 +275,9 @@ def test_f3_twin_three_run_duplicate_across_page_seam_reverts_third(tmp_path):
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
         guard_config=GuardConfig(min_source_similarity=0.0, neighbour_margin=1.0),
     )
-    pipeline.run_sync(
-        document_manifest=doc, source_files={"seam.xml": path}, apply=False
-    )
+    pipeline.run_sync(document_manifest=doc, source_files={"seam.xml": path})
 
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
     for lid in ("L1", "L2", "L3"):
@@ -326,7 +319,7 @@ async def test_f4_producer_ops_do_not_collide_across_files(tmp_path):
     from corrigenda.core.editing import EditScript
     from corrigenda.formats.alto.parser import build_document_manifest
     from corrigenda.producers.rules import RulesProducer, SubstitutionRule
-    from tests._pipeline_harness import RecordingObserver, _NoopWriter
+    from tests._pipeline_harness import RecordingObserver
 
     path_a = tmp_path / "a.xml"
     path_b = tmp_path / "b.xml"
@@ -337,14 +330,12 @@ async def test_f4_producer_ops_do_not_collide_across_files(tmp_path):
     pipeline = CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("frauce", "france")]),
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
         provider_name="rules",
         model="fr-ocr-v1",
     )
     result = await pipeline.run(
         document_manifest=doc,
         source_files={"a.xml": path_a, "b.xml": path_b},
-        apply=False,
     )
 
     ops = result.edit_script.ops
@@ -856,7 +847,7 @@ def test_review_w1_duplicate_across_downgrade_subchunk_seam_reverts(
     from corrigenda.core.pipeline import CorrectionPipeline
     from corrigenda.core.schemas import ChunkPlannerConfig, GuardConfig, RetryPolicy
     from corrigenda.formats.alto.parser import build_document_manifest
-    from tests._pipeline_harness import RecordingObserver, _NoopWriter
+    from tests._pipeline_harness import RecordingObserver
     from tests.test_planner_budget_and_cross_chunk_guard import _write_doc
 
     monkeypatch.setattr(
@@ -902,7 +893,6 @@ def test_review_w1_duplicate_across_downgrade_subchunk_seam_reverts(
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
         # Defaults plan the 8-line doc as ONE chunk — the pre-fix gate
         # `len(plan.chunks) > 1` then skipped the boundary pass outright.
         config=ChunkPlannerConfig(),
@@ -911,9 +901,7 @@ def test_review_w1_duplicate_across_downgrade_subchunk_seam_reverts(
             max_attempts=1, temperatures=(0.0,), per_chunk_budget=30
         ),
     )
-    pipeline.run_sync(
-        document_manifest=doc, source_files={"doc.xml": path}, apply=False
-    )
+    pipeline.run_sync(document_manifest=doc, source_files={"doc.xml": path})
 
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
     # Identity corrections on the other lines survive untouched…
@@ -938,7 +926,7 @@ async def test_review_w1_edit_script_ops_attributable_across_files(tmp_path):
     from corrigenda.core.editing import EditScript, apply_edit_script
     from corrigenda.formats.alto.parser import build_document_manifest
     from corrigenda.producers.rules import RulesProducer, SubstitutionRule
-    from tests._pipeline_harness import RecordingObserver, _NoopWriter
+    from tests._pipeline_harness import RecordingObserver
 
     path_a = tmp_path / "a.xml"
     path_b = tmp_path / "b.xml"
@@ -949,14 +937,12 @@ async def test_review_w1_edit_script_ops_attributable_across_files(tmp_path):
     pipeline = CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("frauce", "france")]),
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
         provider_name="rules",
         model="fr-ocr-v1",
     )
     result = await pipeline.run(
         document_manifest=doc,
         source_files={"a.xml": path_a, "b.xml": path_b},
-        apply=False,
     )
 
     ops = result.edit_script.ops

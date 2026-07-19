@@ -2,7 +2,8 @@
 
 V4.1-L: per-run state lives in a fresh RunContext per execution — the
 instance carries only immutable configuration. The reentrancy guard
-stays because the injected observer/output_writer are shared: two
+stays because the injected observer is shared (and the manifest is
+mutated in place until ADR-011 slice E): two
 concurrent runs would interleave events and overwrite outputs. The
 guard turns that into an immediate RuntimeError; sequential re-use
 stays supported and leaks no state across runs.
@@ -56,7 +57,6 @@ def _pipeline(producer: Any) -> CorrectionPipeline:
     return CorrectionPipeline(
         producer=producer,
         observer=_NullObserver(),
-        output_writer=_NullWriter(),
     )
 
 
@@ -151,7 +151,6 @@ def test_sequential_runs_share_no_state() -> None:
                 await pipeline.run(
                     document_manifest=manifest,
                     source_files={"sample.xml": SAMPLE_XML},
-                    apply=False,
                 )
             )
         first, second = results

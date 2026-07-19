@@ -112,12 +112,11 @@ async def _run(tmp_path: Path, failing: set[str]):
     pipeline = CorrectionPipeline(
         producer=_FailsPages(failing),
         observer=_Null(),
-        output_writer=_Null(),
         retry_policy=RetryPolicy(transient_backoff_base=0.0, output_backoff_base=0.0),
         provider_name="x",
         model="m",
     )
-    await pipeline.run(document_manifest=doc, source_files={src.name: src}, apply=False)
+    await pipeline.run(document_manifest=doc, source_files={src.name: src})
     return doc
 
 

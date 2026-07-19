@@ -58,12 +58,16 @@ rewriter already knew.
   the manifests. Remaining: the report builder flips (P3.5's LineOutcome
   restructure is its natural vehicle); the pointer fields' retirement
   folds in ADR-010's `BOTH`-as-derived-detail.
-- **Slice D** (additive half landed): `CorrectionResult.corrected_files`
-  carries every corrected XML (dry runs included — the result IS the
-  output) and `result.write(dir)` persists artefacts + report
-  caller-side. Remaining: consumers migrate, then `OutputWriter` and
-  `apply=` leave the engine surface; the backend keeps its own
-  commit/discard transaction either way.
+- **Slice D (landed)**: `CorrectionResult.corrected_files` carries
+  every corrected XML (the result IS the output) and
+  `result.write(dir)` persists artefacts + report caller-side. D-fin:
+  `OutputWriter` and `apply=` left the engine surface — the engine
+  never persists; the backend's JobRunner stages the result's bytes
+  through ITS OWN writer port (`app.protocols.OutputWriter`, moved
+  out of the library) and keeps the commit/discard transaction; the
+  quickstart and docs migrated to `result.write(dir)`. ADR-005's guard
+  survives on its remaining rationale (shared observer + manifest
+  mutation) until slice E.
 - **Slice E**: immutable `Source*` models, mutation ends, `_running`
   removed, ADR-005 replaced; P0's "two runs on two deep copies"
   property becomes "two runs on the SAME document".

@@ -333,7 +333,6 @@ class JobRunner:
             observer=CompositeObserver(
                 [JobStoreObserver(self.job_store, job_id), LoggingObserver()]
             ),
-            output_writer=output_writer,
         )
         # `run_id` is corrigenda's generic identifier; we feed it the
         # server-side `job_id` so trace.json correlates with the API.
@@ -344,6 +343,22 @@ class JobRunner:
             # Plan V2.2 — the cancel endpoint's event, polled by the
             # pipeline between pages and chunks.
             should_abort=should_abort,
+        )
+
+        # ADR-011 slice D — the engine never persists: the result carries
+        # the corrected XML and the §9 report, and the backend stages them
+        # here through ITS writer (the P0-4 commit/discard transaction in
+        # run() stays unchanged). Disk IO runs off the event loop so a
+        # large artefact set never blocks SSE keepalives or /health.
+        for source_name, xml_bytes in result.corrected_files.items():
+            await asyncio.to_thread(
+                output_writer.write_corrected,
+                source_stem=source_files[source_name].stem,
+                xml_bytes=xml_bytes,
+            )
+        await asyncio.to_thread(
+            output_writer.write_trace,
+            traces_payload=result.report.model_dump_json(indent=2),
         )
 
         self.job_store.update_job(

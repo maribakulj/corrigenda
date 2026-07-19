@@ -76,26 +76,6 @@ class _Null:
     def on_event(self, *a, **k):
         pass
 
-    def write_corrected(self, *, source_stem, xml_bytes):
-        pass
-
-    def write_trace(self, *, traces_payload):
-        pass
-
-
-class _Capture:
-    def __init__(self) -> None:
-        self.outputs: dict[str, bytes] = {}
-
-    def on_event(self, *a, **k):
-        pass
-
-    def write_corrected(self, *, source_stem, xml_bytes):
-        self.outputs[source_stem] = xml_bytes
-
-    def write_trace(self, *, traces_payload):
-        pass
-
 
 class _IdentityProducer:
     """Proposes nothing — every line must come out exactly as it went in."""
@@ -127,7 +107,6 @@ async def _run_partition(
     pipeline = CorrectionPipeline(
         producer=RulesProducer(_RULES),
         observer=_Null(),
-        output_writer=_Null(),
         config=config,
         provider_name="rules",
         model="fr-ocr-v1",
@@ -135,7 +114,6 @@ async def _run_partition(
     await pipeline.run(
         document_manifest=doc,
         source_files={path.name: path},
-        apply=False,
     )
     return doc
 
@@ -196,24 +174,23 @@ async def test_final_text_is_invariant_under_chunk_partition_on_sample() -> None
 def test_identity_producer_preserves_content_and_geometry(doc: str) -> None:
     path = _write_tmp(doc)
     try:
-        writer = _Capture()
 
-        async def run() -> None:
+        async def run() -> dict[str, bytes]:
             manifest = build_document_manifest([(path, path.name)])
             pipeline = CorrectionPipeline(
                 producer=_IdentityProducer(),
                 observer=_Null(),
-                output_writer=writer,
                 provider_name="identity",
                 model="none",
             )
-            await pipeline.run(
+            result = await pipeline.run(
                 document_manifest=manifest,
                 source_files={path.name: path},
             )
+            return result.corrected_files
 
-        asyncio.run(run())
-        out = next(iter(writer.outputs.values()))
+        corrected = asyncio.run(run())
+        out = next(iter(corrected.values()))
         src = doc.encode("utf-8")
         assert _string_contents(out) == _string_contents(src)
         assert _textline_geometry(out) == _textline_geometry(src)
@@ -346,24 +323,23 @@ def test_identity_producer_preserves_rich_docs(
     doc, _ = doc_and_roles
     path = _write_tmp(doc)
     try:
-        writer = _Capture()
 
-        async def run() -> None:
+        async def run() -> dict[str, bytes]:
             manifest = build_document_manifest([(path, path.name)])
             pipeline = CorrectionPipeline(
                 producer=_IdentityProducer(),
                 observer=_Null(),
-                output_writer=writer,
                 provider_name="identity",
                 model="none",
             )
-            await pipeline.run(
+            result = await pipeline.run(
                 document_manifest=manifest,
                 source_files={path.name: path},
             )
+            return result.corrected_files
 
-        asyncio.run(run())
-        out = next(iter(writer.outputs.values()))
+        corrected = asyncio.run(run())
+        out = next(iter(corrected.values()))
         src = doc.encode("utf-8")
         assert _string_contents(out) == _string_contents(src)
         assert _textline_geometry(out) == _textline_geometry(src)

@@ -1,7 +1,7 @@
 """Wave-3 adversarial-review follow-up — the output rewrite ran inline
 on the event loop.
 
-``_write_outputs`` calls ``adapter.rewrite_file`` (a full lxml
+``_render_outputs`` calls ``adapter.rewrite_file`` (a full lxml
 parse/rewrite/serialize of the source file — ~100 MiB corpora) and
 ``adapter.extract_texts`` synchronously from the async ``run()``. In the
 backend, that blocks SSE keepalives and /health for the whole rewrite,
@@ -19,7 +19,7 @@ import time
 
 from corrigenda.core.pipeline import CorrectionPipeline
 from corrigenda.formats.alto.parser import build_document_manifest
-from tests._pipeline_harness import DictProvider, RecordingObserver, _NoopWriter
+from tests._pipeline_harness import DictProvider, RecordingObserver
 from tests.test_planner_budget_and_cross_chunk_guard import _write_doc
 
 _REWRITE_DELAY = 0.8
@@ -52,7 +52,6 @@ def test_review_w3_rewrite_does_not_block_the_event_loop(tmp_path):
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
         format_adapter=_SlowRewriteAdapter(_adapter_for_format("alto")),
     )
 
@@ -78,7 +77,6 @@ def test_review_w3_rewrite_does_not_block_the_event_loop(tmp_path):
             await pipeline.run(
                 document_manifest=doc,
                 source_files={"doc.xml": path},
-                apply=False,
             )
         finally:
             stop.set()

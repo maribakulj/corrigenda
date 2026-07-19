@@ -9,8 +9,10 @@ producers, no network and no API key:
   2. an identity LLM provider via ``CorrectionPipeline.for_provider`` —
      the §5.2 whole-line path, shaped exactly like a real vendor client.
 
-Outputs land in ``./quickstart-out/``: the corrected ALTO and
-``trace.json`` (the versioned CorrectionReport, §9).
+Outputs land in ``./quickstart-out/`` via ``result.write(dir)``
+(ADR-011 — the engine never persists; the result carries the corrected
+ALTO and the versioned CorrectionReport, §9, written as
+``report.json``).
 
 Usage:  python examples/quickstart.py [output_dir]
 """
@@ -38,20 +40,6 @@ class PrintObserver:
 
     def on_event(self, event_type, payload):
         print(f"  [{event_type}] {payload}")
-
-
-class FilesystemWriter:
-    """Minimal OutputWriter: corrected XML + trace.json on disk."""
-
-    def __init__(self, out_dir: Path) -> None:
-        self.out_dir = out_dir
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-    def write_corrected(self, *, source_stem: str, xml_bytes: bytes) -> None:
-        (self.out_dir / f"{source_stem}_corrected.xml").write_bytes(xml_bytes)
-
-    def write_trace(self, *, traces_payload: str) -> None:
-        (self.out_dir / "trace.json").write_text(traces_payload, encoding="utf-8")
 
 
 class IdentityProvider:
@@ -90,7 +78,6 @@ async def main(out_dir: Path) -> None:
     pipeline = CorrectionPipeline(
         producer=rules,
         observer=PrintObserver(),
-        output_writer=FilesystemWriter(out_dir / "rules"),
         provider_name="rules",
         model="demo-fr",
     )
@@ -99,6 +86,9 @@ async def main(out_dir: Path) -> None:
         source_files={SAMPLE.name: SAMPLE},
         run_id="quickstart-rules",
     )
+    # ADR-011 — persistence is the caller's: one call writes the
+    # corrected XML (under its source name) and report.json.
+    result.write(out_dir / "rules")
     changed = sum(
         1 for t in result.report.lines if t.projected_text != t.source_ocr_text
     )
@@ -117,13 +107,13 @@ async def main(out_dir: Path) -> None:
         model="identity-demo",
         provider_name="local",
         observer=PrintObserver(),
-        output_writer=FilesystemWriter(out_dir / "llm"),
     )
     result2 = await pipeline2.run(
         document_manifest=doc2,
         source_files={SAMPLE.name: SAMPLE},
         run_id="quickstart-llm",
     )
+    result2.write(out_dir / "llm")
     print(
         f"[llm] report v{result2.report.report_version}: "
         f"{result2.report.total_lines} lines, "

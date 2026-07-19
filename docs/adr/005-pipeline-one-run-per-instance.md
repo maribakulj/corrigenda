@@ -14,12 +14,14 @@ contaminated each other. `run()` also mutates the input manifest.
    instance carries only immutable configuration (policies, provenance
    labels) and injected dependencies. State contamination between runs
    is now structurally impossible, not prevented by manual resets.
-2. **The one-run-at-a-time guard stays.** The injected `observer` and
-   `output_writer` are shared instance dependencies: two concurrent runs
-   would interleave their events and overwrite each other's outputs
-   (`write_trace` has no run discriminator). A concurrent call raises
-   `RuntimeError` immediately (guard released on any exit, so sequential
-   re-use works). Concurrent callers build one pipeline per run.
+2. **The one-run-at-a-time guard stays.** The injected `observer` is a
+   shared instance dependency (and until ADR-011 slice E, `run()`
+   mutates its input manifest): two concurrent runs would interleave
+   their events. A concurrent call raises `RuntimeError` immediately
+   (guard released on any exit, so sequential re-use works). Concurrent
+   callers build one pipeline per run. *(Amended by ADR-011 slice
+   D-fin: the `output_writer` half of the original rationale is gone —
+   the engine no longer persists anything.)*
 3. **`run()` keeps mutating the input manifest** — explicitly documented
    as CONSUMED. Returning a copy was evaluated and rejected: manifests of
    large corpora are the dominant memory cost, and the library's own

@@ -34,13 +34,10 @@ async def test_decision_set_mirrors_a_real_run(tmp_path) -> None:
     pipeline = CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=_Null(),
-        output_writer=_Null(),
         provider_name="rules",
         model="v1",
     )
-    result = await pipeline.run(
-        document_manifest=doc, source_files={src.name: src}, apply=False
-    )
+    result = await pipeline.run(document_manifest=doc, source_files={src.name: src})
 
     decisions = derive_decision_set(doc, result.traces)
     # Document reading order: pages in manifest order, lines in page order.
@@ -75,14 +72,11 @@ async def test_fallback_reason_travels_onto_the_decision(tmp_path) -> None:
     pipeline = CorrectionPipeline(
         producer=_FailsPages({"L0", "L1"}),
         observer=_Null(),
-        output_writer=_Null(),
         retry_policy=RetryPolicy(transient_backoff_base=0.0, output_backoff_base=0.0),
         provider_name="x",
         model="m",
     )
-    result = await pipeline.run(
-        document_manifest=doc, source_files={src.name: src}, apply=False
-    )
+    result = await pipeline.run(document_manifest=doc, source_files={src.name: src})
     decisions = derive_decision_set(doc, result.traces)
     fallen = [d for d in decisions.decisions if d.status is LineStatus.FALLBACK]
     assert fallen, "the failing chunk must have produced fallbacks"

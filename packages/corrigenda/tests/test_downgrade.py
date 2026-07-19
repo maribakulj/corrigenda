@@ -93,7 +93,6 @@ async def _run(provider: _CountingProvider, observer: _RecordingObserver):
         api_key="k",
         model="m",
         observer=observer,
-        output_writer=_NullWriter(),
     )
     return await pipeline.run(
         document_manifest=doc,
@@ -232,7 +231,6 @@ async def test_downgrade_replans_targets_only_never_context():
         api_key="k",
         model="m",
         observer=obs,
-        output_writer=_NullWriter2(),
         config=cfg,
         retry_policy=RetryPolicy(per_chunk_budget=12),
     )
@@ -280,7 +278,6 @@ async def test_should_abort_fires_inside_descent():
         api_key="k",
         model="m",
         observer=obs,
-        output_writer=_NullWriter2(),
         config=cfg,
         retry_policy=RetryPolicy(per_chunk_budget=12),
     )

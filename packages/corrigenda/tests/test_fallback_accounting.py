@@ -88,12 +88,11 @@ async def test_rejected_multiline_chunks_count_every_line() -> None:
     pipeline = CorrectionPipeline(
         producer=_AlwaysInvalidProducer(),
         observer=_Null(),
-        output_writer=_Null(),
         provider_name="invalid",
         model="m",
     )
     result = await pipeline.run(
-        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}, apply=False
+        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
     )
 
     assert total_lines > 1
@@ -116,12 +115,11 @@ async def test_guard_rejection_is_a_line_fallback_without_chunk_failure() -> Non
     pipeline = CorrectionPipeline(
         producer=_OneLineGarbler(),
         observer=_Null(),
-        output_writer=_Null(),
         provider_name="garbler",
         model="m",
     )
     result = await pipeline.run(
-        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}, apply=False
+        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
     )
 
     statuses = [lm.status for page in doc.pages for lm in page.lines]
@@ -137,12 +135,11 @@ async def test_clean_run_reports_zero_everywhere() -> None:
     pipeline = CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=_Null(),
-        output_writer=_Null(),
         provider_name="rules",
         model="v1",
     )
     result = await pipeline.run(
-        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}, apply=False
+        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
     )
     assert result.fallback_lines == 0
     assert result.fallback_chunks == 0

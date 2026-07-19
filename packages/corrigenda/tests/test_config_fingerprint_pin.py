@@ -53,7 +53,6 @@ def _default_pipeline() -> CorrectionPipeline:
     return CorrectionPipeline(
         producer=noop,
         observer=noop,
-        output_writer=noop,
     )
 
 

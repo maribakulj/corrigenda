@@ -83,14 +83,6 @@ class RecordingObserver:
         return sum(1 for v, _ in self.events if v == event_value)
 
 
-class _NoopWriter:
-    def write_corrected(self, *, source_stem: str, xml_bytes: bytes) -> None:
-        pass
-
-    def write_trace(self, *, traces_payload: str) -> None:
-        pass
-
-
 @dataclass
 class PipelineRun:
     """The observable surface of one real pipeline run over a corpus file."""
@@ -112,11 +104,11 @@ def run_pipeline(
 ) -> PipelineRun:
     """Run the real ``CorrectionPipeline`` over ``examples/<xml_name>``.
 
-    ``apply=False`` (dry-run): the in-memory rewrite runs so reconciliation
-    and acceptance execute exactly as in production, but nothing is
-    persisted (the ``OutputWriter`` is never called). The document manifest
-    is mutated in place; read ``run.lines`` for per-line corrected_text /
-    status, and ``run.result.reconcile_metrics`` for the real pipeline's
+    The in-memory rewrite runs so reconciliation and acceptance execute
+    exactly as in production; nothing is persisted (the engine has no
+    writer — ADR-011). The document manifest is mutated in place; read
+    ``run.lines`` for per-line corrected_text / status, and
+    ``run.result.reconcile_metrics`` for the real pipeline's
     reconciliation counts (NOT a test-side re-implementation).
     """
     path = EXAMPLES / xml_name
@@ -127,11 +119,9 @@ def run_pipeline(
         api_key="k",
         model="m",
         observer=observer,
-        output_writer=_NoopWriter(),
     )
     result = pipeline.run_sync(
         document_manifest=doc,
         source_files={xml_name: path},
-        apply=False,
     )
     return PipelineRun(result=result, document_manifest=doc, observer=observer)

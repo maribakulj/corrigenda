@@ -814,9 +814,9 @@ class CorrectionReport(BaseModel):
     OCR → model input → model output → projected text → re-extracted ALTO
     text — plus the rewriter path taken and any fallback reason, so a
     consumer can render a diff/preview or measure a run without re-deriving
-    anything. Returned on every run and, for a dry run
-    (``run(apply=False)``), it is the whole point: the report is produced
-    without writing any XML.
+    anything. Returned on every run; the engine never persists it
+    (ADR-011) — it is ``result.report``, written as ``report.json`` by
+    :meth:`CorrectionResult.write` or by the host's own transaction.
     """
 
     report_version: str = CORRECTION_REPORT_VERSION

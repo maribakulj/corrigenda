@@ -1,12 +1,13 @@
-"""The written artefact must SAY what the run decided (§9 projection).
+"""The rendered artefact must SAY what the run decided (§9 projection).
 
 The rewrite returns the per-line texts of the final tree its bytes were
 serialized from (ADR-011 — no second parse of the output), and the
-pipeline verifies them against the decided texts BEFORE the writer
-persists anything: any word-level divergence fails the run — a
-divergent artefact is corruption, not a degradation. Serialization
-fidelity (tree → bytes) is lxml's contract; what the invariant guards
-is the rewriter's tree diverging from the run's decisions.
+pipeline verifies them against the decided texts BEFORE the bytes reach
+the result: any word-level divergence fails the run — a divergent
+artefact is corruption, not a degradation, and it must never become a
+``CorrectionResult`` a caller could persist. Serialization fidelity
+(tree → bytes) is lxml's contract; what the invariant guards is the
+rewriter's tree diverging from the run's decisions.
 
 Known, tolerated projection loss: ALTO/PAGE tokenize line text into
 word elements, so runs of consecutive whitespace cannot survive the
@@ -34,24 +35,6 @@ _SAMPLE = Path(__file__).parent.parent.parent.parent / "examples" / "sample.xml"
 class _Null:
     def on_event(self, *a, **k):
         pass
-
-    def write_corrected(self, *, source_stem, xml_bytes):
-        pass
-
-    def write_trace(self, *, traces_payload):
-        pass
-
-
-class _CaptureWriter:
-    def __init__(self) -> None:
-        self.corrected: dict[str, bytes] = {}
-        self.traces: list[str] = []
-
-    def write_corrected(self, *, source_stem, xml_bytes):
-        self.corrected[source_stem] = xml_bytes
-
-    def write_trace(self, *, traces_payload):
-        self.traces.append(traces_payload)
 
 
 class _CorruptingAdapter:
@@ -84,11 +67,10 @@ class _LineDroppingAdapter:
         return replace(result, texts=texts)
 
 
-def _pipeline(adapter, writer) -> CorrectionPipeline:
+def _pipeline(adapter) -> CorrectionPipeline:
     return CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=_Null(),
-        output_writer=writer,
         format_adapter=adapter,
         provider_name="rules",
         model="v1",
@@ -96,31 +78,28 @@ def _pipeline(adapter, writer) -> CorrectionPipeline:
 
 
 @pytest.mark.asyncio
-async def test_corrupted_rewrite_fails_the_run_and_persists_nothing() -> None:
+async def test_corrupted_rewrite_fails_the_run() -> None:
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    writer = _CaptureWriter()
     with pytest.raises(ProjectionError) as excinfo:
-        await _pipeline(_CorruptingAdapter(), writer).run(
+        await _pipeline(_CorruptingAdapter()).run(
             document_manifest=doc,
             source_files={_SAMPLE.name: _SAMPLE},
         )
-    # The error names the file and the diverging line.
+    # The error names the file and the diverging line. The run raised, so
+    # no CorrectionResult exists — a divergent artefact can never be
+    # persisted by any caller.
     assert _SAMPLE.name in str(excinfo.value)
     assert "TL" in str(excinfo.value)
-    # Nothing was promoted: a divergent artefact must never reach the writer.
-    assert writer.corrected == {}
 
 
 @pytest.mark.asyncio
 async def test_dropped_line_fails_the_run() -> None:
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    writer = _CaptureWriter()
     with pytest.raises(ProjectionError, match="missing"):
-        await _pipeline(_LineDroppingAdapter(), writer).run(
+        await _pipeline(_LineDroppingAdapter()).run(
             document_manifest=doc,
             source_files={_SAMPLE.name: _SAMPLE},
         )
-    assert writer.corrected == {}
 
 
 class _DoubleSpaceProducer:
@@ -150,30 +129,30 @@ class _DoubleSpaceProducer:
 async def test_whitespace_collapse_is_tolerated_not_fatal() -> None:
     """Word tokenization collapses whitespace runs; that is a known
     projection property of the formats, not corruption — the run
-    succeeds and the artefact is written."""
+    succeeds and the artefact is on the result."""
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    writer = _CaptureWriter()
     pipeline = CorrectionPipeline(
         producer=_DoubleSpaceProducer(),
         observer=_Null(),
-        output_writer=writer,
         provider_name="x",
         model="y",
     )
-    await pipeline.run(document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE})
-    assert writer.corrected, "the run must have written its artefact"
+    result = await pipeline.run(
+        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
+    )
+    assert result.corrected_files, "the run must have produced its artefact"
 
 
 @pytest.mark.asyncio
 async def test_healthy_run_passes_the_invariant() -> None:
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    writer = _CaptureWriter()
     pipeline = CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=_Null(),
-        output_writer=writer,
         provider_name="rules",
         model="v1",
     )
-    await pipeline.run(document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE})
-    assert writer.corrected
+    result = await pipeline.run(
+        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
+    )
+    assert result.corrected_files

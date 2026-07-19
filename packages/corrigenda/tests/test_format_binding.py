@@ -48,25 +48,15 @@ _PAGE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-class _Capture:
-    def __init__(self) -> None:
-        self.corrected: dict[str, bytes] = {}
-
+class _Null:
     def on_event(self, *a, **k):
         pass
 
-    def write_corrected(self, *, source_stem, xml_bytes):
-        self.corrected[source_stem] = xml_bytes
 
-    def write_trace(self, *, traces_payload):
-        pass
-
-
-def _pipeline(writer, **kwargs) -> CorrectionPipeline:
+def _pipeline(**kwargs) -> CorrectionPipeline:
     return CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("o", "0")]),
-        observer=writer,
-        output_writer=writer,
+        observer=_Null(),
         provider_name="rules",
         model="v1",
         **kwargs,
@@ -80,10 +70,9 @@ async def test_page_document_corrects_without_an_injected_adapter(tmp_path) -> N
     doc = build_page([(src, src.name)])
     assert doc.source_format == "page"
 
-    writer = _Capture()
-    await _pipeline(writer).run(document_manifest=doc, source_files={src.name: src})
+    result = await _pipeline().run(document_manifest=doc, source_files={src.name: src})
 
-    out = writer.corrected["doc"]
+    out = result.corrected_files[src.name]
     root = etree.fromstring(out)
     assert root.tag.endswith("PcGts"), "the output must still be PAGE XML"
     ns = root.tag[1 : root.tag.index("}")]
@@ -95,11 +84,10 @@ async def test_page_document_corrects_without_an_injected_adapter(tmp_path) -> N
 async def test_alto_document_still_corrects_without_an_injected_adapter() -> None:
     doc = build_alto([(_SAMPLE_ALTO, _SAMPLE_ALTO.name)])
     assert doc.source_format == "alto"
-    writer = _Capture()
-    await _pipeline(writer).run(
+    result = await _pipeline().run(
         document_manifest=doc, source_files={_SAMPLE_ALTO.name: _SAMPLE_ALTO}
     )
-    assert writer.corrected
+    assert result.corrected_files
 
 
 @pytest.mark.asyncio
@@ -108,11 +96,9 @@ async def test_contradictory_adapter_fails_at_run_start(tmp_path) -> None:
     src.write_text(_PAGE_XML, encoding="utf-8")
     doc = build_page([(src, src.name)])
 
-    writer = _Capture()
-    pipeline = _pipeline(writer, format_adapter=AltoFormatAdapter())
+    pipeline = _pipeline(format_adapter=AltoFormatAdapter())
     with pytest.raises(ConfigurationError, match="alto"):
         await pipeline.run(document_manifest=doc, source_files={src.name: src})
-    assert writer.corrected == {}, "nothing may be written on a format mismatch"
 
 
 @pytest.mark.asyncio
@@ -122,8 +108,7 @@ async def test_unstamped_manifest_needs_an_explicit_adapter() -> None:
     doc = build_alto([(_SAMPLE_ALTO, _SAMPLE_ALTO.name)])
     doc.source_format = None  # simulate a hand-built manifest
 
-    writer = _Capture()
     with pytest.raises(ConfigurationError, match="format_adapter"):
-        await _pipeline(writer).run(
+        await _pipeline().run(
             document_manifest=doc, source_files={_SAMPLE_ALTO.name: _SAMPLE_ALTO}
         )

@@ -160,7 +160,6 @@ async def test_window_run_finalizes_every_line_once():
         api_key="k",
         model="m",
         observer=_Null(),
-        output_writer=_Null(),
         config=cfg,
     )
     await pipeline.run(

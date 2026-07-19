@@ -2,11 +2,13 @@
 
 Structural-typing contracts decoupling the pipeline from its
 infrastructure: the LLM client (``BaseProvider``), the event sink
-(``PipelineObserver``), the persistence target (``OutputWriter``) and —
-since the §3 reorganisation — the FORMAT seam (``FormatAdapter``),
-through which the pipeline reads/writes concrete transcription XML
-without importing any format module (core stays lxml-free by
-construction; the import-contract test enforces it).
+(``PipelineObserver``) and — since the §3 reorganisation — the FORMAT
+seam (``FormatAdapter``), through which the pipeline reads/writes
+concrete transcription XML without importing any format module (core
+stays lxml-free by construction; the import-contract test enforces it).
+There is no persistence port: the engine never writes (ADR-011) — the
+corrected artefacts travel on ``CorrectionResult`` and the caller
+persists them.
 """
 
 from __future__ import annotations
@@ -190,20 +192,6 @@ class PipelineObserver(Protocol):
     def on_event(self, event_type: str, payload: dict[str, Any]) -> None: ...
 
 
-@runtime_checkable
-class OutputWriter(Protocol):
-    """Persists corrected ALTO XML and the job trace.
-
-    Pure I/O: the writer takes pre-computed bytes/strings and persists
-    them. Computing what to write (rewriting, trace assembly) is the
-    pipeline's responsibility.
-    """
-
-    def write_corrected(self, *, source_stem: str, xml_bytes: bytes) -> None: ...
-
-    def write_trace(self, *, traces_payload: str) -> None: ...
-
-
 class RewriteMetrics(Protocol):
     """Structural view of a format rewriter's per-path line counts."""
 
@@ -274,7 +262,6 @@ __all__ = [
     "BaseProvider",
     "EditProducer",
     "FormatAdapter",
-    "OutputWriter",
     "PipelineObserver",
     "ProviderTransientError",
     "ProviderPermanentError",

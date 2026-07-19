@@ -120,7 +120,6 @@ async def test_permanent_provider_error_still_fails_the_whole_run() -> None:
     pipeline = CorrectionPipeline(
         producer=_PermanentlyRejectedProducer(),
         observer=_Null(),
-        output_writer=_Null(),
         provider_name="rejected",
         model="m",
     )
@@ -128,7 +127,6 @@ async def test_permanent_provider_error_still_fails_the_whole_run() -> None:
         await pipeline.run(
             document_manifest=doc,
             source_files={_SAMPLE.name: _SAMPLE},
-            apply=False,
         )
     # And the single-root contract now actually covers it:
     assert issubclass(ProviderPermanentError, CorrectionError)

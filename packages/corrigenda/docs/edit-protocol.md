@@ -121,10 +121,12 @@ apply_edit_script(script, {"l1": "ſoleil"}).text_by_id     # {"l1": "soleil"}
 
 ## Dry run
 
-`run(apply=False)` executes the whole pipeline without persisting anything
-and returns the normalized `EditScript` it would have applied on
-`CorrectionResult.edit_script` (plus the `CorrectionReport`) — the
-deliverable for preview and benchmarking.
+Every `run()` is side-effect-free (ADR-011 — the engine never
+persists): it returns the normalized `EditScript` it applied on
+`CorrectionResult.edit_script` (plus the `CorrectionReport` and the
+corrected bytes) — the deliverable for preview and benchmarking. A run
+becomes "wet" only when the caller persists the result
+(`result.write(dir)` or its own sink).
 
 ## What the protocol does *not* carry
 

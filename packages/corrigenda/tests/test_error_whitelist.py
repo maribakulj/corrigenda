@@ -63,7 +63,6 @@ def _pipeline(producer) -> CorrectionPipeline:
     return CorrectionPipeline(
         producer=producer,
         observer=_Null(),
-        output_writer=_Null(),
         # Zero backoff: these tests exercise CLASSIFICATION, not pacing —
         # real backoffs would make the degradation paths sleep for tens
         # of seconds through retries and granularity descent.
@@ -76,7 +75,7 @@ def _pipeline(producer) -> CorrectionPipeline:
 async def _run(producer):
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
     result = await _pipeline(producer).run(
-        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}, apply=False
+        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
     )
     return doc, result
 

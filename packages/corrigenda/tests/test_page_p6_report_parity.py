@@ -216,13 +216,10 @@ async def test_run_report_carries_the_rewrite_losses(tmp_path: Path) -> None:
     pipeline = CorrectionPipeline(
         producer=_WordSplitter(),
         observer=_Null(),
-        output_writer=_Null(),
         provider_name="x",
         model="m",
     )
-    result = await pipeline.run(
-        document_manifest=doc, source_files={p.name: p}, apply=False
-    )
+    result = await pipeline.run(document_manifest=doc, source_files={p.name: p})
     losses = result.report.format_losses
     assert losses is not None, "the run must surface the rewrite losses"
     assert losses["words_dropped"] == 2

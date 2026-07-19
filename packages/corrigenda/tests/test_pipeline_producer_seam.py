@@ -43,14 +43,12 @@ async def test_rules_producer_drives_full_pipeline_without_credentials():
     pipeline = CorrectionPipeline(
         producer=producer,
         observer=_Null(),
-        output_writer=_Null(),
         provider_name="rules",
         model="fr-ocr-v1",
     )
     result = await pipeline.run(
         document_manifest=doc,
         source_files={_SAMPLE.name: _SAMPLE},
-        apply=False,
     )
 
     # Every line with an 'e' got its first occurrences substituted; lines
@@ -125,7 +123,6 @@ async def test_programming_error_propagates_not_masked_as_ocr_fallback():
     pipeline = CorrectionPipeline(
         producer=_BuggyProducer(),
         observer=_Null(),
-        output_writer=_Null(),
         provider_name="buggy",
         model="m",
     )
@@ -133,21 +130,17 @@ async def test_programming_error_propagates_not_masked_as_ocr_fallback():
         await pipeline.run(
             document_manifest=doc,
             source_files={_SAMPLE.name: _SAMPLE},
-            apply=False,
         )
 
 
 @pytest.mark.asyncio
 async def test_vision_producer_without_images_fails_at_startup():
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    pipeline = CorrectionPipeline(
-        producer=_VisionProducer(), observer=_Null(), output_writer=_Null()
-    )
+    pipeline = CorrectionPipeline(producer=_VisionProducer(), observer=_Null())
     with pytest.raises(ConfigurationError, match="page_images"):
         await pipeline.run(
             document_manifest=doc,
             source_files={_SAMPLE.name: _SAMPLE},
-            apply=False,
         )
 
 
@@ -157,14 +150,11 @@ async def test_vision_envelope_reaches_the_producer():
     and per-line geometry — copied, never opened (I4)."""
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
     producer = _VisionProducer()
-    pipeline = CorrectionPipeline(
-        producer=producer, observer=_Null(), output_writer=_Null()
-    )
+    pipeline = CorrectionPipeline(producer=producer, observer=_Null())
     await pipeline.run(
         document_manifest=doc,
         source_files={_SAMPLE.name: _SAMPLE},
         page_images={page.page_id: f"opaque://{page.page_id}" for page in doc.pages},
-        apply=False,
     )
     payload = producer.seen_payload
     assert payload.image_ref is not None
@@ -219,14 +209,11 @@ async def test_multipage_file_carries_one_image_per_page(tmp_path):
     assert [p.page_id for p in doc.pages] == ["P1", "P2"]
 
     producer = _RecordingVisionProducer()
-    pipeline = CorrectionPipeline(
-        producer=producer, observer=_Null(), output_writer=_Null()
-    )
+    pipeline = CorrectionPipeline(producer=producer, observer=_Null())
     await pipeline.run(
         document_manifest=doc,
         source_files={src.name: src},
         page_images={"P1": "opaque://scan-1", "P2": "opaque://scan-2"},
-        apply=False,
     )
 
     ref_by_line = {
@@ -248,13 +235,10 @@ async def test_legacy_file_name_keys_are_refused_explicitly(tmp_path):
     src = tmp_path / "multi.xml"
     src.write_text(_MULTIPAGE_ALTO, encoding="utf-8")
     doc = build_document_manifest([(src, src.name)])
-    pipeline = CorrectionPipeline(
-        producer=_RecordingVisionProducer(), observer=_Null(), output_writer=_Null()
-    )
+    pipeline = CorrectionPipeline(producer=_RecordingVisionProducer(), observer=_Null())
     with pytest.raises(ConfigurationError, match="page_id"):
         await pipeline.run(
             document_manifest=doc,
             source_files={src.name: src},
             page_images={src.name: "opaque://whole-file"},
-            apply=False,
         )

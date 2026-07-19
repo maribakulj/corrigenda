@@ -42,14 +42,6 @@ class MyProvider:
         ...
 
 
-class Writer:
-    def write_corrected(self, *, source_stem, xml_bytes):
-        Path(f"out/{source_stem}_corrected.xml").write_bytes(xml_bytes)
-
-    def write_trace(self, *, traces_payload):
-        Path("out/trace.json").write_text(traces_payload, encoding="utf-8")
-
-
 class Observer:
     def on_event(self, event_type, payload):
         print(event_type, payload)
@@ -69,12 +61,12 @@ async def main():
         model="my-model",
         provider_name="my-vendor",
         observer=Observer(),
-        output_writer=Writer(),
     )
     result = await pipeline.run(
         document_manifest=doc,
         source_files={src.name: src},
     )
+    result.write(Path("out"))   # corrected XML + report.json — your call
     print(result.report.total_lines, "lines;",
           result.usage.total_tokens, "tokens")
 
@@ -82,9 +74,10 @@ asyncio.run(main())
 ```
 
 No event loop of your own? `pipeline.run_sync(...)` takes the same
-arguments. `apply=False` runs everything without writing (the returned
-`CorrectionReport` + normalized `EditScript` are the deliverable);
-`should_abort=callable` gives cooperative cancellation.
+arguments. The engine itself never writes (ADR-011): the returned
+result — corrected bytes, `CorrectionReport`, normalized `EditScript` —
+is the deliverable, and `result.write(dir)` persists it when you want
+it on disk; `should_abort=callable` gives cooperative cancellation.
 
 ## Deterministic pre-pass (no LLM at all)
 
@@ -94,7 +87,6 @@ from corrigenda import CorrectionPipeline, RulesProducer, default_french_ocr_rul
 pipeline = CorrectionPipeline(
     producer=RulesProducer(default_french_ocr_rules()),   # ſ→s, ﬁ/ﬂ …
     observer=Observer(),
-    output_writer=Writer(),
     provider_name="rules", model="fr-ocr-v1",             # provenance labels
 )
 ```
@@ -105,9 +97,11 @@ op model, and [formats](formats.md) for what each rewriter guarantees.
 
 ## Reading the results
 
+- `result.corrected_files` — the corrected XML bytes per source file
+  name; `result.write(dir)` writes them (plus `report.json`).
 - `result.report` — the versioned **CorrectionReport** (§9): per-line
   journey (source → model in/out → projected → re-extracted), rewriter
-  path, fallback reason. `trace.json` on disk is this exact JSON.
+  path, fallback reason.
 - `result.edit_script` — the normalized EditScript the run applied.
 - `result.usage` — aggregated tokens (F14); `Usage(0, 0)` when the
   producer doesn't report.

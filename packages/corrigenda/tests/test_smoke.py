@@ -39,7 +39,6 @@ def test_subpackages_importable():
     assert corrigenda.core.pipeline.CorrectionPipeline
     assert corrigenda.core.protocols.BaseProvider
     assert corrigenda.core.protocols.PipelineObserver
-    assert corrigenda.core.protocols.OutputWriter
     assert corrigenda.core.protocols.FormatAdapter
     assert corrigenda.producers.llm.OUTPUT_JSON_SCHEMA
     assert corrigenda.producers.llm.SYSTEM_PROMPT
@@ -74,7 +73,6 @@ def test_top_level_public_api_is_importable():
         LLMLineInput,
         LLMLineOutput,
         ModelInfo,
-        OutputWriter,
         PageManifest,
         PipelineObserver,
         build_document_manifest,
@@ -90,7 +88,6 @@ def test_top_level_public_api_is_importable():
         for x in (
             BaseProvider,
             PipelineObserver,
-            OutputWriter,
             CorrectionPipeline,
             CorrectionResult,
             build_document_manifest,
@@ -188,7 +185,6 @@ def test_changelog_added_symbols_are_importable():
             [
                 "BaseProvider",
                 "PipelineObserver",
-                "OutputWriter",
                 # P0-1 provider taxonomy (Unreleased ### Added)
                 "ProviderTransientError",
                 "ProviderPermanentError",
@@ -229,20 +225,11 @@ def test_correction_pipeline_construction_does_not_touch_infrastructure():
         def on_event(self, event_type, payload):
             pass
 
-    class _NoopWriter:
-        def write_corrected(self, *, source_stem, xml_bytes):
-            pass
-
-        def write_trace(self, *, traces_payload):
-            pass
-
     pipeline = CorrectionPipeline.for_provider(
         _NoopProvider(),
         api_key="k",
         model="m",
         observer=_NoopObserver(),
-        output_writer=_NoopWriter(),
     )
     assert pipeline.producer is not None
     assert pipeline.observer is not None
-    assert pipeline.output_writer is not None

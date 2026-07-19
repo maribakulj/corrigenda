@@ -34,7 +34,7 @@ from corrigenda.core.schemas import HyphenRole, LineStatus
 from corrigenda.errors import CorrectionError
 from corrigenda.formats.alto.parser import build_document_manifest
 
-from tests._pipeline_harness import DictProvider, RecordingObserver, _NoopWriter
+from tests._pipeline_harness import DictProvider, RecordingObserver
 from corrigenda.core.pipeline import CorrectionPipeline
 
 _CACHE = Path(
@@ -106,12 +106,10 @@ def test_identity_run_preserves_invariants(xml_path: Path) -> None:
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
     )
     result = pipeline.run_sync(
         document_manifest=doc,
         source_files={xml_path.name: xml_path},
-        apply=False,
     )
 
     # Geometry is never touched by a run.
