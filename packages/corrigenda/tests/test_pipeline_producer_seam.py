@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._pipeline_harness import apply_decisions
+
 from corrigenda import CorrectionPipeline
 from corrigenda.errors import ConfigurationError
 from corrigenda.core.editing import EditScript, ReplaceSpan, apply_edit_script
@@ -55,6 +57,7 @@ async def test_rules_producer_drives_full_pipeline_without_credentials():
     # without a rule match kept their OCR text (no fallback, no retry).
     assert result.retry_count == 0
     assert result.fallback_chunks == 0
+    apply_decisions(doc, result)
     changed = [
         lm
         for page in doc.pages

@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._pipeline_harness import apply_decisions
+
 from corrigenda import CorrectionPipeline
 from corrigenda.core.protocols import ProviderTransientError
 from corrigenda.core.schemas import LineStatus, RetryPolicy
@@ -77,7 +79,7 @@ async def _run(producer):
     result = await _pipeline(producer).run(
         document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
     )
-    return doc, result
+    return apply_decisions(doc, result), result
 
 
 @pytest.mark.asyncio

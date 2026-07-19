@@ -170,7 +170,7 @@ def test_f3_three_run_duplicate_across_chunk_boundary_reverts_third(tmp_path):
     from corrigenda.core.pipeline import CorrectionPipeline
     from corrigenda.core.schemas import ChunkPlannerConfig, GuardConfig
     from corrigenda.formats.alto.parser import build_document_manifest
-    from tests._pipeline_harness import DictProvider, RecordingObserver
+    from tests._pipeline_harness import apply_decisions, DictProvider, RecordingObserver
     from tests.test_planner_budget_and_cross_chunk_guard import _write_doc
 
     path = _write_doc(tmp_path)
@@ -193,7 +193,10 @@ def test_f3_three_run_duplicate_across_chunk_boundary_reverts_third(tmp_path):
         ),
         guard_config=GuardConfig(min_source_similarity=0.0, neighbour_margin=1.0),
     )
-    pipeline.run_sync(document_manifest=doc, source_files={"doc.xml": path})
+    apply_decisions(
+        doc,
+        pipeline.run_sync(document_manifest=doc, source_files={"doc.xml": path}),
+    )
 
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
     for lid in ("L2", "L3", "L4"):
@@ -264,7 +267,7 @@ def test_f3_twin_three_run_duplicate_across_page_seam_reverts_third(tmp_path):
     from corrigenda.core.pipeline import CorrectionPipeline
     from corrigenda.core.schemas import GuardConfig
     from corrigenda.formats.alto.parser import build_document_manifest
-    from tests._pipeline_harness import DictProvider, RecordingObserver
+    from tests._pipeline_harness import apply_decisions, DictProvider, RecordingObserver
 
     path = _seam_doc(tmp_path)
     doc = build_document_manifest([(path, "seam.xml")])
@@ -277,7 +280,10 @@ def test_f3_twin_three_run_duplicate_across_page_seam_reverts_third(tmp_path):
         observer=RecordingObserver(),
         guard_config=GuardConfig(min_source_similarity=0.0, neighbour_margin=1.0),
     )
-    pipeline.run_sync(document_manifest=doc, source_files={"seam.xml": path})
+    apply_decisions(
+        doc,
+        pipeline.run_sync(document_manifest=doc, source_files={"seam.xml": path}),
+    )
 
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
     for lid in ("L1", "L2", "L3"):
@@ -847,7 +853,7 @@ def test_review_w1_duplicate_across_downgrade_subchunk_seam_reverts(
     from corrigenda.core.pipeline import CorrectionPipeline
     from corrigenda.core.schemas import ChunkPlannerConfig, GuardConfig, RetryPolicy
     from corrigenda.formats.alto.parser import build_document_manifest
-    from tests._pipeline_harness import RecordingObserver
+    from tests._pipeline_harness import RecordingObserver, apply_decisions
     from tests.test_planner_budget_and_cross_chunk_guard import _write_doc
 
     monkeypatch.setattr(
@@ -901,7 +907,10 @@ def test_review_w1_duplicate_across_downgrade_subchunk_seam_reverts(
             max_attempts=1, temperatures=(0.0,), per_chunk_budget=30
         ),
     )
-    pipeline.run_sync(document_manifest=doc, source_files={"doc.xml": path})
+    apply_decisions(
+        doc,
+        pipeline.run_sync(document_manifest=doc, source_files={"doc.xml": path}),
+    )
 
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
     # Identity corrections on the other lines survive untouched…

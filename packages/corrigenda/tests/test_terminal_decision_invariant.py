@@ -73,7 +73,7 @@ async def test_absorbed_chunk_error_leaves_no_line_undecided(monkeypatch) -> Non
     )
 
     statuses = {
-        (lm.page_id, lm.line_id): lm.status for page in doc.pages for lm in page.lines
+        (d.ref.page_id, d.ref.line_id): d.status for d in result.decisions.decisions
     }
     undecided = [k for k, s in statuses.items() if s is LineStatus.PENDING]
     assert undecided == [], (
@@ -86,9 +86,7 @@ async def test_absorbed_chunk_error_leaves_no_line_undecided(monkeypatch) -> Non
     assert all(s is LineStatus.FALLBACK for s in statuses.values())
     assert result.fallback_chunks > 0
     # Fallback lines carry their source text — never None, never invented.
-    for page in doc.pages:
-        for lm in page.lines:
-            assert lm.corrected_text == lm.ocr_text
+    assert all(d.final_text == d.source_text for d in result.decisions.decisions)
 
 
 @pytest.mark.asyncio
@@ -126,9 +124,11 @@ async def test_partial_decisions_survive_the_absorb(monkeypatch) -> None:
         provider_name="rules",
         model="v1",
     )
-    await pipeline.run(document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE})
+    result = await pipeline.run(
+        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
+    )
 
-    statuses = [lm.status for page in doc.pages for lm in page.lines]
+    statuses = [d.status for d in result.decisions.decisions]
     assert LineStatus.PENDING not in statuses
     assert LineStatus.CORRECTED in statuses, "the first chunk's decisions survive"
     assert LineStatus.FALLBACK in statuses, "the failed chunks' lines fell back"

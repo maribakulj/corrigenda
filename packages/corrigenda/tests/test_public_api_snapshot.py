@@ -41,6 +41,10 @@ PUBLIC_API_1_0 = sorted(
         # Pipeline
         "CorrectionPipeline",
         "CorrectionResult",
+        # Decisions (ADR-011, slice E)
+        "DecisionSet",
+        "LineDecision",
+        "LineRef",
         # Edit protocol (§4)
         "EditScript",
         "EditOp",

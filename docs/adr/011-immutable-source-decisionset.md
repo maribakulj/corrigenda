@@ -68,12 +68,24 @@ rewriter already knew.
   quickstart and docs migrated to `result.write(dir)`. ADR-005's guard
   survives on its remaining rationale (shared observer + manifest
   mutation) until slice E.
-- **Slice E**: immutable `Source*` models, mutation ends, `_running`
-  removed, ADR-005 replaced; P0's "two runs on two deep copies"
-  property becomes "two runs on the SAME document".
+- **Slice E (landed)**: mutation ends at the engine boundary — `run()`
+  works on its own deep copy of the input; the caller's document is
+  never written, and the run's outcome is `result.decisions` (the
+  `DecisionSet`, now exported with `LineDecision`/`LineRef`). The
+  `_running` guard is removed (ADR-005 superseded): concurrent runs on
+  one instance work, and the P0 run-independence property is now "two
+  runs on the SAME document object". The backend projects
+  `result.decisions` onto ITS stored manifest for its read models
+  (/diff, /layout, lines_modified) — server-owned state, server-owned
+  mutation. Remaining tail (folds into P3.5's model restructure):
+  freezing the manifest TYPES themselves (`Source*` renames) and
+  retiring the per-line pointer/SUBS fields the working copy still
+  uses internally — behaviourally invisible either way, since no
+  caller can observe the working copy.
 
 ## Consequences
-The engine becomes a function: same input, same decisions, no side
-effects; concurrency and caching stop being dangerous. Until slice E,
-the manifests remain mutable and ADR-005 stands — each slice keeps the
-whole suite (and the chunking-invariance gates) green on its own.
+The engine is now a function of its input: same document, same
+decisions, no side effects — the input can be reused, cached, or run
+concurrently. The cost, re-decided from ADR-005's point 3, is one deep
+copy per run. Each slice kept the whole suite (and the
+chunking-invariance gates) green on its own.

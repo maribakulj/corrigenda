@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._pipeline_harness import apply_decisions
+
 from corrigenda import CorrectionPipeline, ValidationError
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.schemas import LineStatus
@@ -122,6 +124,7 @@ async def test_guard_rejection_is_a_line_fallback_without_chunk_failure() -> Non
         document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
     )
 
+    apply_decisions(doc, result)
     statuses = [lm.status for page in doc.pages for lm in page.lines]
     assert LineStatus.FALLBACK in statuses, "the guard must have rejected the garble"
     assert result.fallback_chunks == 0, "no chunk failed — this is line-level"

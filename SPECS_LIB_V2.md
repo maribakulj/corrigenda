@@ -479,10 +479,13 @@ pipeline.run_sync(...)                            # façade asyncio.run, documen
 
 # Note (ADR-011, 2026-07) : la persistance a quitté la surface moteur —
 # plus de `output_writer` au constructeur ni de `apply=` sur run() ; le
-# résultat porte les artefacts (`result.corrected_files`, `result.report`)
-# et `result.write(dir)` est l'aide côté appelant. (La résorption §5.1 a
-# déjà retiré api_key/model/provider_name de run() — voir ADR ; le bloc
-# ci-dessus reste la photographie v2.0 d'origine.)
+# résultat porte les artefacts (`result.corrected_files`, `result.report`,
+# `result.decisions`) et `result.write(dir)` est l'aide côté appelant.
+# run() ne mute plus jamais son entrée (copie interne, tranche E) : le
+# garde « one run per instance » (ADR-005) est retiré, le moteur est
+# réentrant. (La résorption §5.1 a déjà retiré api_key/model/provider_name
+# de run() — voir ADR ; le bloc ci-dessus reste la photographie v2.0
+# d'origine.)
 
 # bas niveau (déjà publics, maintenus)
 rewrite_alto_file(...), extract_output_texts(...),

@@ -1,9 +1,10 @@
-"""ADR-011 slice C — the immutable DecisionSet mirrors the run exactly.
+"""ADR-011 slices C+E — the immutable DecisionSet IS the run's outcome.
 
-The manifests remain the storage of record until slice E; what these
-tests pin is the materialization contract: document reading order,
-faithful text/status/reason projection, terminality enforcement, and
-immutability of the value itself.
+Since slice E the input manifest is never mutated, so the set on
+``result.decisions`` is the only place a run's decisions exist; what
+these tests pin is the materialization contract: document reading
+order, faithful text/reason projection against the traces, terminality
+enforcement, and immutability of the value itself.
 """
 
 from __future__ import annotations
@@ -39,22 +40,27 @@ async def test_decision_set_mirrors_a_real_run(tmp_path) -> None:
     )
     result = await pipeline.run(document_manifest=doc, source_files={src.name: src})
 
-    decisions = derive_decision_set(doc, result.traces)
+    decisions = result.decisions
     # Document reading order: pages in manifest order, lines in page order.
     assert [d.ref for d in decisions.decisions] == [
         LineRef(page_id=page.page_id, line_id=lm.line_id)
         for page in doc.pages
         for lm in page.lines
     ]
-    # Faithful projection of every line's terminal state.
+    # Faithful projection: source text mirrors the parse, the decided
+    # text matches the trace's projection, every decision is terminal.
     for page in doc.pages:
         for lm in page.lines:
             d = decisions.by_ref[LineRef(page_id=lm.page_id, line_id=lm.line_id)]
             assert d.source_text == lm.ocr_text
-            assert d.status is lm.status
-            assert d.final_text == (
-                lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
-            )
+            assert d.status in (LineStatus.CORRECTED, LineStatus.FALLBACK)
+            trace = result.traces[d.ref]
+            assert d.final_text == trace.projected_text
+    # The caller's manifest carries none of it (slice E).
+    for page in doc.pages:
+        for lm in page.lines:
+            assert lm.corrected_text is None
+            assert lm.status is LineStatus.PENDING
     # The result's accounting came from this same view.
     assert result.fallback_lines == decisions.fallback_lines
     assert result.fallback_reasons == decisions.fallback_reason_counts()
@@ -77,7 +83,7 @@ async def test_fallback_reason_travels_onto_the_decision(tmp_path) -> None:
         model="m",
     )
     result = await pipeline.run(document_manifest=doc, source_files={src.name: src})
-    decisions = derive_decision_set(doc, result.traces)
+    decisions = result.decisions
     fallen = [d for d in decisions.decisions if d.status is LineStatus.FALLBACK]
     assert fallen, "the failing chunk must have produced fallbacks"
     assert all(d.fallback_reason for d in fallen)

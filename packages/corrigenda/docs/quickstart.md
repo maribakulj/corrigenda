@@ -105,5 +105,9 @@ op model, and [formats](formats.md) for what each rewriter guarantees.
 - `result.edit_script` — the normalized EditScript the run applied.
 - `result.usage` — aggregated tokens (F14); `Usage(0, 0)` when the
   producer doesn't report.
-- Corrected text also lives on the manifests you passed in:
-  `line.corrected_text` / `line.status`.
+- `result.decisions` — the immutable **DecisionSet**: one terminal
+  decision per line (`by_ref[LineRef(page_id, line_id)]` →
+  `final_text` / `status` / `fallback_reason`). The manifests you
+  passed in are never modified (ADR-011): the same document can be run
+  again — or concurrently — and always starts from the original OCR
+  text.

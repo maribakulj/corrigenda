@@ -557,6 +557,11 @@ class CorrectionResult:
     #: to the direct correction); a rules/​span producer surfaces its
     #: ``replace_span`` ops here too.
     edit_script: EditScript
+    #: ADR-011 — the run's immutable :class:`DecisionSet`: one terminal
+    #: decision per line in document reading order. Since slice E the
+    #: input manifest is never mutated, so THIS is where a caller reads
+    #: what the run decided (``decisions.by_ref[LineRef(...)]``).
+    decisions: DecisionSet
     #: ADR-011 — the corrected artefacts themselves, keyed by source file
     #: name, computed on EVERY run: the result IS the output; persisting
     #: it is the caller's choice (:meth:`write`, or a host-owned
@@ -589,10 +594,11 @@ class CorrectionResult:
 
 @dataclass
 class RunContext:
-    """All mutable state of ONE pipeline execution (ADR-005).
+    """All mutable state of ONE pipeline execution.
 
-    Created fresh at the top of every :meth:`CorrectionPipeline.run` and
-    threaded through the internal methods, so ``CorrectionPipeline``
+    Created fresh at the top of every :meth:`CorrectionPipeline.run`
+    (together with the run's private manifest copy — ADR-011 slice E)
+    and threaded through the internal methods, so ``CorrectionPipeline``
     itself carries only immutable configuration and injected
     dependencies. Nothing here survives the run: the public outcome is
     copied into :class:`CorrectionResult` before returning.
@@ -627,9 +633,10 @@ class CorrectionPipeline:
 
     Dependencies are injected via the constructor; the pipeline never
     reaches for global state. The instance holds only immutable
-    configuration (ADR-005): every run creates a fresh :class:`RunContext`
-    for its mutable state, and the stats it accumulates are exposed in
-    the final `CorrectionResult` for the caller to persist.
+    configuration: every run creates a fresh :class:`RunContext` and its
+    own deep copy of the input manifest (ADR-011 — the input is never
+    modified, the instance is reentrant), and everything the run decided
+    is exposed on the final `CorrectionResult` for the caller to persist.
 
     §5.1 resorption — the pipeline is constructed around an
     :class:`EditProducer`; there is no ``api_key``/``model`` anywhere on
@@ -675,13 +682,13 @@ class CorrectionPipeline:
         # processingStep. Pure strings: the pipeline never dials a vendor.
         self.provider_name = provider_name
         self.model = model
-        # Reentrancy guard (ADR-005). Per-run state lives in RunContext,
-        # but the injected observer is a shared instance dependency (and
-        # run() still mutates its input manifest until ADR-011 slice E):
-        # two concurrent runs would interleave their events. One instance
-        # therefore still means one run at a time; concurrent callers
-        # build one pipeline per run.
-        self._running = False
+        # No reentrancy guard (ADR-011 slice E, retiring ADR-005): the
+        # instance carries only immutable configuration, every run works
+        # on a fresh RunContext plus its own deep copy of the input
+        # manifest, so concurrent runs on one instance cannot contaminate
+        # each other. The shared observer sees interleaved events under
+        # concurrency — inherent to sharing an observer, and the
+        # caller's choice.
 
     @classmethod
     def for_provider(
@@ -780,20 +787,20 @@ class CorrectionPipeline:
         should_abort: Callable[[], bool] | None = None,
         page_images: dict[str, ImageRef] | None = None,
     ) -> CorrectionResult:
-        """Run the full pipeline. Mutates `document_manifest.pages` in place.
+        """Run the full pipeline. The input manifest is never modified.
 
-        **Concurrency contract (ADR-005)** — one instance, one run at
-        a time. All per-run state lives in a fresh :class:`RunContext`
-        created here (the pipeline instance itself carries only
-        immutable configuration), but the injected ``observer`` is a
-        shared instance dependency: two concurrent runs would
-        interleave their events. Guarded: a concurrent call raises
-        :class:`RuntimeError` immediately. Instances are not
-        thread-safe; concurrent callers build one pipeline per run.
-        The input manifest is CONSUMED (mutated in place); re-running on
-        the same manifest starts from the previous run's corrected
-        state, not from the original OCR text. Sequential re-use of one
-        instance on fresh manifests is supported.
+        **Immutability & reentrancy (ADR-011 slice E, retiring
+        ADR-005)** — the engine works on its own deep copy of
+        ``document_manifest``: the input is read, never written, so the
+        same document object can be run again (or concurrently) and
+        every run starts from the original OCR text. All per-run state
+        lives in a fresh :class:`RunContext` plus that copy; the
+        instance carries only immutable configuration, so one pipeline
+        instance supports concurrent ``run()`` calls (within one event
+        loop — instances are still not thread-safe). The run's
+        decisions are returned on the result
+        (:attr:`CorrectionResult.decisions`), not written back onto the
+        caller's manifest.
 
         §5.1 resorption — there is no ``api_key``/``model``/``provider_name``
         here anymore: credentials and the vendor call live inside the
@@ -830,25 +837,17 @@ class CorrectionPipeline:
         host-owned transaction (like the demo backend's staging writer)
         when the host needs commit/discard semantics.
         """
-        if self._running:
-            raise RuntimeError(
-                "CorrectionPipeline.run() is already executing on this instance — "
-                "one instance supports one run at a time (per-run state lives on "
-                "the instance). Create a separate pipeline per concurrent run."
-            )
-        self._running = True
-        try:
-            return await self._run_exclusive(
-                document_manifest=document_manifest,
-                source_files=source_files,
-                run_id=run_id,
-                should_abort=should_abort,
-                page_images=page_images,
-            )
-        finally:
-            self._running = False
+        # ADR-011 slice E — the working copy IS the run's mutable state;
+        # the caller's document stays exactly as parsed.
+        return await self._run_impl(
+            document_manifest=document_manifest.model_copy(deep=True),
+            source_files=source_files,
+            run_id=run_id,
+            should_abort=should_abort,
+            page_images=page_images,
+        )
 
-    async def _run_exclusive(
+    async def _run_impl(
         self,
         *,
         document_manifest: DocumentManifest,
@@ -857,10 +856,10 @@ class CorrectionPipeline:
         should_abort: Callable[[], bool] | None,
         page_images: dict[str, ImageRef] | None,
     ) -> CorrectionResult:
-        """Body of :meth:`run`, executing under the reentrancy guard."""
+        """Body of :meth:`run`, working on the run's private manifest copy."""
         run_id = run_id or str(uuid.uuid4())
-        # ADR-005 — one fresh context per execution; no per-run state
-        # remains on the instance.
+        # One fresh context per execution; no per-run state remains on
+        # the instance.
         ctx = RunContext()
 
         # §5.1 — a vision producer without its images is a start-up error,
@@ -1041,6 +1040,7 @@ class CorrectionPipeline:
             usage=ctx.usage,
             report=report,
             edit_script=self._build_final_edit_script(decisions, ctx),
+            decisions=decisions,
             corrected_files=corrected_files,
         )
 

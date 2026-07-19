@@ -19,6 +19,11 @@ producer-bound symbols are exposed LAZILY (PEP 562) so that importing
 
 from typing import TYPE_CHECKING, Any
 
+from corrigenda.core.decisions import (
+    DecisionSet,
+    LineDecision,
+)
+from corrigenda.core.identity import LineRef
 from corrigenda.core.editing import (
     EditOp,
     EditRejection,
@@ -161,6 +166,10 @@ __all__ = [
     # Pipeline
     "CorrectionPipeline",
     "CorrectionResult",
+    # Decisions (ADR-011) — the run's outcome, read off the result
+    "DecisionSet",
+    "LineDecision",
+    "LineRef",
     # Edit protocol (§4) — pure core
     "EditScript",
     "EditOp",

@@ -17,7 +17,13 @@ import warnings
 from collections.abc import Callable
 from pathlib import Path
 
-from corrigenda import CorrectionAborted, CorrectionPipeline, CorrectionResult, sanitize_error
+from corrigenda import (
+    CorrectionAborted,
+    CorrectionPipeline,
+    CorrectionResult,
+    LineRef,
+    sanitize_error,
+)
 from corrigenda.core.protocols import ProviderPermanentError
 
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
@@ -344,6 +350,17 @@ class JobRunner:
             # pipeline between pages and chunks.
             should_abort=should_abort,
         )
+
+        # ADR-011 slice E — the engine never mutates its input: the run's
+        # outcome lives on result.decisions. The SERVER owns its read
+        # models (/diff, /layout, lines_modified), so it projects the
+        # decided text/status onto ITS stored manifest here — the same
+        # object update_job() registered at run start.
+        for page in document_manifest.pages:
+            for lm in page.lines:
+                decision = result.decisions.by_ref[LineRef(page_id=lm.page_id, line_id=lm.line_id)]
+                lm.corrected_text = decision.final_text
+                lm.status = decision.status
 
         # ADR-011 slice D — the engine never persists: the result carries
         # the corrected XML and the §9 report, and the backend stages them

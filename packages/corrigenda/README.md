@@ -52,12 +52,15 @@ independent external API review first; see
   `ValidationError` (both also `ValueError`) and `CorrectionAborted`
   (raised by the cooperative `should_abort` cancellation probe).
 - `CorrectionResult` — the run's whole deliverable (ADR-011): the
-  corrected XML per source file (`result.corrected_files`), a public,
+  corrected XML per source file (`result.corrected_files`), the
+  immutable per-line `DecisionSet` (`result.decisions`), a public,
   versioned `CorrectionReport` (full per-line trace: source → model
   in/out → projected → re-extracted text, rewriter path, fallback
   reason), the applied `EditScript` and the run's statistics. The
-  engine never persists anything; `result.write(dir)` is the one-call
-  helper, or feed the bytes to your own transaction.
+  engine never persists anything and never mutates its input — the
+  same document can be run again or concurrently; `result.write(dir)`
+  is the one-call persistence helper, or feed the bytes to your own
+  transaction.
 - `corrigenda.core.protocols` — ports (`BaseProvider`,
   `PipelineObserver`, `FormatAdapter`) that consumers implement to plug
   the core into their own infrastructure.

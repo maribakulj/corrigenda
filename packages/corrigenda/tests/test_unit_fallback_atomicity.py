@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._pipeline_harness import apply_decisions
+
 from corrigenda import CorrectionPipeline, ValidationError
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.schemas import HyphenRole, LineStatus, RetryPolicy
@@ -116,8 +118,8 @@ async def _run(tmp_path: Path, failing: set[str]):
         provider_name="x",
         model="m",
     )
-    await pipeline.run(document_manifest=doc, source_files={src.name: src})
-    return doc
+    result = await pipeline.run(document_manifest=doc, source_files={src.name: src})
+    return apply_decisions(doc, result)
 
 
 @pytest.mark.asyncio

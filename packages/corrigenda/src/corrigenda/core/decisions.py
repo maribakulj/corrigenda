@@ -1,13 +1,13 @@
-"""Immutable decision record of a run (ADR-011, slice C).
+"""Immutable decision record of a run (ADR-011, slices C+E).
 
-The engine still expresses its decisions by mutating the manifests
-(until ADR-011 slice E); this module defines THE decision model and
-materializes it exactly once — after the global consistency pass, when
-every line's decision is final. Readers that only need "what did the
-run decide" (the projection invariant, fallback accounting, and later
-the report) consume the :class:`DecisionSet` instead of re-walking the
-mutable manifests: it is the seam slice E flips when the manifests
-become immutable and decisions stop living on them.
+The engine expresses its decisions by mutating its PRIVATE working copy
+of the manifests (since slice E the caller's document is never
+touched); this module defines THE decision model and materializes it
+exactly once — after the global consistency pass, when every line's
+decision is final. Everything downstream of the run reads the
+:class:`DecisionSet`: the projection invariant, fallback accounting,
+the final EditScript, and — via :attr:`CorrectionResult.decisions` —
+the caller itself.
 
 Materialization enforces terminality: a ``PENDING`` line at this point
 is an engine bug — a decision path that forgot its lines — never an
@@ -75,7 +75,7 @@ def derive_decision_set(
     document_manifest: DocumentManifest,
     traces: Mapping[LineRef, LineTrace],
 ) -> DecisionSet:
-    """Materialize the run's decisions from the (still-mutable) manifests.
+    """Materialize the run's decisions from the run's manifest copy.
 
     Called once, after the global consistency pass — the point where no
     later pass may change a decision. Refuses a ``PENDING`` line: an

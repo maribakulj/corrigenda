@@ -15,8 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from corrigenda import CorrectionPipeline, __version__
-from corrigenda.formats.alto.adapter import AltoFormatAdapter
+from corrigenda import CorrectionPipeline
 from corrigenda.formats.alto.parser import build_document_manifest
 from corrigenda.producers.rules import RulesProducer, SubstitutionRule
 
@@ -39,27 +38,24 @@ def _pipeline() -> CorrectionPipeline:
 
 @pytest.mark.asyncio
 async def test_result_carries_the_rewritten_bytes() -> None:
-    """The result's bytes ARE the adapter's rewrite — the same content a
-    caller would get rewriting the decided manifest itself."""
+    """The result's bytes are the decided artefact: re-extracting the
+    per-line texts from them (public round-trip helper) reproduces every
+    decision's final text, in the formats' whitespace-normal form."""
+    from corrigenda import extract_output_texts
+
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    pipeline = _pipeline()
-    result = await pipeline.run(
+    result = await _pipeline().run(
         document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
     )
     assert set(result.corrected_files) == {_SAMPLE.name}
-    assert result.corrected_files[_SAMPLE.name].startswith(b"<?xml")
-    # Parity with a direct rewrite of the post-run manifest under the
-    # same provenance labels: the result carries the rewrite, not a copy
-    # that could drift from it.
-    rerendered = AltoFormatAdapter().rewrite_file(
-        _SAMPLE,
-        [p for p in doc.pages if p.source_file == _SAMPLE.name],
-        "rules",
-        "v1",
-        lib_version=__version__,
-        config_fingerprint=pipeline.config_fingerprint(),
-    )
-    assert result.corrected_files[_SAMPLE.name] == rerendered.xml_bytes
+    xml_bytes = result.corrected_files[_SAMPLE.name]
+    assert xml_bytes.startswith(b"<?xml")
+    decisions = result.decisions.decisions
+    extracted = extract_output_texts(xml_bytes, {d.ref.line_id for d in decisions})
+    for d in decisions:
+        assert " ".join(extracted[d.ref.line_id].split()) == " ".join(
+            d.final_text.split()
+        )
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — `run()` never mutates its input (ADR-011, slice E).**
+  The engine works on its own deep copy of the document manifest: the
+  caller's manifest keeps its parse-time state (`corrected_text` stays
+  `None`, `status` stays `PENDING`), re-running the same document
+  always starts from the original OCR text, and the run's outcome is
+  read off the result — `CorrectionResult.decisions`, an immutable
+  `DecisionSet` with one terminal `LineDecision` per line in reading
+  order (`DecisionSet`, `LineDecision` and `LineRef` join the public
+  surface). Consumers that displayed corrected text from the manifest
+  project the decisions onto their own state (as the demo backend now
+  does for its /diff and /layout read models).
+
 ### Removed
+
+- **The one-run-per-instance guard (ADR-005, superseded).** With
+  per-run state fully contained (fresh `RunContext` + private manifest
+  copy) and no writer on the engine, concurrent `run()` calls on one
+  instance are safe and supported; the `RuntimeError` guard is gone.
+  The P0 run-independence property is now pinned in its final form:
+  two runs on the SAME document object yield identical decisions.
 
 - **BREAKING — persistence left the engine surface (ADR-011, slice
   D-fin).** `CorrectionPipeline(output_writer=…)` /
