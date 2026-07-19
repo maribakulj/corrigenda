@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from corrigenda.core.hyphenation import reconcile_hyphen_pair
+from corrigenda.core.identity import line_ref
 from corrigenda.core.schemas import Coords, HyphenRole, LineManifest, LineStatus
 
 
@@ -131,12 +132,12 @@ def test_f2_three_line_chain_reverts_atomically(flagged_index: int):
     endpoint stayed corrected → mixed OCR+corrected pair inside the
     chain)."""
     chain = _reconciled_chain("m0t un-", "deux-", "tr0is fin")
-    line_by_id = {lm.line_id: lm for lm in chain}
+    all_lines = {line_ref(lm): lm for lm in chain}
     pipeline = _make_pipeline()
-    pipeline._apply_duplicate_reverts(
-        reverts={chain[flagged_index].line_id: "adjacent_duplicate_detected"},
+    pipeline._apply_unit_reverts(
+        reverts={line_ref(chain[flagged_index]): "adjacent_duplicate_detected"},
+        all_lines=all_lines,
         traces=None,
-        line_by_id=line_by_id,
     )
     for lm in chain:
         assert lm.corrected_text == lm.ocr_text, lm.line_id
@@ -146,12 +147,12 @@ def test_f2_three_line_chain_reverts_atomically(flagged_index: int):
 def test_f2_four_line_chain_reverts_atomically():
     """Multi-hop: flag on the head of a-b-c-d must reach d (three hops)."""
     chain = _reconciled_chain("a0-", "b0-", "c0-", "d fin")
-    line_by_id = {lm.line_id: lm for lm in chain}
+    all_lines = {line_ref(lm): lm for lm in chain}
     pipeline = _make_pipeline()
-    pipeline._apply_duplicate_reverts(
-        reverts={chain[0].line_id: "adjacent_duplicate_detected"},
+    pipeline._apply_unit_reverts(
+        reverts={line_ref(chain[0]): "adjacent_duplicate_detected"},
+        all_lines=all_lines,
         traces=None,
-        line_by_id=line_by_id,
     )
     for lm in chain:
         assert lm.corrected_text == lm.ocr_text, lm.line_id

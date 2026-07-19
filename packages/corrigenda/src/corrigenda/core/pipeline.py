@@ -58,7 +58,7 @@ from corrigenda.errors import (
     ProjectionError,
 )
 from corrigenda.core.planner import downgrade_granularity, plan_page
-from corrigenda.core.units import derive_hyphen_groups
+from corrigenda.core.units import derive_hyphen_groups, hyphen_group_by_line
 from corrigenda.core.guards import check_adjacent_duplicates, check_line
 from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
 from corrigenda.core.protocols import (
@@ -615,19 +615,6 @@ class RunContext:
     #: bare-id key would let the last file's ops overwrite an earlier
     #: file's, corrupting the dry-run edit_script.
     producer_ops: dict[LineRef, tuple[list[EditOp], str]] = field(default_factory=dict)
-    #: Per-line PRE-REVERT accepted correction, keyed by _trace_key. The
-    #: cross-chunk boundary pass and the page-seam pass compare against
-    #: THIS snapshot (like the intra-chunk pass does via its local
-    #: `accepted_lines`): reading the live corrected_text after an
-    #: earlier revert would mask the third line of an identical-
-    #: correction run straddling a chunk/page seam.
-    accepted_snapshot: dict[LineRef, str] = field(default_factory=dict)
-    #: Which finalization pass ACTUALLY owned each line (keyed by
-    #: _trace_key). Granularity descent spawns sub-chunks the plan never
-    #: listed, so the boundary pass must derive its seams from these
-    #: owners, not from plan.chunks.
-    finalized_owner: dict[LineRef, int] = field(default_factory=dict)
-    finalize_seq: int = 0
     #: §4.1 vision envelope — resolved once per run from run(page_images=…).
     image_ref_by_page_id: dict[str, ImageRef] = field(default_factory=dict)
     page_dims: dict[str, tuple[int, int]] = field(default_factory=dict)
@@ -1008,58 +995,19 @@ class CorrectionPipeline:
             total_chunks += page_chunks
             total_reconciled += page_reconciled
 
-        # Page-seam duplicate pass: chunk plans and the page-level pass
-        # are both page-scoped, yet page-boundary lines DO see each other
-        # through cross-page hyphen context — so each page seam is checked
-        # explicitly (O(#pages), one pair per seam). The lookup is built
-        # per seam, never document-wide: bare line_ids may legitimately
-        # repeat across FILES, and a global bare-id dict is the exact
-        # ambiguity ADR-007 bans — an ambiguous seam is skipped instead.
-        for prev_page, next_page in zip(
-            document_manifest.pages, document_manifest.pages[1:]
-        ):
-            if not prev_page.lines or not next_page.lines:
-                continue
-            # Only compare a seam WITHIN one source file: pages of
-            # different files are concatenated in document_manifest, and
-            # the last physical line of file A is NOT adjacent to the
-            # first line of file B — comparing them could spuriously
-            # revert either as a "duplicate".
-            if prev_page.source_file != next_page.source_file:
-                continue
-            seam_map = {lm.line_id: lm for lm in (*prev_page.lines, *next_page.lines)}
-            if len(seam_map) != len(prev_page.lines) + len(next_page.lines):
-                continue  # cross-file line_id reuse → ambiguous, skip
-            a, b = prev_page.lines[-1], next_page.lines[0]
-            # Same pre-revert snapshot basis as the cross-chunk boundary
-            # pass: an intra-page revert of the seam line would otherwise
-            # mask the third member of a run straddling the page seam.
-            seam_reverts = check_adjacent_duplicates(
-                [
-                    (
-                        lm.line_id,
-                        lm.ocr_text,
-                        ctx.accepted_snapshot.get(
-                            line_ref(lm),
-                            lm.corrected_text
-                            if lm.corrected_text is not None
-                            else lm.ocr_text,
-                        ),
-                    )
-                    for lm in (a, b)
-                ],
-                config=self.guard_config,
-            )
-            self._apply_duplicate_reverts(
-                reverts=seam_reverts,
-                traces=traces,
-                line_by_id=seam_map,
-                # A seam line's hyphen partner may live on a THIRD page
-                # (outside the two-page seam_map); the document-wide,
-                # page-qualified index reaches it so the pair reverts
-                # atomically.
-                cross_page_partners=all_lines_global,
-            )
+        # P3.3 — ONE document-wide consistency pass. Chunk finalization no
+        # longer reverts duplicates, so every line still holds its
+        # PRE-REVERT accepted correction here: the pass compares live
+        # corrected_text over the canonical reading order on one basis,
+        # and extends rejections to whole hyphen units through THE
+        # derivation (ADR-010). Replaces three partial sweeps — the
+        # intra-chunk sweep, the cross-chunk boundary pass and the
+        # page-seam pass — that each carried their own comparison base.
+        self._global_adjacency_pass(
+            document_manifest=document_manifest,
+            all_lines=all_lines_global,
+            traces=traces,
+        )
 
         # Run-level terminality backstop: outputs exist only for a
         # document where every line carries a terminal decision.
@@ -1324,58 +1272,10 @@ class CorrectionPipeline:
                         )
                     ctx.fallback_chunks += 1
 
-        # Cross-chunk adjacency pass. Per-chunk finalization only sees
-        # that chunk's TARGET lines, so two document-adjacent lines owned
-        # by different chunks are never compared there — a duplication
-        # straddling a chunk boundary needs this pass. Only the boundary
-        # pairs are new — intra-chunk pairs were already checked with the
-        # same function and config — so the pass is restricted to
-        # adjacent pairs whose owners differ (re-checking whole pages
-        # would re-run SequenceMatcher over every already-checked pair
-        # for nothing).
-        #
-        # The owners are the finalization passes that
-        # ACTUALLY ran (ctx.finalized_owner), not the planned chunks:
-        # granularity descent finalizes a planned chunk as many
-        # sub-chunks, whose seams the plan-derived map could not see —
-        # and a single-chunk plan (`len(plan.chunks) > 1` gate) skipped
-        # the pass outright. Lines that never finalized (full-chunk OCR
-        # fallback) share owner None; such pairs sit at source text on
-        # both sides, where a revert would be a no-op anyway.
-        boundary_reverts: dict[str, str] = {}
-        for a, b in zip(page.lines, page.lines[1:]):
-            if ctx.finalized_owner.get(line_ref(a)) == ctx.finalized_owner.get(
-                line_ref(b)
-            ):
-                continue
-            # Compare the PRE-REVERT accepted corrections (snapshotted
-            # in _finalize_chunk_traces), not the live corrected_text: an
-            # intra-chunk revert of the boundary line would otherwise mask
-            # the third member of an identical-correction run straddling
-            # the boundary.
-            pair = [
-                (
-                    lm.line_id,
-                    lm.ocr_text,
-                    ctx.accepted_snapshot.get(
-                        line_ref(lm),
-                        lm.corrected_text
-                        if lm.corrected_text is not None
-                        else lm.ocr_text,
-                    ),
-                )
-                for lm in (a, b)
-            ]
-            boundary_reverts.update(
-                check_adjacent_duplicates(pair, config=self.guard_config)
-            )
-        if boundary_reverts:
-            self._apply_duplicate_reverts(
-                reverts=boundary_reverts,
-                traces=traces,
-                line_by_id=line_by_id,
-                cross_page_partners=cross_page_partners,
-            )
+        # Duplicate detection is no page business anymore: the single
+        # document-wide adjacency pass (P3.3) runs after the page loop,
+        # comparing every line's live pre-revert correction on one basis —
+        # chunk seams, descent sub-chunk seams and page seams included.
 
         page_corrections = sum(
             1
@@ -1599,13 +1499,7 @@ class CorrectionPipeline:
             traces=traces,
             cross_page_partners=cross_page_partners,
         )
-        self._finalize_chunk_traces(
-            ctx=ctx,
-            chunk_lines=target_lines,
-            traces=traces,
-            line_by_id=line_by_id,
-            cross_page_partners=cross_page_partners,
-        )
+        self._finalize_chunk_traces(chunk_lines=target_lines, traces=traces)
 
         self.observer.on_event(
             PipelineEventType.CHUNK_COMPLETED,
@@ -2120,56 +2014,91 @@ class CorrectionPipeline:
                 lm.status = LineStatus.FALLBACK
                 _set_trace(traces, lm, fallback_reason=result.reason)
 
-    def _apply_duplicate_reverts(
+    def _global_adjacency_pass(
         self,
         *,
-        reverts: dict[str, str],
+        document_manifest: DocumentManifest,
+        all_lines: dict[LineRef, LineManifest],
         traces: dict[LineRef, LineTrace] | None,
-        line_by_id: dict[str, LineManifest],
-        cross_page_partners: dict[LineRef, LineManifest] | None = None,
     ) -> None:
-        """Revert duplicate-flagged lines to OCR — atomically with their
-        hyphen partner.
+        """ONE adjacent-duplicate pass over the whole document (P3.3).
 
-        ONE shared implementation for the chunk-level sweep, the
-        page-level cross-chunk pass and the page-boundary pass: a mixed
-        OCR+corrected pair is the exact state ``reconcile_hyphen_pair``
-        guarantees can never survive, so every copy of the revert logic
-        must preserve pair atomicity — a flagged line's partner is
-        reverted too, with its own trace reason.
+        The canonical sequence is pages in manifest order, lines in page
+        order, broken at source-file transitions: file A's last physical
+        line is not adjacent to file B's first, and comparing them could
+        spuriously revert either. Keys are :class:`LineRef`s, so the
+        bare-id ambiguity that forced the old page-seam pass to skip
+        colliding seams (ADR-007) cannot arise — every seam is checked.
+        Runs after the page loop: no earlier pass has reverted anything,
+        so the live ``corrected_text`` IS the pre-revert accepted
+        correction, and a run of three identical corrections straddling
+        any seam is seen whole on one comparison basis.
+        """
+        reverts: dict[LineRef, str] = {}
+        segment: list[tuple[LineRef, str, str]] = []
+        prev_file: str | None = None
 
-        Partner extension resolves through ``_resolve_partner`` so a
-        *cross-page* partner (living on another page, absent from the
-        page-local ``line_by_id``) is reverted too — a page-local guard
-        would silently skip it and leave the reconciled cross-page pair
-        half OCR / half corrected.
+        def flush() -> None:
+            if len(segment) > 1:
+                reverts.update(
+                    check_adjacent_duplicates(segment, config=self.guard_config)
+                )
+            segment.clear()
+
+        for page in document_manifest.pages:
+            if page.source_file != prev_file:
+                flush()
+                prev_file = page.source_file
+            for lm in page.lines:
+                segment.append(
+                    (
+                        line_ref(lm),
+                        lm.ocr_text,
+                        lm.corrected_text
+                        if lm.corrected_text is not None
+                        else lm.ocr_text,
+                    )
+                )
+        flush()
+
+        self._apply_unit_reverts(reverts=reverts, all_lines=all_lines, traces=traces)
+
+    def _apply_unit_reverts(
+        self,
+        *,
+        reverts: dict[LineRef, str],
+        all_lines: dict[LineRef, LineManifest],
+        traces: dict[LineRef, LineTrace] | None,
+    ) -> None:
+        """Revert flagged lines to OCR — atomically with their WHOLE
+        hyphen unit.
+
+        A mixed OCR+corrected pair is the exact state
+        ``reconcile_hyphen_pair`` guarantees can never survive, so a
+        flagged member pulls every other member of its unit with it —
+        cross-page members included, ``all_lines`` being the
+        page-qualified document-wide index. Membership is a group lookup
+        on THE derivation (ADR-010): the pass runs after planning, when
+        the pointer fields are final, so the derived groups cannot be
+        stale. A flagged line keeps its own revert reason; pulled
+        members are stamped ``adjacent_duplicate_pair_atomicity`` unless
+        an earlier fallback path already pinned one.
         """
         if not reverts:
             return
-        # Collect the manifests to revert by object identity, keeping the
-        # first reason assigned to each. Originals are enrolled before the
-        # atomicity extension so an original revert reason always wins.
-        to_revert: dict[int, tuple[LineManifest, str]] = {}
+        by_line = hyphen_group_by_line(derive_hyphen_groups(all_lines.values()))
+        to_revert: dict[LineRef, str] = dict(reverts)
+        for ref in reverts:
+            group = by_line.get(ref)
+            if group is None:
+                continue
+            for member in group.members:
+                to_revert.setdefault(member, "adjacent_duplicate_pair_atomicity")
 
-        def _enroll(lm: LineManifest, reason: str) -> None:
-            to_revert.setdefault(id(lm), (lm, reason))
-
-        seeds: list[LineManifest] = []
-        for lid, reason in reverts.items():
-            lm = line_by_id.get(lid)
-            if lm is not None:
-                _enroll(lm, reason)
-                seeds.append(lm)
-        # Extend to the FIXED POINT of hyphen links (the shared
-        # _hyphen_closure): whole 3+-line chains revert atomically. A
-        # one-hop pass would leave a chain neighbour two hops from any
-        # flagged line with its corrected text — the mixed OCR+corrected
-        # pair state that reconcile_hyphen_pair's contract and this
-        # docstring forbid.
-        for lm in _hyphen_closure(seeds, line_by_id, cross_page_partners).values():
-            _enroll(lm, "adjacent_duplicate_pair_atomicity")
-
-        for lm, reason in to_revert.values():
+        for ref, reason in to_revert.items():
+            lm = all_lines.get(ref)
+            if lm is None:
+                continue
             lm.corrected_text = lm.ocr_text
             lm.status = LineStatus.FALLBACK
             _set_trace(
@@ -2178,57 +2107,25 @@ class CorrectionPipeline:
                 projected_text=lm.ocr_text,
                 validation_status=lm.status.value,
             )
-            # Only stamp the reason if no earlier fallback path (e.g.
-            # orphan_hyphen_completed) already pinned one.
             if traces is not None:
-                trace = traces.get(line_ref(lm))
+                trace = traces.get(ref)
                 if trace is not None and not trace.fallback_reason:
                     trace.fallback_reason = reason
 
     def _finalize_chunk_traces(
         self,
         *,
-        ctx: RunContext,
         chunk_lines: list[LineManifest],
         traces: dict[LineRef, LineTrace] | None,
-        line_by_id: dict[str, LineManifest],
-        cross_page_partners: dict[LineRef, LineManifest] | None = None,
     ) -> None:
-        """Adjacent-duplicate revert + projected_text/validation_status
-        for every line trace.
+        """Project the chunk's post-acceptance state onto the traces
+        (when the host opted in by passing a non-None ``traces`` dict).
 
-        Combines the two final sweeps that used to sit inline in
-        ``_run_chunk``: duplicate detection mutates ``corrected_text``,
-        then we project the post-mutation state onto the traces (when
-        the host opted into them by passing a non-None ``traces`` dict).
+        Duplicate detection is not chunk business anymore: the single
+        document-wide adjacency pass (P3.3) runs after the page loop, so
+        the state projected here is provisional until that pass ran.
         """
-        accepted_lines = [
-            (lm.line_id, lm.ocr_text, lm.corrected_text or lm.ocr_text)
-            for lm in chunk_lines
-        ]
-        # Persist the pre-revert snapshot for the boundary and page-seam
-        # passes (same comparison basis as this pass), and record the
-        # ACTUAL finalization owner: downgrade sub-chunks create seams
-        # the planned chunk list never had.
-        ctx.finalize_seq += 1
         for lm in chunk_lines:
-            ctx.accepted_snapshot[line_ref(lm)] = (
-                lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
-            )
-            ctx.finalized_owner[line_ref(lm)] = ctx.finalize_seq
-        dup_reverts = check_adjacent_duplicates(
-            accepted_lines, config=self.guard_config
-        )
-        self._apply_duplicate_reverts(
-            reverts=dup_reverts,
-            traces=traces,
-            line_by_id=line_by_id,
-            cross_page_partners=cross_page_partners,
-        )
-
-        for lm in chunk_lines:
-            if lm.line_id in dup_reverts:
-                continue  # already projected by the revert helper
             _set_trace(
                 traces,
                 lm,
