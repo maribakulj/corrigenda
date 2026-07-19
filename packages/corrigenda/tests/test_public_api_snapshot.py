@@ -106,6 +106,9 @@ PUBLIC_API_1_0 = sorted(
         "DecisionStage",
         "DecisionReason",
         "ProjectionStage",
+        # Provenance (§11, P3.9)
+        "ProducerProvenance",
+        "RunProvenance",
     ]
 )
 
@@ -174,6 +177,7 @@ def test_correction_report_json_keys_are_pinned():
         "total_lines",
         "lines",
         "format_losses",
+        "provenance",  # P3.9 — optional, additive (no version bump)
     }, (
         "CorrectionReport JSON shape moved — a key removal/rename requires "
         "bumping CORRECTION_REPORT_VERSION (§9); an addition must stay "

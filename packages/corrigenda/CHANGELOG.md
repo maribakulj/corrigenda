@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`RunProvenance` — the report says exactly what produced it (P3.9,
+  §11).** ``CorrectionReport.provenance`` (optional, additive — no
+  ``report_version`` bump) records the library version, the §8.2
+  composite ``config_fingerprint`` (the same value stamped into the
+  XML), the GENERIC producer identity (``ProducerProvenance``, the
+  report-side mirror of ``ProducerMetadata`` — a rules run records its
+  name + configuration digest, never an artificial vendor/model pair),
+  a ``sha256:`` digest of every INPUT file's bytes (empty on dry
+  runs), the manifest's source format, and the installed versions of
+  the critical dependencies (lxml, pydantic — resolved from package
+  metadata, never by importing them: the pure core stays lxml-free).
+  Generation parameters are not duplicated: the retry/temperature
+  strategy is already covered by the policy fingerprint.
+  ``RunProvenance`` and ``ProducerProvenance`` join the public surface.
+
 - **`LossPolicy` — REPORT or STRICT on format-granularity loss
   (ADR-012, P3.8).** The PAGE rewriter cannot keep ``Word`` geometry
   when a correction changes a line's word count (6.2 P4 slow path).

@@ -71,10 +71,12 @@ from corrigenda.core.schemas import (
     ModelInfo,
     PageManifest,
     PairingPolicy,
+    ProducerProvenance,
     ProjectionStage,
     ProposalFeatures,
     ProposalStage,
     RetryPolicy,
+    RunProvenance,
     Usage,
 )
 from corrigenda.errors import (
@@ -242,6 +244,9 @@ __all__ = [
     "DecisionStage",
     "DecisionReason",
     "ProjectionStage",
+    # Provenance (§11, P3.9)
+    "ProducerProvenance",
+    "RunProvenance",
     # Version
     "__version__",
 ]

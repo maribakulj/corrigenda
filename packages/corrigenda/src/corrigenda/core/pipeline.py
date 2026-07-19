@@ -95,11 +95,13 @@ from corrigenda.core.schemas import (
     LineStatus,
     LineTrace,
     LossPolicy,
+    ProducerProvenance,
     ProposalBatch,
     CorrectionRequest,
     PageManifest,
     PairingPolicy,
     RetryPolicy,
+    RunProvenance,
     Usage,
 )
 
@@ -187,6 +189,27 @@ def _adapter_for_format(source_format: str | None) -> FormatAdapter:
         "corrigenda format parser, or inject format_adapter explicitly "
         "on the pipeline"
     )
+
+
+#: Critical dependencies recorded on the run's provenance (P3.9, §11).
+#: Versions come from package METADATA (importlib.metadata), never from
+#: an import — the pure core stays lxml-free by construction.
+_PROVENANCE_DEPENDENCIES = ("lxml", "pydantic")
+
+
+def _dependency_versions() -> dict[str, str]:
+    """Installed versions of the critical dependencies; a package that
+    is not installed is simply absent (never an error — a core-only
+    consumer legitimately runs without lxml)."""
+    import importlib.metadata as _md
+
+    versions: dict[str, str] = {}
+    for package in _PROVENANCE_DEPENDENCIES:
+        try:
+            versions[package] = _md.version(package)
+        except _md.PackageNotFoundError:
+            continue
+    return versions
 
 
 def sanitize_error(msg: str, api_key: str | None = None) -> str:
@@ -1078,6 +1101,10 @@ class CorrectionPipeline:
             # the report (None when the format is lossless or nothing was
             # written).
             format_losses=format_losses or None,
+            # P3.9 (§11) — the run's full provenance record.
+            provenance=self._build_provenance(
+                document_manifest=document_manifest, source_files=source_files
+            ),
         )
 
         # Line-level fallback accounting, read from the DecisionSet
@@ -1098,6 +1125,37 @@ class CorrectionPipeline:
             edit_script=self._build_final_edit_script(decisions, ctx),
             decisions=decisions,
             corrected_files=corrected_files,
+        )
+
+    def _build_provenance(
+        self,
+        *,
+        document_manifest: DocumentManifest,
+        source_files: dict[str, Path],
+    ) -> RunProvenance:
+        """The run's §11 provenance record (P3.9): library + producer
+        identity, policy fingerprint, per-file digests of the INPUT
+        bytes, and critical dependency versions. Digests read the source
+        files once more — the report must be tied to the bytes as GIVEN,
+        before any rewrite touched a tree."""
+        from corrigenda import __version__ as _lib_version
+
+        md = self.producer_metadata
+        return RunProvenance(
+            lib_version=_lib_version,
+            config_fingerprint=self.config_fingerprint(),
+            producer=ProducerProvenance(
+                name=md.name,
+                version=md.version,
+                implementation=md.implementation,
+                configuration_fingerprint=md.configuration_fingerprint,
+            ),
+            source_digests={
+                name: "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                for name, path in source_files.items()
+            },
+            source_format=document_manifest.source_format,
+            dependencies=_dependency_versions(),
         )
 
     def _build_final_edit_script(

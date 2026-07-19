@@ -930,6 +930,59 @@ class LineOutcome(BaseModel):
 CORRECTION_REPORT_VERSION = "2.0"
 
 
+class ProducerProvenance(BaseModel):
+    """The producer's identity as recorded on the report (P3.9, §11).
+
+    Mirrors :class:`corrigenda.core.protocols.ProducerMetadata` field for
+    field (the dataclass cannot be the report type directly — protocols
+    imports schemas, and the report is a schemas artefact). GENERIC
+    vocabulary: a rules producer has no "model", so ``implementation``
+    is simply ``None`` — never an artificial vendor pair.
+    """
+
+    name: str = "unknown"
+    version: str | None = None
+    implementation: str | None = None
+    configuration_fingerprint: str | None = None
+
+
+class RunProvenance(BaseModel):
+    """Everything needed to say WHAT produced this report (P3.9, §11).
+
+    Extends the §11 story beyond the policy fingerprint: the exact
+    library, the exact producer identity, the exact SOURCE bytes
+    (per-file sha256), the format, and the critical dependencies.
+    A consumer holding the same inputs and versions can re-run and
+    compare; a consumer holding only the report can say precisely what
+    it is looking at. Present on every run, including dry runs
+    (``source_digests`` is then empty).
+
+    Generation parameters are not duplicated here: the temperature ramp
+    and retry strategy live in :class:`RetryPolicy`, already covered by
+    ``config_fingerprint``.
+    """
+
+    #: corrigenda's own version.
+    lib_version: str
+    #: The §8.2 composite policy fingerprint (chunk_planner / guard /
+    #: loss / pairing / retry) — same value stamped into the XML.
+    config_fingerprint: str
+    #: Who produced the edits (generic identity, P3.7-4).
+    producer: ProducerProvenance
+    #: source file name → ``sha256:<hex>`` of the INPUT bytes, so the
+    #: report is verifiably tied to the exact document it corrected.
+    #: Empty on dry runs (no source files given).
+    source_digests: dict[str, str] = Field(default_factory=dict)
+    #: The manifest's stamped source format ("alto" / "page"), None for
+    #: hand-built manifests that never went through a parser.
+    source_format: str | None = None
+    #: Critical dependency versions ({"lxml": …, "pydantic": …}),
+    #: resolved from package metadata without importing the packages —
+    #: the pure core stays lxml-free. A package that is not installed
+    #: is simply absent.
+    dependencies: dict[str, str] = Field(default_factory=dict)
+
+
 class CorrectionReport(BaseModel):
     """Public, versioned correction report (§9).
 
@@ -955,6 +1008,11 @@ class CorrectionReport(BaseModel):
     #: ``report_version`` — the field's contract is to bump only on a
     #: *breaking* JSON change, and a new optional key is backward-compatible.
     format_losses: dict[str, int] | None = None
+    #: P3.9 (§11) — the run's full provenance record. Optional and
+    #: additive (no ``report_version`` bump): a v2.0 consumer that
+    #: ignores unknown keys keeps working, one that reads it gains the
+    #: source digests, producer identity and dependency versions.
+    provenance: RunProvenance | None = None
 
     @property
     def fallback_lines(self) -> list[LineOutcome]:
@@ -996,5 +1054,7 @@ __all__ = [
     "DecisionStage",
     "DecisionReason",
     "ProjectionStage",
+    "ProducerProvenance",
+    "RunProvenance",
     "CorrectionReport",
 ]
