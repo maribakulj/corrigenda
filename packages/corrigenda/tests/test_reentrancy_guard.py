@@ -27,7 +27,7 @@ class _NullObserver:
 
 
 class _IdentityProducer:
-    async def produce(self, payload: Any, *, policy: Any) -> Any:
+    async def produce(self, payload: Any, *, options: Any) -> Any:
         from corrigenda.core.editing import EditScript, ReplaceLine
 
         ops = [
@@ -41,9 +41,9 @@ class _YieldingIdentityProducer(_IdentityProducer):
     """Identity producer that yields to the loop, so two concurrent runs
     genuinely interleave their chunk processing."""
 
-    async def produce(self, payload: Any, *, policy: Any) -> Any:
+    async def produce(self, payload: Any, *, options: Any) -> Any:
         await asyncio.sleep(0)
-        return await super().produce(payload, policy=policy)
+        return await super().produce(payload, options=options)
 
 
 def _pipeline(producer: Any) -> CorrectionPipeline:
@@ -89,7 +89,7 @@ def test_sequential_reuse_survives_a_failed_run() -> None:
     """Sequential re-use must survive a run that died mid-flight."""
 
     class _ExplodingProducer:
-        async def produce(self, payload: Any, *, policy: Any) -> Any:
+        async def produce(self, payload: Any, *, options: Any) -> Any:
             raise ValueError("boom")
 
     async def scenario() -> None:

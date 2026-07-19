@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from corrigenda.core.editing import EditScript
@@ -24,7 +24,6 @@ from corrigenda.core.schemas import (
     LLMUserPayload,
     ModelInfo,
     PageManifest,
-    RetryPolicy,
     Usage,
 )
 from corrigenda.errors import ConfigurationError, ProviderError
@@ -116,6 +115,32 @@ class BaseProvider(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class ProducerOptions:
+    """Per-call envelope the engine hands a producer (P3.7, §5.1).
+
+    Replaces the full ``RetryPolicy`` on the ``produce()`` seam: the
+    ENGINE owns the retry/downgrade strategy — a producer only needs to
+    know about THIS call. ``temperature`` is already resolved for the
+    attempt (ramp and hyphen 0.0-pin decided engine-side);
+    ``deadline_seconds`` is an optional wall-clock budget hint;
+    ``should_abort`` is the run's cooperative cancellation probe — a
+    producer doing long I/O SHOULD poll it (or wire it to its HTTP
+    client) and abandon the call by raising
+    :class:`~corrigenda.errors.CorrectionAborted` when it trips,
+    instead of the engine only noticing between chunks.
+    """
+
+    attempt: int = 1
+    temperature: float = 0.0
+    deadline_seconds: float | None = None
+    should_abort: Callable[[], bool] | None = None
+
+    def cancelled(self) -> bool:
+        """True when the run asked to abort — poll around long I/O."""
+        return self.should_abort is not None and self.should_abort()
+
+
 @runtime_checkable
 class EditProducer(Protocol):
     """Producer contract of the edit protocol (§5.1).
@@ -138,7 +163,7 @@ class EditProducer(Protocol):
     wants_image: bool
 
     async def produce(
-        self, payload: LLMUserPayload, *, policy: RetryPolicy
+        self, payload: LLMUserPayload, *, options: ProducerOptions
     ) -> tuple[EditScript, Usage | None]: ...
 
 
@@ -263,6 +288,7 @@ __all__ = [
     "EditProducer",
     "FormatAdapter",
     "PipelineObserver",
+    "ProducerOptions",
     "ProviderTransientError",
     "ProviderPermanentError",
     "RewriteMetrics",

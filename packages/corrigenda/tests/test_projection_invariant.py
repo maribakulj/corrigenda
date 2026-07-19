@@ -110,7 +110,7 @@ class _DoubleSpaceProducer:
     wants_image = False
     requires_full_coverage = False
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         first = payload.lines[0]
         return (
             EditScript(

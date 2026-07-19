@@ -195,7 +195,7 @@ class _WordSplitter:
     wants_image = False
     requires_full_coverage = False
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         ops = [
             ReplaceLine(line_id=ln.line_id, text="helo wr ld")
             for ln in payload.lines

@@ -84,7 +84,7 @@ class _IdentityProducer:
     wants_image = False
     requires_full_coverage = False
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         return EditScript(ops=[]), None
 
 

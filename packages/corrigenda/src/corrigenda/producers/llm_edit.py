@@ -25,7 +25,8 @@ from typing import Any
 
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.protocols import BaseProvider
-from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
+from corrigenda.core.protocols import ProducerOptions
+from corrigenda.core.schemas import LLMUserPayload, Usage
 from corrigenda.producers.llm import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 
 
@@ -61,7 +62,7 @@ class LLMEditProducer:
         )
 
     async def produce(
-        self, payload: LLMUserPayload, *, policy: RetryPolicy
+        self, payload: LLMUserPayload, *, options: ProducerOptions
     ) -> tuple[EditScript, Usage | None]:
         raw, usage = await self._provider.complete_structured(
             api_key=self._api_key,
@@ -71,9 +72,9 @@ class LLMEditProducer:
             # for byte (None hyphen/vision fields never reached providers).
             user_payload=payload.model_dump(exclude_none=True),
             json_schema=self._output_schema,
-            # The pipeline drives the retry ramp: it hands us a policy whose
-            # first temperature IS this attempt's temperature.
-            temperature=policy.temperature_for(1),
+            # The pipeline drives the retry ramp: the envelope carries
+            # this attempt's resolved temperature (P3.7).
+            temperature=options.temperature,
         )
         ops: list[ReplaceLine] = []
         lines = raw.get("lines", []) if isinstance(raw, dict) else []

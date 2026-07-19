@@ -107,7 +107,7 @@ class _PermanentlyRejectedProducer:
     wants_image = False
     requires_full_coverage = False
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         raise ProviderPermanentError("invalid credentials", status_code=401)
 
 

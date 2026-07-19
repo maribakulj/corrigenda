@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from corrigenda.core.protocols import ProducerOptions
 from corrigenda.core.editing import RangeAnchor, ReplaceSpan, apply_edit_script
 from corrigenda.formats.alto.parser import build_document_manifest
 from corrigenda.producers.rules import (
@@ -102,12 +103,11 @@ def test_target_ids_restrict_emission():
 
 
 def test_produce_contract_shape_returns_no_usage():
-    """§5.1 — produce(payload, *, policy) over an LLMUserPayload."""
+    """§5.1 — produce(payload, *, options) over an LLMUserPayload."""
     from corrigenda.core.schemas import (
         ChunkGranularity,
         LLMLineInput,
         LLMUserPayload,
-        RetryPolicy,
     )
 
     prod = RulesProducer(default_french_ocr_rules())
@@ -118,7 +118,7 @@ def test_produce_contract_shape_returns_no_usage():
         page_id="p",
         lines=[LLMLineInput(line_id="l1", ocr_text="ſi")],
     )
-    script, usage = asyncio.run(prod.produce(payload, policy=RetryPolicy.default()))
+    script, usage = asyncio.run(prod.produce(payload, options=ProducerOptions()))
     assert usage is None
     assert script.ops[0].text == "s"
 

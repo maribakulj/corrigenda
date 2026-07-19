@@ -79,7 +79,7 @@ class _FailsPages:
     def __init__(self, failing_line_ids: set[str]) -> None:
         self._failing = failing_line_ids
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         ids = {ln.line_id for ln in payload.lines}
         if ids & self._failing:
             raise ValidationError("chunk rejected on purpose")

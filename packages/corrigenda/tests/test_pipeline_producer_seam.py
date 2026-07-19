@@ -16,6 +16,7 @@ from tests._pipeline_harness import apply_decisions
 from corrigenda import CorrectionPipeline
 from corrigenda.errors import ConfigurationError
 from corrigenda.core.editing import EditScript, ReplaceSpan, apply_edit_script
+from corrigenda.core.protocols import ProducerOptions
 from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
 from corrigenda.formats.alto.parser import build_document_manifest
 from corrigenda.producers.rules import RulesProducer, SubstitutionRule
@@ -96,7 +97,7 @@ class _VisionProducer:
     requires_full_coverage = False
 
     async def produce(
-        self, payload: LLMUserPayload, *, policy: RetryPolicy
+        self, payload: LLMUserPayload, *, options: ProducerOptions
     ) -> tuple[EditScript, Usage | None]:
         # Record what the compiler put in the payload, edit nothing.
         self.seen_payload = payload
@@ -111,7 +112,7 @@ class _BuggyProducer:
     wants_image = False
     requires_full_coverage = False
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         raise KeyError("bug in _script_to_raw")
 
 
@@ -195,7 +196,7 @@ class _RecordingVisionProducer:
         self.image_refs: list[str | None] = []
         self.line_ids: list[list[str]] = []
 
-    async def produce(self, payload: LLMUserPayload, *, policy: RetryPolicy):
+    async def produce(self, payload: LLMUserPayload, *, options: RetryPolicy):
         self.image_refs.append(payload.image_ref)
         self.line_ids.append([ln.line_id for ln in payload.lines])
         return EditScript(ops=[]), None

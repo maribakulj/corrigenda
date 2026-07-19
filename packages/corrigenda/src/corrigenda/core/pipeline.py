@@ -72,6 +72,7 @@ from corrigenda.core.protocols import (
     EditProducer,
     FormatAdapter,
     PipelineObserver,
+    ProducerOptions,
     ProviderPermanentError,
     ProviderTransientError,
     require_page_images,
@@ -627,6 +628,9 @@ class RunContext:
     #: bare-id key would let the last file's ops overwrite an earlier
     #: file's, corrupting the dry-run edit_script.
     producer_ops: dict[LineRef, tuple[list[EditOp], str]] = field(default_factory=dict)
+    #: The run's cooperative cancellation probe, forwarded to producers
+    #: via :class:`ProducerOptions` (P3.7) so long I/O can be abandoned.
+    should_abort: Callable[[], bool] | None = None
     #: §4.1 vision envelope — resolved once per run from run(page_images=…).
     image_ref_by_page_id: dict[str, ImageRef] = field(default_factory=dict)
     page_dims: dict[str, tuple[int, int]] = field(default_factory=dict)
@@ -870,7 +874,7 @@ class CorrectionPipeline:
         run_id = run_id or str(uuid.uuid4())
         # One fresh context per execution; no per-run state remains on
         # the instance.
-        ctx = RunContext()
+        ctx = RunContext(should_abort=should_abort)
 
         # §5.1 — a vision producer without its images is a start-up error,
         # never a silent image-less call.
@@ -1650,15 +1654,17 @@ class CorrectionPipeline:
             )
 
             try:
-                # §5.1 — the pipeline drives the temperature ramp: it hands
-                # the producer a policy whose FIRST temperature is this
-                # attempt's, so the ramp (and the hyphen 0.0 pin) is decided
-                # here regardless of the producer implementation.
-                per_attempt_policy = self.retry_policy.model_copy(
-                    update={"temperatures": (temperature,)}
-                )
+                # P3.7 — the producer gets a per-call envelope, not the
+                # engine's whole RetryPolicy: the ramp (and the hyphen
+                # 0.0 pin) is decided HERE; the probe lets long I/O be
+                # abandoned mid-flight.
                 script, usage = await self.producer.produce(
-                    payload, policy=per_attempt_policy
+                    payload,
+                    options=ProducerOptions(
+                        attempt=attempt,
+                        temperature=temperature,
+                        should_abort=ctx.should_abort,
+                    ),
                 )
                 raw = self._script_to_raw(script, chunk_lines)
                 if usage is not None:

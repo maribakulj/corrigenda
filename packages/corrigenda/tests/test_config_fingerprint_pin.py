@@ -33,7 +33,7 @@ class _Noop:
     wants_image = False
     requires_full_coverage = True
 
-    async def produce(self, payload, *, policy):  # pragma: no cover
+    async def produce(self, payload, *, options):  # pragma: no cover
         from corrigenda.core.editing import EditScript
 
         return EditScript(ops=[]), None

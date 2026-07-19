@@ -53,7 +53,7 @@ class _Raising:
     def __init__(self, exc: BaseException) -> None:
         self._exc = exc
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         raise self._exc
 
 

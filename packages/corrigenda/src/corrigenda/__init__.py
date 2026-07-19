@@ -45,6 +45,7 @@ from corrigenda.core.protocols import (
     BaseProvider,
     EditProducer,
     PipelineObserver,
+    ProducerOptions,
     require_page_images,
 )
 from corrigenda.core.schemas import (
@@ -189,6 +190,7 @@ __all__ = [
     "normalize_anchor",
     # Producers (§5)
     "EditProducer",
+    "ProducerOptions",
     "require_page_images",
     "RulesProducer",
     "SubstitutionRule",

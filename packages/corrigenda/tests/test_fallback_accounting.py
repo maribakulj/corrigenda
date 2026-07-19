@@ -53,7 +53,7 @@ class _AlwaysInvalidProducer:
     wants_image = False
     requires_full_coverage = False
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         raise ValidationError("malformed on purpose")
 
 
@@ -69,7 +69,7 @@ class _OneLineGarbler:
     def __init__(self) -> None:
         self.done = False
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         ops = []
         for line in payload.lines:
             if (

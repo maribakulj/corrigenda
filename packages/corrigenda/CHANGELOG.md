@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING — the producer seam takes `ProducerOptions`, not the
+  RetryPolicy (P3.7, first slice).** ``EditProducer.produce(payload, *,
+  options)`` receives a per-call envelope — ``attempt``, the RESOLVED
+  ``temperature`` (ramp and hyphen 0.0-pin decided engine-side, ending
+  the "policy whose first temperature is this attempt's" contortion),
+  an optional ``deadline_seconds`` hint, and ``should_abort``: the
+  run's cancellation probe, so a producer can abandon long I/O
+  mid-flight (or wire the probe into its HTTP client) instead of the
+  engine only noticing between chunks. The engine keeps the full
+  ``RetryPolicy`` to itself. Remaining P3.7 work (client/catalog split,
+  the generic ``CorrectionRequest``/``LineProposal`` renames and
+  ``ProducerMetadata``) follows in later slices.
+
 - **BREAKING — `PipelineEventType` names only engine events (P3.6,
   first slice).** The server-side values — job lifecycle ``started`` /
   ``completed`` / ``failed`` / ``cancelled``, the frontend-only

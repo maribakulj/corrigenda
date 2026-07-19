@@ -23,7 +23,8 @@ from dataclasses import dataclass
 
 from corrigenda.core._norm import ncfold
 from corrigenda.core.editing import EditScript, RangeAnchor, ReplaceSpan
-from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
+from corrigenda.core.protocols import ProducerOptions
+from corrigenda.core.schemas import LLMUserPayload, Usage
 
 
 @dataclass(frozen=True)
@@ -199,7 +200,7 @@ class RulesProducer:
     # -- EditProducer contract (§5.1) ------------------------------------
 
     async def produce(
-        self, payload: LLMUserPayload, *, policy: RetryPolicy
+        self, payload: LLMUserPayload, *, options: ProducerOptions
     ) -> tuple[EditScript, Usage | None]:
         """§5.1 entry point — deterministic, so ``policy`` is unused and
         ``Usage`` is ``None`` (no tokens spent). Rules run over every line
