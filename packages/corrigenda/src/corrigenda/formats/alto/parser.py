@@ -471,15 +471,9 @@ def build_document_manifest(
     # with the first line of page N+1.
     _link_cross_page_hyphens(all_pages, pairing_policy)
 
-    total_blocks = sum(len(p.blocks) for p in all_pages)
-    total_lines = sum(len(p.lines) for p in all_pages)
-
     return DocumentManifest(
         source_files=source_files,
         pages=all_pages,
-        total_pages=len(all_pages),
-        total_blocks=total_blocks,
-        total_lines=total_lines,
         source_format="alto",
     )
 

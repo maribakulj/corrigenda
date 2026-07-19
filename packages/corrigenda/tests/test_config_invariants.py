@@ -185,36 +185,28 @@ def _page(n_lines: int = 1) -> PageManifest:
     )
 
 
-def test_document_manifest_rejects_contradictory_totals():
+def test_document_manifest_counters_are_computed():
+    """ADR-011 — the counters derive from the pages. A stored copy could
+    contradict the content (the retired validator existed to catch
+    exactly that lie); a computed one cannot, and a caller passing
+    (even lying) legacy kwargs cannot skew them."""
     page = _page(2)
-    with pytest.raises(ValueError, match="total_lines"):
-        DocumentManifest(
-            source_files=["a.xml"],
-            pages=[page],
-            total_pages=1,
-            total_blocks=0,
-            total_lines=99,  # lie
-        )
-    with pytest.raises(ValueError, match="total_pages"):
-        DocumentManifest(
-            source_files=["a.xml"],
-            pages=[page],
-            total_pages=3,  # lie
-            total_blocks=0,
-            total_lines=2,
-        )
+    doc = DocumentManifest(source_files=["a.xml"], pages=[page])
+    assert doc.total_pages == 1
+    assert doc.total_blocks == 0
+    assert doc.total_lines == 2
 
-
-def test_document_manifest_consistent_totals_accepted():
-    page = _page(2)
-    doc = DocumentManifest(
+    lying = DocumentManifest(
         source_files=["a.xml"],
         pages=[page],
-        total_pages=1,
-        total_blocks=0,
-        total_lines=2,
+        total_pages=3,
+        total_blocks=7,
+        total_lines=99,
     )
-    assert doc.total_lines == 2
+    assert lying.total_pages == 1
+    assert lying.total_lines == 2
+    # The counters stay part of the serialized shape.
+    assert lying.model_dump()["total_lines"] == 2
 
 
 # ---------------------------------------------------------------------------

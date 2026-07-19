@@ -45,7 +45,10 @@ rewriter already knew.
   historical `(xml_bytes, metrics, rewriter_paths)` triple so existing
   tuple call sites survive the migration — attribute access is the
   contract; the shim goes when the tuple sites do.
-- **Slice B**: manifest counters become computed properties.
+- **Slice B (landed)**: `DocumentManifest.total_pages/blocks/lines`
+  are computed fields (still serialized); the lying-totals validator is
+  retired — a derived count cannot contradict the content, and legacy
+  constructor kwargs are ignored rather than trusted.
 - **Slice C**: `DecisionSet` introduced ALONGSIDE the mutation
   (coherence-checked), then readers flip to it; the pointer fields'
   retirement folds in ADR-010's remaining `BOTH`-as-derived-detail.
