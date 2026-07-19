@@ -11,8 +11,9 @@ construction; the import-contract test enforces it).
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from corrigenda.core.editing import EditScript
@@ -212,15 +213,47 @@ class RewriteMetrics(Protocol):
     slow_path: int
 
 
+@dataclass(frozen=True)
+class RewriteResult:
+    """Everything one file's rewrite produced, in one value (ADR-011).
+
+    ``texts`` maps bare line_id → the line's final text (line_ids are
+    unique per source file, ADR-007), extracted from the very tree the
+    bytes were serialized from — the projection invariant (P1.4)
+    verifies against them without re-parsing the output. ``losses`` are
+    the format's granularity-loss counters for this file
+    (:attr:`~corrigenda.core.schemas.CorrectionReport.format_losses`
+    aggregates them over the run); empty when the rewrite is lossless.
+    """
+
+    xml_bytes: bytes
+    metrics: RewriteMetrics
+    #: line_id → "untouched" / "subs_only" / "fast_path" / "slow_path"
+    rewriter_paths: dict[str, str]
+    texts: dict[str, str]
+    losses: dict[str, int] = field(default_factory=dict)
+
+    def __iter__(self) -> Iterator[Any]:
+        """Transitional positional unpacking — the historical rewriter
+        return shape ``(xml_bytes, metrics, rewriter_paths)``, kept so
+        existing ``bytes_, metrics, paths = rewrite_…`` call sites
+        survive the ADR-011 migration. ``texts``/``losses`` are
+        attribute-only; new code should read attributes throughout.
+        Removed once the tuple call sites are gone."""
+        yield self.xml_bytes
+        yield self.metrics
+        yield self.rewriter_paths
+
+
 @runtime_checkable
 class FormatAdapter(Protocol):
     """Format seam (§3): how the pipeline touches concrete XML.
 
     The orchestrator never imports a format module; it writes corrected
-    documents and re-extracts their text exclusively through this port.
+    documents exclusively through this port.
     ``corrigenda.formats.alto`` provides the ALTO implementation (and the
-    pipeline's lazy composition-boundary default); ``formats.page`` will
-    plug in the same way.
+    pipeline's lazy composition-boundary default); ``formats.page`` plugs
+    in the same way.
     """
 
     def rewrite_file(
@@ -232,15 +265,8 @@ class FormatAdapter(Protocol):
         *,
         lib_version: str | None = None,
         config_fingerprint: str | None = None,
-    ) -> tuple[bytes, RewriteMetrics, dict[str, str]]:
-        """Rewrite one source file with the pages' corrected text.
-
-        Returns ``(xml_bytes, metrics, line_id -> rewriter_path)``.
-        """
-        ...
-
-    def extract_texts(self, xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]:
-        """Re-extract per-line text from rewritten XML (trace/report)."""
+    ) -> RewriteResult:
+        """Rewrite one source file with the pages' corrected text."""
         ...
 
 
@@ -253,5 +279,6 @@ __all__ = [
     "ProviderTransientError",
     "ProviderPermanentError",
     "RewriteMetrics",
+    "RewriteResult",
     "require_page_images",
 ]

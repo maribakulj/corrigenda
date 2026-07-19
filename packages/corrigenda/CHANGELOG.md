@@ -71,6 +71,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The format seam returns one `RewriteResult` (ADR-011, slice A).**
+  `FormatAdapter.rewrite_file` now returns `RewriteResult(xml_bytes,
+  metrics, rewriter_paths, texts, losses)`; the adapter-level
+  `extract_texts` port is gone. The per-line texts are read off the
+  very tree the bytes were serialized from, so the projection
+  invariant (P1.4) verifies without re-parsing the output — one full
+  lxml parse per file removed from every run. `RewriteResult` unpacks
+  positionally to the historical `(xml_bytes, metrics, rewriter_paths)`
+  triple during the migration. The module-level `extract_output_texts`
+  helpers remain for round-trip checks over arbitrary bytes.
+
+- **`CorrectionReport.format_losses` is finally populated.** The field
+  existed since the PAGE rewriter grew its granularity counters
+  (`words_dropped`, `custom_offset_stripped`, …) but no pipeline run
+  ever set it. The `RewriteResult` carries each file's counters and the
+  run aggregates them onto the report — dry-run included.
+
 - **One global consistency pass (P3.3).** Adjacent-duplicate detection
   now runs ONCE over the whole document in canonical reading order
   (pages in manifest order, lines in page order, never across source

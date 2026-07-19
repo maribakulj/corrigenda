@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from corrigenda import CorrectionPipeline
+from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.schemas import CorrectionReport, HyphenRole
 from corrigenda.formats.page._custom import strip_offset_groups
 from corrigenda.formats.page.parser import build_document_manifest
@@ -165,3 +169,61 @@ def test_identity_rewrite_is_text_stable_on_corpus():
     xml, metrics, _paths = rewrite_page_file(_LAF_CORR, doc.pages, "t", "m")
     assert metrics.untouched == len(ids)
     assert extract_output_texts(xml, ids) == src
+
+
+# ---------------------------------------------------------------------------
+# ADR-011 — the RUN's report carries the rewrite losses
+# ---------------------------------------------------------------------------
+
+
+class _Null:
+    def on_event(self, *a, **k):
+        pass
+
+    def write_corrected(self, *, source_stem, xml_bytes):
+        pass
+
+    def write_trace(self, *, traces_payload):
+        pass
+
+
+class _WordSplitter:
+    """Splits one word of ln1 — same text, one more word: the PAGE slow
+    path rebuilds the line and drops its Word elements."""
+
+    wants_geometry = False
+    wants_image = False
+    requires_full_coverage = False
+
+    async def produce(self, payload, *, policy):
+        ops = [
+            ReplaceLine(line_id=ln.line_id, text="helo wr ld")
+            for ln in payload.lines
+            if ln.line_id == "ln1"
+        ]
+        return EditScript(ops=ops), None
+
+
+@pytest.mark.asyncio
+async def test_run_report_carries_the_rewrite_losses(tmp_path: Path) -> None:
+    """The rewriter counted its granularity losses but the RUN never
+    surfaced them: ``CorrectionReport.format_losses`` existed on the
+    schema and stayed ``None`` on every pipeline run. The RewriteResult
+    (ADR-011) carries them per file and the run aggregates — dry-run
+    included, since the rewrite always happens in memory."""
+    p = _write(tmp_path, _CUSTOM_FIXTURE)
+    doc = build_document_manifest([(p, p.name)])
+    pipeline = CorrectionPipeline(
+        producer=_WordSplitter(),
+        observer=_Null(),
+        output_writer=_Null(),
+        provider_name="x",
+        model="m",
+    )
+    result = await pipeline.run(
+        document_manifest=doc, source_files={p.name: p}, apply=False
+    )
+    losses = result.report.format_losses
+    assert losses is not None, "the run must surface the rewrite losses"
+    assert losses["words_dropped"] == 2
+    assert losses["custom_offset_stripped"] >= 1

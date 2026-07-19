@@ -18,6 +18,7 @@ from corrigenda.formats.alto._ns import (
     make_safe_parser,
 )
 from corrigenda.formats.alto._text import reconstruct_textline
+from corrigenda.core.protocols import RewriteResult
 from corrigenda.core.schemas import HyphenRole, LineManifest, PageManifest
 
 # ---------------------------------------------------------------------------
@@ -665,7 +666,7 @@ def rewrite_alto_file(
     *,
     lib_version: str | None = None,
     config_fingerprint: str | None = None,
-) -> tuple[bytes, RewriterMetrics, dict[str, str]]:
+) -> RewriteResult:
     """
     Rewrite an ALTO XML file with corrected text from page_manifests.
 
@@ -675,8 +676,8 @@ def rewrite_alto_file(
       Path 3 — FAST PATH:  text changed + word count same → in-place CONTENT + SUBS
       Path 4 — SLOW PATH:  word count changed → rebuild line + SUBS
 
-    Returns (rewritten_xml_bytes, metrics, line_rewriter_paths).
-    line_rewriter_paths maps line_id → "untouched"/"subs_only"/"fast_path"/"slow_path".
+    Returns a :class:`RewriteResult` (bytes, metrics, per-line rewriter
+    paths, final texts, losses).
     """
     # Hardened parser — see corrigenda.formats.alto._ns.make_safe_parser docstring
     # for the rationale. Using lxml's default here would expose every
@@ -750,22 +751,25 @@ def rewrite_alto_file(
     xml_bytes = etree.tostring(
         root, xml_declaration=True, encoding="UTF-8", pretty_print=False
     )
-    return xml_bytes, metrics, line_paths
+    # ADR-011 — the output texts are read off the very tree the bytes
+    # were just serialized from: the projection invariant verifies them
+    # without a second full parse of the output. ALTO rewrites are
+    # lossless (no granularity counters to report).
+    return RewriteResult(
+        xml_bytes=xml_bytes,
+        metrics=metrics,
+        rewriter_paths=line_paths,
+        texts=_extract_texts_from_root(root, ns, set(line_by_id)),
+    )
 
 
-def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]:
-    """Re-extract text from rewritten ALTO XML for the given line IDs.
-
-    Uses the shared ``reconstruct_textline`` helper so the output text
-    seen here matches both the parser's ocr_text and the rewriter's
-    UNTOUCHED-detection comparison.
-    """
-    # Hardened parser — see corrigenda.formats.alto._ns.make_safe_parser. The
-    # bytes here are typically the OUTPUT of rewrite_alto_file but the
-    # function is documented as accepting arbitrary ALTO bytes, so we
-    # treat them as untrusted.
-    root = etree.fromstring(xml_bytes, make_safe_parser())
-    ns = _detect_namespace(root)
+def _extract_texts_from_root(
+    root: etree._Element, ns: str, line_ids: set[str]
+) -> dict[str, str]:
+    """Per-line text of an ALTO tree, via the shared
+    ``reconstruct_textline`` helper — so the text seen here matches both
+    the parser's ocr_text and the rewriter's UNTOUCHED-detection
+    comparison."""
     textline_tag = _tag("TextLine", ns)
     result: dict[str, str] = {}
     for tl_el in root.iter(textline_tag):
@@ -780,6 +784,21 @@ def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]
                 )
             result[line_id] = reconstruct_textline(tl_el, ns)
     return result
+
+
+def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]:
+    """Re-extract text from rewritten ALTO XML for the given line IDs.
+
+    The pipeline no longer calls this (the rewrite returns its texts on
+    the :class:`RewriteResult`); it remains for round-trip checks over
+    arbitrary ALTO bytes.
+    """
+    # Hardened parser — see corrigenda.formats.alto._ns.make_safe_parser. The
+    # bytes here are typically the OUTPUT of rewrite_alto_file but the
+    # function is documented as accepting arbitrary ALTO bytes, so we
+    # treat them as untrusted.
+    root = etree.fromstring(xml_bytes, make_safe_parser())
+    return _extract_texts_from_root(root, _detect_namespace(root), line_ids)
 
 
 def _add_processing_entry(

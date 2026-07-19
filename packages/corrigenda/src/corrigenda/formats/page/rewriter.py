@@ -32,6 +32,7 @@ from corrigenda.core._norm import nfc
 from corrigenda.core.identity import ensure_unique_identities
 from corrigenda.core.pairing import HYPHEN_CHARS, trailing_hyphen_char
 from corrigenda.errors import DuplicateIdError
+from corrigenda.core.protocols import RewriteResult
 from corrigenda.core.schemas import LineManifest, PageManifest
 from corrigenda.formats.page._custom import strip_offset_groups
 from corrigenda.formats.page._ns import (
@@ -299,11 +300,12 @@ def rewrite_page_file(
     *,
     lib_version: str | None = None,
     config_fingerprint: str | None = None,
-) -> tuple[bytes, PageRewriterMetrics, dict[str, str]]:
+) -> RewriteResult:
     """Rewrite a PAGE XML file with corrected text from ``page_manifests``.
 
-    Returns ``(xml_bytes, metrics, line_id -> path)`` where path is one of
-    ``untouched`` / ``fast_path`` / ``slow_path`` (never ``subs_only``).
+    Returns a :class:`RewriteResult`; the per-line rewriter path is one
+    of ``untouched`` / ``fast_path`` / ``slow_path`` (never
+    ``subs_only``).
     """
     tree = etree.parse(str(xml_path), make_safe_parser())
     root = tree.getroot()
@@ -389,14 +391,23 @@ def rewrite_page_file(
     xml_bytes = etree.tostring(
         root, xml_declaration=True, encoding="UTF-8", pretty_print=False
     )
-    return xml_bytes, metrics, line_paths
+    # ADR-011 — output texts read off the very tree the bytes were just
+    # serialized from (no second parse); the PAGE-specific granularity
+    # counters ride along for CorrectionReport.format_losses.
+    return RewriteResult(
+        xml_bytes=xml_bytes,
+        metrics=metrics,
+        rewriter_paths=line_paths,
+        texts=_extract_texts_from_root(root, ns, set(line_by_id)),
+        losses=metrics.as_losses(),
+    )
 
 
-def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]:
-    """Re-extract canonical line text from rewritten PAGE XML for the given
-    line IDs (trace/report), matching the parser's reconstruction."""
-    root = etree.fromstring(xml_bytes, make_safe_parser())
-    ns = _detect_namespace(root)
+def _extract_texts_from_root(
+    root: etree._Element, ns: str, line_ids: set[str]
+) -> dict[str, str]:
+    """Canonical per-line text of a PAGE tree, matching the parser's
+    reconstruction."""
     textline_tag = _tag("TextLine", ns)
     result: dict[str, str] = {}
     for tl in root.iter(textline_tag):
@@ -411,6 +422,16 @@ def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]
                 )
             result[line_id] = canonical_line_text(tl, ns)
     return result
+
+
+def extract_output_texts(xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]:
+    """Re-extract canonical line text from rewritten PAGE XML.
+
+    The pipeline no longer calls this (the rewrite returns its texts on
+    the :class:`RewriteResult`); it remains for round-trip checks over
+    arbitrary PAGE bytes."""
+    root = etree.fromstring(xml_bytes, make_safe_parser())
+    return _extract_texts_from_root(root, _detect_namespace(root), line_ids)
 
 
 __all__ = [
