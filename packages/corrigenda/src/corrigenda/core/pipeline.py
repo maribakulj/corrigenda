@@ -57,6 +57,7 @@ from corrigenda.errors import (
     CorrectionError,
     ProjectionError,
 )
+from corrigenda.core.decisions import DecisionSet, derive_decision_set
 from corrigenda.core.planner import downgrade_granularity, plan_page
 from corrigenda.core.units import derive_hyphen_groups, hyphen_group_by_line
 from corrigenda.core.guards import check_adjacent_duplicates, check_line
@@ -199,30 +200,6 @@ def sanitize_error(msg: str, api_key: str | None = None) -> str:
     return msg
 
 
-def _verify_all_lines_terminal(document_manifest: DocumentManifest) -> None:
-    """Refuse to finish a run while any line lacks a terminal decision.
-
-    Every decision path (acceptance, reconciliation, fallback, absorbed
-    chunk error) guarantees per-line terminality; this is the run-level
-    backstop before outputs are written. A ``PENDING`` line here is an
-    engine bug — a decision path that forgot its lines — never an input
-    problem, so it fails the run instead of degrading.
-    """
-    undecided = [
-        (page.page_id, lm.line_id)
-        for page in document_manifest.pages
-        for lm in page.lines
-        if lm.status is LineStatus.PENDING
-    ]
-    if undecided:
-        shown = ", ".join(f"({p!r}, {li!r})" for p, li in undecided[:5])
-        suffix = " …" if len(undecided) > 5 else ""
-        raise RuntimeError(
-            f"{len(undecided)} line(s) reached the end of the run with no "
-            f"terminal decision (PENDING): {shown}{suffix}"
-        )
-
-
 def _projection_normal_form(text: str) -> str:
     """Whitespace-run normal form for the projection invariant.
 
@@ -238,20 +215,19 @@ def _verify_projection(
     source_name: str,
     pages: list[PageManifest],
     output_texts: dict[str, str],
+    decisions: DecisionSet,
 ) -> None:
     """The rewritten file must SAY what the run decided, line for line.
 
-    Compares the text re-extracted from the rewritten XML against each
-    line's final decision (corrected text, or source text for fallback /
-    untouched lines) in whitespace normal form. A missing line or a
-    word-level divergence is corruption of the deliverable — the run
-    fails here, before the writer can persist the artefact.
+    Compares the rewrite's per-line texts against each line's terminal
+    decision (ADR-011 — read from the immutable :class:`DecisionSet`,
+    not the mutable manifests) in whitespace normal form. A missing line
+    or a word-level divergence is corruption of the deliverable — the
+    run fails here, before the writer can persist the artefact.
     """
     for page in pages:
         for lm in page.lines:
-            decided = (
-                lm.corrected_text if lm.corrected_text is not None else lm.ocr_text
-            )
+            decided = decisions.by_ref[line_ref(lm)].final_text
             extracted = output_texts.get(lm.line_id)
             if extracted is None:
                 raise ProjectionError(
@@ -1009,14 +985,16 @@ class CorrectionPipeline:
             traces=traces,
         )
 
-        # Run-level terminality backstop: outputs exist only for a
-        # document where every line carries a terminal decision.
-        _verify_all_lines_terminal(document_manifest)
+        # ADR-011 — materialize the run's decisions. Refuses a PENDING
+        # line (the run-level terminality backstop): outputs exist only
+        # for a document where every line carries a terminal decision.
+        decisions = derive_decision_set(document_manifest, traces)
 
         format_losses = await self._write_outputs(
             document_manifest=document_manifest,
             source_files=source_files,
             traces=traces,
+            decisions=decisions,
             apply=apply,
         )
 
@@ -1037,30 +1015,17 @@ class CorrectionPipeline:
                 traces_payload=report.model_dump_json(indent=2),
             )
 
-        # Line-level fallback accounting. Manifest statuses are the
-        # authority: they cover every path that leaves a line at its OCR
+        # Line-level fallback accounting, read from the DecisionSet
+        # (ADR-011): it covers every path that leaves a line at its OCR
         # text (chunk fallback, guard rejection, duplicate revert), not
         # just chunks whose attempts were exhausted.
-        fallback_lms = [
-            lm
-            for page in document_manifest.pages
-            for lm in page.lines
-            if lm.status is LineStatus.FALLBACK
-        ]
-        fallback_reasons: dict[str, int] = {}
-        for lm in fallback_lms:
-            trace = traces.get(line_ref(lm))
-            raw = (trace.fallback_reason if trace else None) or "unspecified"
-            prefix = raw.split(":", 1)[0].strip()
-            fallback_reasons[prefix] = fallback_reasons.get(prefix, 0) + 1
-
         return CorrectionResult(
             total_chunks=total_chunks,
             total_reconciled=total_reconciled,
             retry_count=ctx.retry_count,
             fallback_chunks=ctx.fallback_chunks,
-            fallback_lines=len(fallback_lms),
-            fallback_reasons=fallback_reasons,
+            fallback_lines=decisions.fallback_lines,
+            fallback_reasons=decisions.fallback_reason_counts(),
             traces=traces,
             reconcile_metrics=ctx.reconcile_metrics,
             usage=ctx.usage,
@@ -2149,6 +2114,7 @@ class CorrectionPipeline:
         document_manifest: DocumentManifest,
         source_files: dict[str, Path],
         traces: dict[LineRef, LineTrace],
+        decisions: DecisionSet,
         apply: bool = True,
     ) -> dict[str, int]:
         """Rewrite corrected files, update traces, and (when ``apply``)
@@ -2205,7 +2171,7 @@ class CorrectionPipeline:
             # Projection invariant: the artefact must SAY what the run
             # decided. Verified BEFORE the writer sees the bytes — a
             # divergent artefact is corruption, never a valid output.
-            _verify_projection(source_name, pages_for_file, result.texts)
+            _verify_projection(source_name, pages_for_file, result.texts, decisions)
 
             if apply:
                 await asyncio.to_thread(

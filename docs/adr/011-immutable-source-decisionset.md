@@ -49,9 +49,14 @@ rewriter already knew.
   are computed fields (still serialized); the lying-totals validator is
   retired — a derived count cannot contradict the content, and legacy
   constructor kwargs are ignored rather than trusted.
-- **Slice C**: `DecisionSet` introduced ALONGSIDE the mutation
-  (coherence-checked), then readers flip to it; the pointer fields'
-  retirement folds in ADR-010's remaining `BOTH`-as-derived-detail.
+- **Slice C** (model + first readers landed): `corrigenda.core.decisions`
+  defines `LineDecision`/`DecisionSet`, materialized once after the
+  global consistency pass; the terminality backstop became the set's
+  construction invariant (a PENDING line refuses materialization), and
+  the projection invariant plus the result's fallback accounting read
+  the DecisionSet instead of re-walking the manifests. Remaining:
+  the report/EditScript builders flip; the pointer fields' retirement
+  folds in ADR-010's `BOTH`-as-derived-detail.
 - **Slice D**: `OutputWriter`/`apply=` leave the engine surface;
   `result.write(dir)` helper; backend transaction untouched.
 - **Slice E**: immutable `Source*` models, mutation ends, `_running`

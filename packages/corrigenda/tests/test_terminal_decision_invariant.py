@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from corrigenda import CorrectionPipeline, ValidationError
-from corrigenda.core.pipeline import _verify_all_lines_terminal
+from corrigenda.core.decisions import derive_decision_set
 from corrigenda.core.schemas import LineStatus, PipelineEventType
 from corrigenda.formats.alto.parser import build_document_manifest
 from corrigenda.producers.rules import RulesProducer, SubstitutionRule
@@ -140,13 +140,21 @@ async def test_partial_decisions_survive_the_absorb(monkeypatch) -> None:
 
 
 def test_run_level_invariant_names_the_pending_line() -> None:
+    """ADR-011 — the backstop IS the DecisionSet's construction invariant:
+    an undecided line refuses materialization, so no decisions (and no
+    outputs) can exist for a document with a forgotten line."""
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    # All lines PENDING (freshly parsed): the check must refuse and name one.
+    # All lines PENDING (freshly parsed): materialization must refuse.
     with pytest.raises(RuntimeError, match="PENDING"):
-        _verify_all_lines_terminal(doc)
-    # After deciding every line, it passes silently.
+        derive_decision_set(doc, {})
+    # After deciding every line, the set materializes and reflects it.
+    total = 0
     for page in doc.pages:
         for lm in page.lines:
             lm.status = LineStatus.FALLBACK
             lm.corrected_text = lm.ocr_text
-    _verify_all_lines_terminal(doc)
+            total += 1
+    decisions = derive_decision_set(doc, {})
+    assert len(decisions.decisions) == total
+    assert decisions.fallback_lines == total
+    assert decisions.fallback_reason_counts() == {"unspecified": total}

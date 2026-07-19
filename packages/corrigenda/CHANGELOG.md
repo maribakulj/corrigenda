@@ -82,6 +82,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   triple during the migration. The module-level `extract_output_texts`
   helpers remain for round-trip checks over arbitrary bytes.
 
+- **The run's decisions materialize as an immutable `DecisionSet`
+  (ADR-011, slice C).** After the global consistency pass —
+  the point where no later pass may change a decision — the engine
+  derives `corrigenda.core.decisions.DecisionSet`: every line's
+  terminal decision (source text, final text, status, fallback reason)
+  in document reading order, keyed by qualified identity. The
+  terminality backstop is now its construction invariant (a `PENDING`
+  line refuses materialization and fails the run), and the projection
+  invariant plus the result's `fallback_lines`/`fallback_reasons`
+  accounting read the DecisionSet instead of re-walking the mutable
+  manifests. Internal for now; it is the seam the immutable-source
+  slice flips.
+
 - **Manifest counters are computed (ADR-011, slice B).**
   `DocumentManifest.total_pages/total_blocks/total_lines` derive from
   the pages (`computed_field` — still present in the serialized shape);
