@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.errors import ProjectionError
@@ -72,8 +73,7 @@ def _pipeline(adapter) -> CorrectionPipeline:
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=_Null(),
         format_adapter=adapter,
-        provider_name="rules",
-        model="v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="v1"),
     )
 
 
@@ -134,8 +134,7 @@ async def test_whitespace_collapse_is_tolerated_not_fatal() -> None:
     pipeline = CorrectionPipeline(
         producer=_DoubleSpaceProducer(),
         observer=_Null(),
-        provider_name="x",
-        model="y",
+        producer_metadata=ProducerMetadata(name="x", implementation="y"),
     )
     result = await pipeline.run(
         document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
@@ -149,8 +148,7 @@ async def test_healthy_run_passes_the_invariant() -> None:
     pipeline = CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=_Null(),
-        provider_name="rules",
-        model="v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="v1"),
     )
     result = await pipeline.run(
         document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}

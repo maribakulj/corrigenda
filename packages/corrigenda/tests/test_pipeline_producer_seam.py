@@ -13,6 +13,7 @@ import pytest
 
 from tests._pipeline_harness import apply_decisions
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.errors import ConfigurationError
 from corrigenda.core.editing import EditScript, ReplaceSpan, apply_edit_script
@@ -46,8 +47,7 @@ async def test_rules_producer_drives_full_pipeline_without_credentials():
     pipeline = CorrectionPipeline(
         producer=producer,
         observer=_Null(),
-        provider_name="rules",
-        model="fr-ocr-v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="fr-ocr-v1"),
     )
     result = await pipeline.run(
         document_manifest=doc,
@@ -127,8 +127,7 @@ async def test_programming_error_propagates_not_masked_as_ocr_fallback():
     pipeline = CorrectionPipeline(
         producer=_BuggyProducer(),
         observer=_Null(),
-        provider_name="buggy",
-        model="m",
+        producer_metadata=ProducerMetadata(name="buggy", implementation="m"),
     )
     with pytest.raises(KeyError):
         await pipeline.run(

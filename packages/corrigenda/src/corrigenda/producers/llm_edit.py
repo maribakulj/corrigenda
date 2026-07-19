@@ -24,8 +24,11 @@ from __future__ import annotations
 from typing import Any
 
 from corrigenda.core.editing import EditScript, ReplaceLine
-from corrigenda.core.protocols import StructuredCompletionClient
-from corrigenda.core.protocols import ProducerOptions
+from corrigenda.core.protocols import (
+    ProducerMetadata,
+    ProducerOptions,
+    StructuredCompletionClient,
+)
 from corrigenda.core.schemas import CorrectionRequest, Usage
 from corrigenda.integrations.llm import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 
@@ -60,6 +63,11 @@ class LLMEditProducer:
         self._output_schema = (
             OUTPUT_JSON_SCHEMA if output_schema is None else output_schema
         )
+        #: Declared provenance (P3.7-4) — the adapter cannot know the
+        #: vendor's marketing name, so ``name`` stays the generic "llm";
+        #: ``for_provider(provider_name=…)`` overrides it with the
+        #: caller's label via explicit constructor metadata.
+        self.metadata = ProducerMetadata(name="llm", implementation=model)
 
     async def produce(
         self, payload: CorrectionRequest, *, options: ProducerOptions

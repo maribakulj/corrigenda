@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.formats.alto.parser import build_document_manifest
 from corrigenda.producers.rules import RulesProducer, SubstitutionRule
@@ -31,8 +32,7 @@ def _pipeline() -> CorrectionPipeline:
     return CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=_Null(),
-        provider_name="rules",
-        model="v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="v1"),
     )
 
 

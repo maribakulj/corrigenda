@@ -13,6 +13,7 @@ import dataclasses
 
 import pytest
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.core.decisions import derive_decision_set
 from corrigenda.core.identity import LineRef
@@ -35,8 +36,7 @@ async def test_decision_set_mirrors_a_real_run(tmp_path) -> None:
     pipeline = CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=_Null(),
-        provider_name="rules",
-        model="v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="v1"),
     )
     result = await pipeline.run(document_manifest=doc, source_files={src.name: src})
 
@@ -79,8 +79,7 @@ async def test_fallback_reason_travels_onto_the_decision(tmp_path) -> None:
         producer=_FailsPages({"L0", "L1"}),
         observer=_Null(),
         retry_policy=RetryPolicy(transient_backoff_base=0.0, output_backoff_base=0.0),
-        provider_name="x",
-        model="m",
+        producer_metadata=ProducerMetadata(name="x", implementation="m"),
     )
     result = await pipeline.run(document_manifest=doc, source_files={src.name: src})
     decisions = result.decisions

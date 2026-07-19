@@ -75,11 +75,12 @@ async def main(out_dir: Path) -> None:
     rules = RulesProducer(
         default_french_ocr_rules() + [SubstitutionRule("e", "3", name="demo_e3")]
     )
+    # No provenance labels needed: RulesProducer DECLARES its identity
+    # (ProducerMetadata name="rules" + a fingerprint of its rules table),
+    # and the §11 stamp picks it up. Pass producer_metadata=... to override.
     pipeline = CorrectionPipeline(
         producer=rules,
         observer=PrintObserver(),
-        provider_name="rules",
-        model="demo-fr",
     )
     result = await pipeline.run(
         document_manifest=doc,

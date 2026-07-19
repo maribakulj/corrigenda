@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 from hypothesis import given, settings
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline, CorrectionResult
 from corrigenda.core.editing import EditScript
 from corrigenda.core.schemas import ChunkPlannerConfig, DocumentManifest, LineStatus
@@ -108,8 +109,7 @@ async def _run_partition(
         producer=RulesProducer(_RULES),
         observer=_Null(),
         config=config,
-        provider_name="rules",
-        model="fr-ocr-v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="fr-ocr-v1"),
     )
     return await pipeline.run(
         document_manifest=doc,
@@ -179,8 +179,9 @@ def test_identity_producer_preserves_content_and_geometry(doc: str) -> None:
             pipeline = CorrectionPipeline(
                 producer=_IdentityProducer(),
                 observer=_Null(),
-                provider_name="identity",
-                model="none",
+                producer_metadata=ProducerMetadata(
+                    name="identity", implementation="none"
+                ),
             )
             result = await pipeline.run(
                 document_manifest=manifest,
@@ -331,8 +332,9 @@ def test_identity_producer_preserves_rich_docs(
             pipeline = CorrectionPipeline(
                 producer=_IdentityProducer(),
                 observer=_Null(),
-                provider_name="identity",
-                model="none",
+                producer_metadata=ProducerMetadata(
+                    name="identity", implementation="none"
+                ),
             )
             result = await pipeline.run(
                 document_manifest=manifest,

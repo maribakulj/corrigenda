@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda.core.hyphenation import reconcile_hyphen_pair
 from corrigenda.core.identity import line_ref
 from corrigenda.core.schemas import Coords, HyphenRole, LineManifest, LineStatus
@@ -336,8 +337,7 @@ async def test_f4_producer_ops_do_not_collide_across_files(tmp_path):
     pipeline = CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("frauce", "france")]),
         observer=RecordingObserver(),
-        provider_name="rules",
-        model="fr-ocr-v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="fr-ocr-v1"),
     )
     result = await pipeline.run(
         document_manifest=doc,
@@ -946,8 +946,7 @@ async def test_review_w1_edit_script_ops_attributable_across_files(tmp_path):
     pipeline = CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("frauce", "france")]),
         observer=RecordingObserver(),
-        provider_name="rules",
-        model="fr-ocr-v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="fr-ocr-v1"),
     )
     result = await pipeline.run(
         document_manifest=doc,

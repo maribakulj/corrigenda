@@ -18,12 +18,14 @@ non-overlapping and passes the editing module's E2 check untouched.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 
 from corrigenda.core._norm import ncfold
 from corrigenda.core.editing import EditScript, RangeAnchor, ReplaceSpan
-from corrigenda.core.protocols import ProducerOptions
+from corrigenda.core.protocols import ProducerMetadata, ProducerOptions
 from corrigenda.core.schemas import CorrectionRequest, Usage
 
 
@@ -96,6 +98,31 @@ class RulesProducer:
         # a bare .lower() left a decomposed (NFD) lexicon entry unable to
         # match its composed token — a silently missed guarded correction.
         self._lexicon = {ncfold(w) for w in lexicon} if lexicon else set()
+        #: Declared provenance (P3.7-4) — a rules engine has no "model":
+        #: ``implementation`` stays None and the identity carries the
+        #: producer-side configuration digest instead, so the §11 stamp
+        #: records WHICH rules table (and lexicon) produced the edits.
+        self.metadata = ProducerMetadata(
+            name="rules",
+            configuration_fingerprint=self._config_fingerprint(),
+        )
+
+    def _config_fingerprint(self) -> str:
+        """Stable 16-hex sha256 over the rules table + normalised lexicon
+        (same shape as the pipeline's policy fingerprint, §11)."""
+        payload = json.dumps(
+            {
+                "rules": [
+                    [r.pattern, r.replacement, r.regex, r.lexicon_guarded, r.name]
+                    for r in self._rules
+                ],
+                "lexicon": sorted(self._lexicon),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
     # -- pure core -------------------------------------------------------
 

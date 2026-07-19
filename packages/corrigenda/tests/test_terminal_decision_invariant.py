@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline, ValidationError
 from corrigenda.core.decisions import derive_decision_set
 from corrigenda.core.schemas import LineStatus, PipelineEventType
@@ -49,8 +50,7 @@ def _pipeline(observer) -> CorrectionPipeline:
     return CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=observer,
-        provider_name="rules",
-        model="v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="v1"),
     )
 
 
@@ -121,8 +121,7 @@ async def test_partial_decisions_survive_the_absorb(monkeypatch) -> None:
             line_window_size=2,
             line_window_overlap=1,
         ),
-        provider_name="rules",
-        model="v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="v1"),
     )
     result = await pipeline.run(
         document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}

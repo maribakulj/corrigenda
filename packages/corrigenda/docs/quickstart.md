@@ -87,12 +87,15 @@ from corrigenda import CorrectionPipeline, RulesProducer, default_french_ocr_rul
 pipeline = CorrectionPipeline(
     producer=RulesProducer(default_french_ocr_rules()),   # ſ→s, ﬁ/ﬂ …
     observer=Observer(),
-    provider_name="rules", model="fr-ocr-v1",             # provenance labels
 )
 ```
 
 The rules engine emits exact-offset `replace_span` ops — reproducible to
-the byte, zero network. See [the edit protocol](edit-protocol.md) for the
+the byte, zero network. It declares its own provenance
+(`ProducerMetadata(name="rules", configuration_fingerprint=…)` — a rules
+engine has no "model"), which the §11 `processingStep` stamp picks up
+automatically; pass `producer_metadata=ProducerMetadata(...)` to the
+constructor to override it. See [the edit protocol](edit-protocol.md) for the
 op model, and [formats](formats.md) for what each rewriter guarantees.
 
 ## Reading the results

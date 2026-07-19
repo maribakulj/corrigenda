@@ -164,6 +164,38 @@ class ProducerOptions:
         return self.should_abort is not None and self.should_abort()
 
 
+@dataclass(frozen=True)
+class ProducerMetadata:
+    """Provenance identity of an :class:`EditProducer` (P3.7, §11).
+
+    Replaces the bare ``provider_name``/``model`` strings with GENERIC
+    producer vocabulary — a rules engine has no "model". ``name`` says
+    WHO produced the edits (``"openai"``, ``"rules"``, …);
+    ``implementation`` names the concrete engine behind the name when
+    one exists (an LLM's model string, a rules-set label);
+    ``configuration_fingerprint`` is the producer-side configuration
+    digest (prompt/schema hash, rules-table hash) — the counterpart of
+    the pipeline's policy :meth:`~CorrectionPipeline.config_fingerprint`.
+
+    A producer MAY declare its own identity via a ``metadata`` attribute
+    (the same optional-attribute convention as
+    ``requires_full_coverage``); an explicit ``producer_metadata`` on the
+    :class:`CorrectionPipeline` constructor wins over the declaration.
+    """
+
+    name: str = "unknown"
+    version: str | None = None
+    implementation: str | None = None
+    configuration_fingerprint: str | None = None
+
+    def provenance_labels(self) -> tuple[str, str]:
+        """The ``(provider, model)`` label pair stamped into corrected
+        XML — the format seam predates the generic vocabulary and keeps
+        its historical two-string surface, so an implementation-less
+        producer stamps ``"unknown"`` exactly as the bare strings did."""
+        return self.name, self.implementation or "unknown"
+
+
 @runtime_checkable
 class EditProducer(Protocol):
     """Producer contract of the edit protocol (§5.1).
@@ -180,6 +212,12 @@ class EditProducer(Protocol):
     payload. A producer with ``wants_image=True`` run without a matching
     ``page_images`` entry is a start-up error (:func:`require_page_images`),
     never a silent image-less call.
+
+    Optional declared surfaces (read via ``getattr``, absent is fine —
+    deliberately NOT protocol members so third-party producers and the
+    ``isinstance`` check stay unaffected): ``requires_full_coverage``
+    (bool, default ``True``) and ``metadata``
+    (:class:`ProducerMetadata` — the producer's provenance identity).
     """
 
     wants_geometry: bool
@@ -313,6 +351,7 @@ __all__ = [
     "StructuredCompletionClient",
     "FormatAdapter",
     "PipelineObserver",
+    "ProducerMetadata",
     "ProducerOptions",
     "ProviderTransientError",
     "ProviderPermanentError",

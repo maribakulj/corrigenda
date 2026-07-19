@@ -71,6 +71,7 @@ from corrigenda.core.protocols import (
     EditProducer,
     FormatAdapter,
     PipelineObserver,
+    ProducerMetadata,
     ProducerOptions,
     StructuredCompletionClient,
     ProviderPermanentError,
@@ -665,8 +666,7 @@ class CorrectionPipeline:
         pairing_policy: PairingPolicy | None = None,
         format_adapter: FormatAdapter | None = None,
         *,
-        provider_name: str = "unknown",
-        model: str = "unknown",
+        producer_metadata: ProducerMetadata | None = None,
     ) -> None:
         self.producer = producer
         self.observer = observer
@@ -687,10 +687,19 @@ class CorrectionPipeline:
         # injected adapter that contradicts that format is refused at
         # run start. There is no implicit default format.
         self.format_adapter = format_adapter
-        # §11 — provenance labels stamped into the corrected XML's
-        # processingStep. Pure strings: the pipeline never dials a vendor.
-        self.provider_name = provider_name
-        self.model = model
+        # §11 — provenance identity stamped into the corrected XML's
+        # processingStep (P3.7-4: ProducerMetadata replaces the bare
+        # provider_name/model strings — a rules producer has no "model").
+        # Explicit constructor metadata wins; else the producer's own
+        # declaration (optional `metadata` attribute, same convention as
+        # requires_full_coverage); else anonymous. The pipeline never
+        # dials a vendor either way.
+        if producer_metadata is None:
+            declared = getattr(producer, "metadata", None)
+            producer_metadata = (
+                declared if isinstance(declared, ProducerMetadata) else None
+            )
+        self.producer_metadata = producer_metadata or ProducerMetadata()
         # No reentrancy guard (ADR-011 slice E, retiring ADR-005): the
         # instance carries only immutable configuration, every run works
         # on a fresh RunContext plus its own deep copy of the input
@@ -746,8 +755,11 @@ class CorrectionPipeline:
             guard_config=guard_config,
             pairing_policy=pairing_policy,
             format_adapter=format_adapter,
-            provider_name=provider_name,
-            model=model,
+            # Vendor vocabulary is native HERE (the LLM convenience):
+            # the two strings become the generic identity envelope.
+            producer_metadata=ProducerMetadata(
+                name=provider_name, implementation=model
+            ),
         )
 
     def config_fingerprint(self) -> str:
@@ -2178,14 +2190,15 @@ class CorrectionPipeline:
             if adapter is None:
                 adapter = _adapter_for_format(document_manifest.source_format)
 
+            provider_label, model_label = self.producer_metadata.provenance_labels()
             result = await asyncio.to_thread(
                 adapter.rewrite_file,
                 xml_path,
                 pages_for_file,
                 # §11 provenance labels — constructor state since the §5.1
                 # resorption (run() no longer carries provider/model).
-                self.provider_name,
-                self.model,
+                provider_label,
+                model_label,
                 lib_version=_lib_version,
                 config_fingerprint=config_fingerprint,
             )

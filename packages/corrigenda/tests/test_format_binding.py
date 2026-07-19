@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.errors import ConfigurationError
 from corrigenda.formats.alto.adapter import AltoFormatAdapter
@@ -57,8 +58,7 @@ def _pipeline(**kwargs) -> CorrectionPipeline:
     return CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("o", "0")]),
         observer=_Null(),
-        provider_name="rules",
-        model="v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="v1"),
         **kwargs,
     )
 

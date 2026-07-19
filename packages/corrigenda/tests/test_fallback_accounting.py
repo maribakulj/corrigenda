@@ -25,6 +25,7 @@ import pytest
 
 from tests._pipeline_harness import apply_decisions
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline, ValidationError
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.schemas import LineStatus
@@ -90,8 +91,7 @@ async def test_rejected_multiline_chunks_count_every_line() -> None:
     pipeline = CorrectionPipeline(
         producer=_AlwaysInvalidProducer(),
         observer=_Null(),
-        provider_name="invalid",
-        model="m",
+        producer_metadata=ProducerMetadata(name="invalid", implementation="m"),
     )
     result = await pipeline.run(
         document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
@@ -117,8 +117,7 @@ async def test_guard_rejection_is_a_line_fallback_without_chunk_failure() -> Non
     pipeline = CorrectionPipeline(
         producer=_OneLineGarbler(),
         observer=_Null(),
-        provider_name="garbler",
-        model="m",
+        producer_metadata=ProducerMetadata(name="garbler", implementation="m"),
     )
     result = await pipeline.run(
         document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
@@ -138,8 +137,7 @@ async def test_clean_run_reports_zero_everywhere() -> None:
     pipeline = CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
         observer=_Null(),
-        provider_name="rules",
-        model="v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="v1"),
     )
     result = await pipeline.run(
         document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}

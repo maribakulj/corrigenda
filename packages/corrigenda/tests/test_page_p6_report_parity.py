@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.schemas import CorrectionReport, HyphenRole
@@ -216,8 +217,7 @@ async def test_run_report_carries_the_rewrite_losses(tmp_path: Path) -> None:
     pipeline = CorrectionPipeline(
         producer=_WordSplitter(),
         observer=_Null(),
-        provider_name="x",
-        model="m",
+        producer_metadata=ProducerMetadata(name="x", implementation="m"),
     )
     result = await pipeline.run(document_manifest=doc, source_files={p.name: p})
     losses = result.report.format_losses

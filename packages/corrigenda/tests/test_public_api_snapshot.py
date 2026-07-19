@@ -58,6 +58,7 @@ PUBLIC_API_1_0 = sorted(
         "normalize_anchor",
         # Producers (§5)
         "EditProducer",
+        "ProducerMetadata",
         "ProducerOptions",
         "require_page_images",
         "RulesProducer",

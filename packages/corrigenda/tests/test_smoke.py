@@ -188,6 +188,8 @@ def test_changelog_added_symbols_are_importable():
                 # P0-1 provider taxonomy (Unreleased ### Added)
                 "ProviderTransientError",
                 "ProviderPermanentError",
+                # P3.7-4 producer identity (Unreleased ### Added)
+                "ProducerMetadata",
             ],
         ),
         ("corrigenda.integrations.llm", ["OUTPUT_JSON_SCHEMA", "SYSTEM_PROMPT"]),

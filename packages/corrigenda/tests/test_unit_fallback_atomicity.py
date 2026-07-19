@@ -23,6 +23,7 @@ import pytest
 
 from tests._pipeline_harness import apply_decisions
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline, ValidationError
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.schemas import HyphenRole, LineStatus, RetryPolicy
@@ -115,8 +116,7 @@ async def _run(tmp_path: Path, failing: set[str]):
         producer=_FailsPages(failing),
         observer=_Null(),
         retry_policy=RetryPolicy(transient_backoff_base=0.0, output_backoff_base=0.0),
-        provider_name="x",
-        model="m",
+        producer_metadata=ProducerMetadata(name="x", implementation="m"),
     )
     result = await pipeline.run(document_manifest=doc, source_files={src.name: src})
     return apply_decisions(doc, result)

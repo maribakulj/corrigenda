@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline, EditProducer, ProducerOptions
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.formats.alto.parser import build_document_manifest
@@ -60,7 +61,9 @@ async def test_producer_receives_the_runs_probe_and_attempt_state() -> None:
         return False
 
     pipeline = CorrectionPipeline(
-        producer=producer, observer=_Null(), provider_name="x", model="m"
+        producer=producer,
+        observer=_Null(),
+        producer_metadata=ProducerMetadata(name="x", implementation="m"),
     )
     await pipeline.run(
         document_manifest=doc,

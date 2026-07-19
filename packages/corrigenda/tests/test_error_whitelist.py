@@ -26,6 +26,7 @@ import pytest
 
 from tests._pipeline_harness import apply_decisions
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.core.protocols import ProviderTransientError
 from corrigenda.core.schemas import LineStatus, RetryPolicy
@@ -69,8 +70,7 @@ def _pipeline(producer) -> CorrectionPipeline:
         # real backoffs would make the degradation paths sleep for tens
         # of seconds through retries and granularity descent.
         retry_policy=RetryPolicy(transient_backoff_base=0.0, output_backoff_base=0.0),
-        provider_name="x",
-        model="m",
+        producer_metadata=ProducerMetadata(name="x", implementation="m"),
     )
 
 

@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING — `ProducerMetadata` replaces the bare
+  `provider_name`/`model` strings (P3.7, fourth slice).** The
+  ``CorrectionPipeline`` constructor takes one
+  ``producer_metadata: ProducerMetadata | None`` (frozen dataclass:
+  ``name``, ``version``, ``implementation``,
+  ``configuration_fingerprint``) instead of the two label kwargs — a
+  rules producer has no "model", so the generic identity names WHO
+  produced the edits and, when one exists, the concrete engine behind
+  the name. Producers may DECLARE their identity via an optional
+  ``metadata`` attribute (the ``requires_full_coverage`` convention;
+  explicit constructor metadata wins): ``LLMEditProducer`` declares
+  ``name="llm"`` + its model, ``RulesProducer`` declares
+  ``name="rules"`` plus a deterministic 16-hex
+  ``configuration_fingerprint`` over its rules table and lexicon.
+  ``for_provider`` keeps its pinned vendor vocabulary
+  (``provider_name``/``model``) and builds the envelope itself, and the
+  §11 labels stamped into corrected XML derive via
+  ``provenance_labels()`` (an implementation-less producer stamps
+  ``"unknown"``) — the format seam and the stamped bytes are unchanged.
+  ``ProducerMetadata`` joins the public surface.
+
 - **BREAKING — the producer seam takes `ProducerOptions`, not the
   RetryPolicy (P3.7, first slice).** ``EditProducer.produce(payload, *,
   options)`` receives a per-call envelope — ``attempt``, the RESOLVED

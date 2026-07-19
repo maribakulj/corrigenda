@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.core.protocols import (
     ProviderPermanentError,
@@ -120,8 +121,7 @@ async def test_permanent_provider_error_still_fails_the_whole_run() -> None:
     pipeline = CorrectionPipeline(
         producer=_PermanentlyRejectedProducer(),
         observer=_Null(),
-        provider_name="rejected",
-        model="m",
+        producer_metadata=ProducerMetadata(name="rejected", implementation="m"),
     )
     with pytest.raises(ProviderPermanentError):
         await pipeline.run(
