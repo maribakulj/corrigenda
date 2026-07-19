@@ -68,11 +68,11 @@ from corrigenda.core.units import derive_hyphen_groups, hyphen_group_by_line
 from corrigenda.core.guards import check_adjacent_duplicates, check_line
 from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
 from corrigenda.core.protocols import (
-    BaseProvider,
     EditProducer,
     FormatAdapter,
     PipelineObserver,
     ProducerOptions,
+    StructuredCompletionClient,
     ProviderPermanentError,
     ProviderTransientError,
     require_page_images,
@@ -649,7 +649,7 @@ class CorrectionPipeline:
     §5.1 resorption — the pipeline is constructed around an
     :class:`EditProducer`; there is no ``api_key``/``model`` anywhere on
     the pipeline surface. For the common LLM case, use
-    :meth:`for_provider`, which wraps a :class:`BaseProvider` +
+    :meth:`for_provider`, which wraps a :class:`StructuredCompletionClient` +
     credentials into an ``LLMEditProducer`` and sets the provenance
     labels in one call.
     """
@@ -701,7 +701,7 @@ class CorrectionPipeline:
     @classmethod
     def for_provider(
         cls,
-        provider: BaseProvider,
+        provider: StructuredCompletionClient,
         *,
         api_key: str,
         model: str,
@@ -715,7 +715,11 @@ class CorrectionPipeline:
         system_prompt: str | None = None,
         output_schema: dict[str, Any] | None = None,
     ) -> CorrectionPipeline:
-        """Build a pipeline around a raw LLM ``BaseProvider`` (§5.1).
+        """Build a pipeline around a raw ``StructuredCompletionClient`` (§5.1).
+
+        P3.7 split — the core only requires ``complete_structured``: a
+        client with no ``list_models`` is fully supported (model
+        discovery is application vocabulary, see ``ModelCatalog``).
 
         Composition-boundary convenience: wraps the provider + credentials
         + prompt contract into an ``LLMEditProducer`` so callers migrating

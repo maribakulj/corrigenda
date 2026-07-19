@@ -44,8 +44,10 @@ from corrigenda.core.pipeline import (
 from corrigenda.core.protocols import (
     BaseProvider,
     EditProducer,
+    ModelCatalog,
     PipelineObserver,
     ProducerOptions,
+    StructuredCompletionClient,
     require_page_images,
 )
 from corrigenda.core.schemas import (
@@ -204,7 +206,9 @@ __all__ = [
     "CorrectionAborted",
     # Ports
     "BaseProvider",
+    "ModelCatalog",
     "PipelineObserver",
+    "StructuredCompletionClient",
     # LLM contract (lazy — producers)
     "OUTPUT_JSON_SCHEMA",
     "SYSTEM_PROMPT",

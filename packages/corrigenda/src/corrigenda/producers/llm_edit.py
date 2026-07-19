@@ -1,4 +1,4 @@
-"""Adapt a text ``BaseProvider`` (LLM) to the ``EditProducer`` contract.
+"""Adapt a ``StructuredCompletionClient`` (LLM) to the ``EditProducer`` contract.
 
 Since the §5.1 resorption the LLM is *an implementation* of the edit
 protocol, not the protocol itself: the pipeline only ever talks to an
@@ -24,14 +24,14 @@ from __future__ import annotations
 from typing import Any
 
 from corrigenda.core.editing import EditScript, ReplaceLine
-from corrigenda.core.protocols import BaseProvider
+from corrigenda.core.protocols import StructuredCompletionClient
 from corrigenda.core.protocols import ProducerOptions
 from corrigenda.core.schemas import LLMUserPayload, Usage
 from corrigenda.producers.llm import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 
 
 class LLMEditProducer:
-    """Wrap a :class:`BaseProvider` as an :class:`EditProducer`.
+    """Wrap a :class:`StructuredCompletionClient` as an :class:`EditProducer`.
 
     ``system_prompt`` / ``output_schema`` default to the canonical LLM
     contract (:mod:`corrigenda.producers.llm`); inject to experiment.
@@ -46,7 +46,7 @@ class LLMEditProducer:
 
     def __init__(
         self,
-        provider: BaseProvider,
+        provider: StructuredCompletionClient,
         api_key: str,
         model: str,
         *,

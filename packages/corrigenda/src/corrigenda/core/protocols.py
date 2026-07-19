@@ -83,8 +83,8 @@ class ProviderPermanentError(ProviderError):
 
 
 @runtime_checkable
-class BaseProvider(Protocol):
-    """LLM client contract used by the pipeline.
+class StructuredCompletionClient(Protocol):
+    """The ONLY LLM capability the core consumes (P3.7 split).
 
     Implementations call out to their provider's API (or run a local
     model) and return the JSON shape declared by ``OUTPUT_JSON_SCHEMA``.
@@ -94,8 +94,6 @@ class BaseProvider(Protocol):
     raw httpx/SDK exception is treated as a bug and FAILS the run
     instead of being retried.
     """
-
-    async def list_models(self, api_key: str) -> list[ModelInfo]: ...
 
     async def complete_structured(
         self,
@@ -113,6 +111,31 @@ class BaseProvider(Protocol):
         cannot report it.
         """
         ...
+
+
+@runtime_checkable
+class ModelCatalog(Protocol):
+    """Model discovery — APPLICATION vocabulary (P3.7 split).
+
+    The engine never lists models: a run is handed one resolved model
+    string. Catalog lookups belong to the host (the demo backend's
+    ``/providers/{p}/models`` endpoint); the protocol lives here only so
+    the split is nameable on one seam.
+    """
+
+    async def list_models(self, api_key: str) -> list[ModelInfo]: ...
+
+
+@runtime_checkable
+class BaseProvider(StructuredCompletionClient, ModelCatalog, Protocol):
+    """A full vendor client: completions + catalog.
+
+    Convenience composition for hosts whose provider objects do both
+    (the demo backend's). The CORE only ever requires
+    :class:`StructuredCompletionClient` — ``LLMEditProducer`` and
+    ``CorrectionPipeline.for_provider`` accept a client with no
+    ``list_models`` at all.
+    """
 
 
 @dataclass(frozen=True)
@@ -286,6 +309,8 @@ class FormatAdapter(Protocol):
 __all__ = [
     "BaseProvider",
     "EditProducer",
+    "ModelCatalog",
+    "StructuredCompletionClient",
     "FormatAdapter",
     "PipelineObserver",
     "ProducerOptions",

@@ -18,8 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run's cancellation probe, so a producer can abandon long I/O
   mid-flight (or wire the probe into its HTTP client) instead of the
   engine only noticing between chunks. The engine keeps the full
-  ``RetryPolicy`` to itself. Remaining P3.7 work (client/catalog split,
-  the generic ``CorrectionRequest``/``LineProposal`` renames and
+  ``RetryPolicy`` to itself.
+
+- **Client/catalog split (P3.7, second slice).** ``BaseProvider`` is
+  now the composition of two protocols: ``StructuredCompletionClient``
+  (``complete_structured`` — the ONLY LLM capability the core consumes;
+  ``LLMEditProducer`` and ``for_provider`` type against it, so a client
+  with no ``list_models`` at all drives a full run) and
+  ``ModelCatalog`` (``list_models`` — application vocabulary; the demo
+  backend's ``/providers/{p}/models`` concern). Both join the public
+  surface; ``BaseProvider`` keeps working unchanged for full vendor
+  clients. Remaining P3.7 work (the generic
+  ``CorrectionRequest``/``LineProposal`` renames and
   ``ProducerMetadata``) follows in later slices.
 
 - **BREAKING — `PipelineEventType` names only engine events (P3.6,

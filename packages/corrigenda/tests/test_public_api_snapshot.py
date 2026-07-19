@@ -72,7 +72,9 @@ PUBLIC_API_1_0 = sorted(
         "CorrectionAborted",
         # Ports
         "BaseProvider",
+        "ModelCatalog",
         "PipelineObserver",
+        "StructuredCompletionClient",
         # LLM contract (lazy — producers)
         "OUTPUT_JSON_SCHEMA",
         "SYSTEM_PROMPT",
