@@ -65,8 +65,11 @@ async def test_run_persists_nothing_but_reports(tmp_path, monkeypatch):
     assert isinstance(result.report, CorrectionReport)
     assert result.report.total_lines > 0
     assert result.report.lines
-    assert all(ln.rewriter_path is not None for ln in result.report.lines)
-    assert all(ln.output_alto_text is not None for ln in result.report.lines)
+    assert all(
+        ln.projection is not None and ln.projection.rewriter_path is not None
+        for ln in result.report.lines
+    )
+    assert all(ln.projection.extracted_text is not None for ln in result.report.lines)
     # And the artefact travels on the result instead.
     assert result.corrected_files[_SAMPLE.name].startswith(b"<?xml")
 
@@ -89,10 +92,10 @@ def test_engine_surface_has_no_writer_and_no_apply():
 @pytest.mark.asyncio
 async def test_report_version_is_stable():
     result = await _run()
-    assert result.report.report_version == "1.0"
+    assert result.report.report_version == "2.0"
     # round-trips through JSON with a stable schema
     dumped = result.report.model_dump_json()
-    assert '"report_version":"1.0"' in dumped.replace(" ", "")
+    assert '"report_version":"2.0"' in dumped.replace(" ", "")
 
 
 @pytest.mark.asyncio
@@ -110,4 +113,4 @@ async def test_run_returns_normalized_edit_script():
     # One op per line trace; the op text matches the projected line text.
     by_line = {op.line_id: op.text for op in script.ops}
     for tr in result.report.lines:
-        assert by_line.get(tr.line_id) == tr.source_ocr_text
+        assert by_line.get(tr.line_id) == tr.source_text

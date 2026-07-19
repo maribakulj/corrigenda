@@ -782,7 +782,15 @@ class Usage(BaseModel):
 
 
 class LineTrace(BaseModel):
-    """Full text trace for a single line through the correction pipeline."""
+    """Working text trace for a single line through the correction run.
+
+    This is the PYTHON-side accumulator the pipeline fills as the run
+    progresses (exposed on ``CorrectionResult.traces``). The report's
+    JSON artefact does not serialize it: the report builder projects
+    each line's trace + terminal decision into a staged
+    :class:`LineOutcome` (P3.5 — report v2). The two surfaces version
+    independently (see ``docs/versioning.md``).
+    """
 
     line_id: str
     page_id: str
@@ -792,7 +800,7 @@ class LineTrace(BaseModel):
     projected_text: str | None = (
         None  # text retained after validation/reconciliation/fallback
     )
-    output_alto_text: str | None = None  # text re-extracted from the output ALTO XML
+    output_alto_text: str | None = None  # text re-extracted from the output XML
 
     # Diagnostic metadata
     hyphen_role: str | None = None
@@ -801,41 +809,101 @@ class LineTrace(BaseModel):
     fallback_reason: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# Report v2 (§9, P3.5) — one staged LineOutcome per line:
+# source → proposal → decision → projection
+# ---------------------------------------------------------------------------
+
+
+class ProposalStage(BaseModel):
+    """What the producer was asked and what it answered — absent when the
+    line never reached a producer (e.g. a rules producer's uncovered
+    line)."""
+
+    input_text: str | None = None  # enriched text sent to the producer
+    output_text: str | None = None  # raw producer output, pre-guards
+
+
+class DecisionReason(BaseModel):
+    """Structured decision motif: a machine-stable ``code`` (the family a
+    consumer aggregates on — same normalization as
+    ``CorrectionResult.fallback_reasons``) plus the free-text remainder."""
+
+    code: str
+    detail: str | None = None
+
+
+class DecisionStage(BaseModel):
+    """The line's terminal decision (always present — every line ends
+    ``corrected`` or ``fallback``, enforced by the DecisionSet)."""
+
+    status: str  # corrected / fallback
+    final_text: str  # the text the artefact carries
+    reason: DecisionReason | None = None  # why a fallen line fell
+
+
+class ProjectionStage(BaseModel):
+    """How the decided text landed in the rewritten artefact — absent
+    when no output file was rendered (e.g. ``source_files={}``)."""
+
+    #: Text re-extracted from the very tree the output bytes were
+    #: serialized from. Renamed from the v1 ``output_alto_text`` — this
+    #: library writes PAGE too, the name was wrong.
+    extracted_text: str | None = None
+    rewriter_path: str | None = None  # untouched / subs_only / fast_path / slow_path
+
+
+class LineOutcome(BaseModel):
+    """One line's whole journey through a run (report v2, §9)."""
+
+    line_id: str
+    page_id: str
+    hyphen_role: str | None = None
+    source_text: str
+    proposal: ProposalStage | None = None
+    decision: DecisionStage
+    projection: ProjectionStage | None = None
+
+
 #: Bumped on any breaking change to the CorrectionReport JSON shape (§9).
-CORRECTION_REPORT_VERSION = "1.0"
+#: 2.0 (P3.5): flat ``LineTrace`` entries became staged ``LineOutcome``
+#: objects (``source_text`` / ``proposal`` / ``decision`` /
+#: ``projection``); ``output_alto_text`` renamed to
+#: ``projection.extracted_text``; ``fallback_reason`` became the
+#: structured ``decision.reason`` (code + detail).
+CORRECTION_REPORT_VERSION = "2.0"
 
 
 class CorrectionReport(BaseModel):
     """Public, versioned correction report (§9).
 
-    Promotes the per-line :class:`LineTrace` from a backend-internal
-    ``trace.json`` to a documented output artefact with a **stable,
-    versioned JSON schema**. Each line records its full journey — source
-    OCR → model input → model output → projected text → re-extracted ALTO
-    text — plus the rewriter path taken and any fallback reason, so a
-    consumer can render a diff/preview or measure a run without re-deriving
-    anything. Returned on every run; the engine never persists it
-    (ADR-011) — it is ``result.report``, written as ``report.json`` by
+    Each line is a staged :class:`LineOutcome` (v2, P3.5) recording its
+    full journey — source → proposal (producer in/out) → decision
+    (terminal status, final text, structured reason) → projection
+    (re-extracted text, rewriter path) — so a consumer can render a
+    diff/preview or measure a run without re-deriving anything.
+    Returned on every run; the engine never persists it (ADR-011) — it
+    is ``result.report``, written as ``report.json`` by
     :meth:`CorrectionResult.write` or by the host's own transaction.
     """
 
     report_version: str = CORRECTION_REPORT_VERSION
     run_id: str
     total_lines: int = 0
-    lines: list[LineTrace] = Field(default_factory=list)
+    lines: list[LineOutcome] = Field(default_factory=list)
     #: Format-specific granularity losses aggregated over the run — e.g. the
     #: PAGE rewriter reports ``words_dropped`` / ``custom_offset_stripped`` /
     #: ``alt_textequiv_dropped`` (6.2 P4/P6) here. ``None`` when the format
     #: has nothing to report (ALTO's per-path counts already live on the
-    #: line traces). Additive and optional, so this does NOT bump
+    #: line outcomes). Additive and optional, so this does NOT bump
     #: ``report_version`` — the field's contract is to bump only on a
     #: *breaking* JSON change, and a new optional key is backward-compatible.
     format_losses: dict[str, int] | None = None
 
     @property
-    def fallback_lines(self) -> list[LineTrace]:
+    def fallback_lines(self) -> list[LineOutcome]:
         """Lines that fell back to OCR (a quick health signal for consumers)."""
-        return [ln for ln in self.lines if ln.validation_status == "fallback"]
+        return [ln for ln in self.lines if ln.decision.status == "fallback"]
 
 
 # --- public surface ---
@@ -865,5 +933,10 @@ __all__ = [
     "ModelInfo",
     "Usage",
     "LineTrace",
+    "LineOutcome",
+    "ProposalStage",
+    "DecisionStage",
+    "DecisionReason",
+    "ProjectionStage",
     "CorrectionReport",
 ]

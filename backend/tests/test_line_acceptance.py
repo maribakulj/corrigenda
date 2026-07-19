@@ -314,8 +314,9 @@ class TestTraceKeyCollision:
 
         # All traces should have 5 text states
         for t in traces:
-            assert t.source_ocr_text is not None
-            assert t.output_alto_text is not None
+            assert t.source_text is not None
+            assert t.projection is not None
+            assert t.projection.extracted_text is not None
 
 
 # ===========================================================================
@@ -384,17 +385,17 @@ class TestLineAcceptanceIntegration:
         t1 = by_line[lines[1].line_id]
 
         # At least one should have been caught (depends on similarity)
-        swapped = [t for t in [t0, t1] if t.validation_status == "fallback"]
+        swapped = [t for t in [t0, t1] if t.decision.status == "fallback"]
         assert len(swapped) > 0, (
             f"Expected at least one swapped line to be caught. "
-            f"t0.status={t0.validation_status}, t1.status={t1.validation_status}"
+            f"t0.status={t0.decision.status}, t1.status={t1.decision.status}"
         )
 
         # Check that fallback reasons are from line_acceptance
         for t in swapped:
-            assert t.fallback_reason in (
+            assert t.decision.reason.code in (
                 "closer_to_previous_line",
                 "closer_to_next_line",
                 "too_different_from_source",
                 "adjacent_duplicate_detected",
-            ), f"Unexpected fallback_reason: {t.fallback_reason}"
+            ), f"Unexpected reason: {t.decision.reason!r}"

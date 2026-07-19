@@ -289,29 +289,47 @@ export type JobStatusData = components['schemas']['JobStatusResponse']
 export type StreamState = 'idle' | 'live' | 'reconnecting' | 'polling'
 
 // ---------------------------------------------------------------------------
-// Line trace (Sprint 5bis / Sprint 6 debug)
+// Line outcomes (report v2 — §9 P3.5, Sprint 6 debug panel)
 // ---------------------------------------------------------------------------
 
-export interface LineTrace {
-  line_id: string
-  page_id: string
-  source_ocr_text: string
-  model_input_text: string | null
-  model_corrected_text: string | null
-  projected_text: string | null
-  output_alto_text: string | null
-  hyphen_role: string | null
-  rewriter_path: string | null
-  validation_status: string | null
-  fallback_reason: string | null
+export interface ProposalStage {
+  input_text: string | null
+  output_text: string | null
 }
 
-// The /trace endpoint now returns corrigenda's versioned CorrectionReport
-// (§9) verbatim — run_id equals the server job_id.
+export interface DecisionReason {
+  code: string
+  detail: string | null
+}
+
+export interface DecisionStage {
+  status: string // corrected / fallback
+  final_text: string
+  reason: DecisionReason | null
+}
+
+export interface ProjectionStage {
+  extracted_text: string | null
+  rewriter_path: string | null
+}
+
+// One line's staged journey: source → proposal → decision → projection.
+export interface LineOutcome {
+  line_id: string
+  page_id: string
+  hyphen_role: string | null
+  source_text: string
+  proposal: ProposalStage | null
+  decision: DecisionStage
+  projection: ProjectionStage | null
+}
+
+// The /trace endpoint returns corrigenda's versioned CorrectionReport
+// (§9, report_version 2.0) verbatim — run_id equals the server job_id.
 export interface TraceData {
   report_version: string
   run_id: string
   total_lines: number
-  lines: LineTrace[]
+  lines: LineOutcome[]
   format_losses?: Record<string, number> | null
 }

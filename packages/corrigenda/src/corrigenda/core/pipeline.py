@@ -57,7 +57,11 @@ from corrigenda.errors import (
     CorrectionError,
     ProjectionError,
 )
-from corrigenda.core.decisions import DecisionSet, derive_decision_set
+from corrigenda.core.decisions import (
+    DecisionSet,
+    build_line_outcomes,
+    derive_decision_set,
+)
 from corrigenda.core.planner import downgrade_granularity, plan_page
 from corrigenda.core.units import derive_hyphen_groups, hyphen_group_by_line
 from corrigenda.core.guards import check_adjacent_duplicates, check_line
@@ -1016,8 +1020,11 @@ class CorrectionPipeline:
 
         report = CorrectionReport(
             run_id=run_id,
-            total_lines=len(traces),
-            lines=list(traces.values()),
+            total_lines=len(decisions.decisions),
+            # P3.5 / ADR-011 slice C — the report builder reads the
+            # DecisionSet (terminal stage) + the working traces
+            # (proposal/projection stages), staged per line (§9 v2).
+            lines=build_line_outcomes(decisions, traces),
             # ADR-011 — the rewrite's granularity-loss counters surface on
             # the report (None when the format is lossless or nothing was
             # written).

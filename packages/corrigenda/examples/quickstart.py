@@ -90,7 +90,7 @@ async def main(out_dir: Path) -> None:
     # corrected XML (under its source name) and report.json.
     result.write(out_dir / "rules")
     changed = sum(
-        1 for t in result.report.lines if t.projected_text != t.source_ocr_text
+        1 for t in result.report.lines if t.decision.final_text != t.source_text
     )
     print(
         f"[rules] {changed}/{result.report.total_lines} lines edited via "

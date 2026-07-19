@@ -24,7 +24,16 @@ from dataclasses import dataclass
 from functools import cached_property
 
 from corrigenda.core.identity import LineRef, line_ref
-from corrigenda.core.schemas import DocumentManifest, LineStatus, LineTrace
+from corrigenda.core.schemas import (
+    DecisionReason,
+    DecisionStage,
+    DocumentManifest,
+    LineOutcome,
+    LineStatus,
+    LineTrace,
+    ProjectionStage,
+    ProposalStage,
+)
 
 
 @dataclass(frozen=True)
@@ -120,8 +129,71 @@ def derive_decision_set(
     return DecisionSet(decisions=tuple(decisions))
 
 
+def _structured_reason(raw: str | None) -> DecisionReason | None:
+    """Split the run's ``"code: detail"`` reason convention into the
+    report's structured motif. The code half uses the SAME normalization
+    as :meth:`DecisionSet.fallback_reason_counts`, so aggregating report
+    reasons by ``code`` reproduces ``CorrectionResult.fallback_reasons``.
+    """
+    if not raw:
+        return None
+    code, _, detail = raw.partition(":")
+    return DecisionReason(code=code.strip(), detail=detail.strip() or None)
+
+
+def build_line_outcomes(
+    decisions: DecisionSet,
+    traces: Mapping[LineRef, LineTrace],
+) -> list[LineOutcome]:
+    """Project the run into the report's staged per-line outcomes (§9 v2).
+
+    The DecisionSet is the authority for the terminal stage (P3.5 — the
+    report builder reads decisions, not manifests); the working traces
+    contribute the producer stage and the projection stage, each absent
+    when the line never reached them (no producer call / no rendered
+    output file).
+    """
+    outcomes: list[LineOutcome] = []
+    for d in decisions.decisions:
+        trace = traces.get(d.ref)
+        proposal: ProposalStage | None = None
+        projection: ProjectionStage | None = None
+        hyphen_role: str | None = None
+        if trace is not None:
+            hyphen_role = trace.hyphen_role
+            if trace.model_input_text is not None or (
+                trace.model_corrected_text is not None
+            ):
+                proposal = ProposalStage(
+                    input_text=trace.model_input_text,
+                    output_text=trace.model_corrected_text,
+                )
+            if trace.output_alto_text is not None or trace.rewriter_path is not None:
+                projection = ProjectionStage(
+                    extracted_text=trace.output_alto_text,
+                    rewriter_path=trace.rewriter_path,
+                )
+        outcomes.append(
+            LineOutcome(
+                line_id=d.ref.line_id,
+                page_id=d.ref.page_id,
+                hyphen_role=hyphen_role,
+                source_text=d.source_text,
+                proposal=proposal,
+                decision=DecisionStage(
+                    status=d.status.value,
+                    final_text=d.final_text,
+                    reason=_structured_reason(d.fallback_reason),
+                ),
+                projection=projection,
+            )
+        )
+    return outcomes
+
+
 __all__ = [
     "DecisionSet",
     "LineDecision",
+    "build_line_outcomes",
     "derive_decision_set",
 ]

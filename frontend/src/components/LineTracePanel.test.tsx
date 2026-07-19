@@ -1,31 +1,30 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { LineTrace } from '../types'
+import type { LineOutcome } from '../types'
 import { LineTracePanel } from './LineTracePanel'
 
-const baseTrace: LineTrace = {
+const baseTrace: LineOutcome = {
   line_id: 'P1_TL04',
   page_id: 'P1',
-  source_ocr_text: 'La Fravce est graude',
-  model_input_text: 'La Fravce est graude',
-  model_corrected_text: 'La France est grande',
-  projected_text: 'La France est grande',
-  output_alto_text: 'La France est grande',
   hyphen_role: 'HypPart1',
-  rewriter_path: 'slow_path',
-  validation_status: 'corrected',
-  fallback_reason: null,
+  source_text: 'La Fravce est graude',
+  proposal: {
+    input_text: 'La Fravce est graude',
+    output_text: 'La France est grande',
+  },
+  decision: { status: 'corrected', final_text: 'La France est grande', reason: null },
+  projection: { extracted_text: 'La France est grande', rewriter_path: 'slow_path' },
 }
 
 describe('LineTracePanel', () => {
   it('renders the five pipeline stages in order with their texts', () => {
     render(<LineTracePanel trace={baseTrace} onClose={vi.fn()} />)
-    expect(screen.getByText(/1\. Source OCR/)).toBeInTheDocument()
-    expect(screen.getByText(/2\. Model input/)).toBeInTheDocument()
-    expect(screen.getByText(/3\. Model output/)).toBeInTheDocument()
-    expect(screen.getByText(/4\. Projected/)).toBeInTheDocument()
-    expect(screen.getByText(/5\. Output ALTO/)).toBeInTheDocument()
+    expect(screen.getByText(/1\. Source/)).toBeInTheDocument()
+    expect(screen.getByText(/2\. Producer input/)).toBeInTheDocument()
+    expect(screen.getByText(/3\. Producer output/)).toBeInTheDocument()
+    expect(screen.getByText(/4\. Decision \(retained\)/)).toBeInTheDocument()
+    expect(screen.getByText(/5\. Output \(extracted\)/)).toBeInTheDocument()
     expect(screen.getAllByText('La Fravce est graude')).toHaveLength(2)
     expect(screen.getAllByText('La France est grande')).toHaveLength(3)
     expect(screen.getByText('page: P1')).toBeInTheDocument()
@@ -33,7 +32,7 @@ describe('LineTracePanel', () => {
 
   it('marks exactly the stages whose text differs from the previous one', () => {
     render(<LineTracePanel trace={baseTrace} onClose={vi.fn()} />)
-    // input==source, corrected!=input, projected==corrected, output==projected
+    // input==source, output!=input, decision==output, extracted==decision
     expect(screen.getAllByText('changed')).toHaveLength(1)
   })
 
@@ -45,28 +44,31 @@ describe('LineTracePanel', () => {
     expect(screen.getByText('slow_path')).toBeInTheDocument()
   })
 
-  it('renders null stages as "(not captured)" with a null badge and no changed flag', () => {
-    const t: LineTrace = {
+  it('renders absent stages as "(not captured)" with a null badge and no changed flag', () => {
+    const t: LineOutcome = {
       ...baseTrace,
-      model_input_text: null,
-      model_corrected_text: null,
-      projected_text: null,
-      output_alto_text: null,
+      proposal: null,
+      projection: null,
     }
     render(<LineTracePanel trace={t} onClose={vi.fn()} />)
-    expect(screen.getAllByText('(not captured)')).toHaveLength(4)
-    expect(screen.getAllByText('null')).toHaveLength(4)
+    // Producer input, producer output and extracted text are absent —
+    // source and the (always present) decision text remain.
+    expect(screen.getAllByText('(not captured)')).toHaveLength(3)
+    expect(screen.getAllByText('null')).toHaveLength(3)
     // textsDiffer is null-safe: nothing is flagged as changed.
     expect(screen.queryByText('changed')).not.toBeInTheDocument()
   })
 
-  it('shows the fallback banner only when a fallback_reason exists', () => {
+  it('shows the fallback banner only when a structured reason exists', () => {
     const { unmount } = render(
       <LineTracePanel
         trace={{
           ...baseTrace,
-          validation_status: 'fallback',
-          fallback_reason: 'absorbs_next_line',
+          decision: {
+            status: 'fallback',
+            final_text: 'La Fravce est graude',
+            reason: { code: 'absorbs_next_line', detail: null },
+          },
         }}
         onClose={vi.fn()}
       />,
@@ -78,16 +80,33 @@ describe('LineTracePanel', () => {
     expect(screen.queryByText(/Fallback:/)).not.toBeInTheDocument()
   })
 
-  it('falls back to placeholder badges when role/status/path are null', () => {
-    const t: LineTrace = {
+  it('renders the reason detail after the code when present', () => {
+    render(
+      <LineTracePanel
+        trace={{
+          ...baseTrace,
+          decision: {
+            status: 'fallback',
+            final_text: 'La Fravce est graude',
+            reason: { code: 'too_different_from_source', detail: '0.42 < 0.75' },
+          },
+        }}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(
+      screen.getByText(/Fallback: too_different_from_source: 0\.42 < 0\.75/),
+    ).toBeInTheDocument()
+  })
+
+  it('falls back to placeholder badges when role/path are absent', () => {
+    const t: LineOutcome = {
       ...baseTrace,
       hyphen_role: null,
-      rewriter_path: null,
-      validation_status: null,
+      projection: null,
     }
     render(<LineTracePanel trace={t} onClose={vi.fn()} />)
     expect(screen.getByText('none')).toBeInTheDocument()
-    expect(screen.getByText('pending')).toBeInTheDocument()
     expect(screen.getByText('—')).toBeInTheDocument()
   })
 
@@ -97,7 +116,12 @@ describe('LineTracePanel', () => {
   ] as const)('renders the %s/%s/%s badge variants', (status, role, path) => {
     render(
       <LineTracePanel
-        trace={{ ...baseTrace, validation_status: status, hyphen_role: role, rewriter_path: path }}
+        trace={{
+          ...baseTrace,
+          hyphen_role: role,
+          decision: { ...baseTrace.decision, status },
+          projection: { extracted_text: 'x', rewriter_path: path },
+        }}
         onClose={vi.fn()}
       />,
     )

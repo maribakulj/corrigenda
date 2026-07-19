@@ -252,7 +252,7 @@ def test_cross_chunk_adjacent_duplicate_is_reverted(tmp_path: Path):
     assert lines["L3"].status == LineStatus.FALLBACK
     assert lines["L4"].status == LineStatus.FALLBACK
     reasons = {
-        t.line_id: t.fallback_reason
+        t.line_id: t.decision.reason.code
         for t in result.report.lines
         if t.line_id in ("L3", "L4")
     }

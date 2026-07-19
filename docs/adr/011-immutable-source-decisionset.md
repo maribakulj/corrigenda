@@ -49,15 +49,15 @@ rewriter already knew.
   are computed fields (still serialized); the lying-totals validator is
   retired — a derived count cannot contradict the content, and legacy
   constructor kwargs are ignored rather than trusted.
-- **Slice C** (model + first readers landed): `corrigenda.core.decisions`
-  defines `LineDecision`/`DecisionSet`, materialized once after the
-  global consistency pass; the terminality backstop became the set's
+- **Slice C (landed)**: `corrigenda.core.decisions` defines
+  `LineDecision`/`DecisionSet`, materialized once after the global
+  consistency pass; the terminality backstop became the set's
   construction invariant (a PENDING line refuses materialization), and
-  the projection invariant, the result's fallback accounting and the
-  final-EditScript builder read the DecisionSet instead of re-walking
-  the manifests. Remaining: the report builder flips (P3.5's LineOutcome
-  restructure is its natural vehicle); the pointer fields' retirement
-  folds in ADR-010's `BOTH`-as-derived-detail.
+  the projection invariant, the result's fallback accounting, the
+  final-EditScript builder AND the report builder (P3.5's `LineOutcome`
+  restructure, `build_line_outcomes`) read the DecisionSet instead of
+  re-walking the manifests. The pointer fields' retirement still folds
+  in ADR-010's `BOTH`-as-derived-detail.
 - **Slice D (landed)**: `CorrectionResult.corrected_files` carries
   every corrected XML (the result IS the output) and
   `result.write(dir)` persists artefacts + report caller-side. D-fin:

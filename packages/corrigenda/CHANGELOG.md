@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING — report v2: staged `LineOutcome` entries (P3.5,
+  `report_version` 1.0 → 2.0).** `CorrectionReport.lines` now carries
+  one `LineOutcome` per line — ``source_text`` plus three explicit
+  stages: ``proposal`` (producer input/output, absent when the line
+  never reached a producer), ``decision`` (terminal ``status``,
+  ``final_text``, and a STRUCTURED ``reason`` ``{code, detail}`` whose
+  code aggregates exactly like ``CorrectionResult.fallback_reasons``),
+  and ``projection`` (``extracted_text`` — renamed from
+  ``output_alto_text``, wrong in an ALTO+PAGE library — and
+  ``rewriter_path``; absent when no output file was rendered). The
+  builder reads the ADR-011 `DecisionSet` (the terminal stage's
+  authority), completing slice C's reader migration. `LineOutcome`,
+  `ProposalStage`, `DecisionStage`, `DecisionReason` and
+  `ProjectionStage` join the public surface; `LineTrace` remains the
+  Python-side working trace on ``CorrectionResult.traces`` — the two
+  surfaces version independently (``docs/versioning.md``).
+
 - **BREAKING — `run()` never mutates its input (ADR-011, slice E).**
   The engine works on its own deep copy of the document manifest: the
   caller's manifest keeps its parse-time state (`corrected_text` stays

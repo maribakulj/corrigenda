@@ -94,6 +94,12 @@ PUBLIC_API_1_0 = sorted(
         "PairingPolicy",
         "RetryPolicy",
         "Usage",
+        # Report v2 (§9, P3.5)
+        "LineOutcome",
+        "ProposalStage",
+        "DecisionStage",
+        "DecisionReason",
+        "ProjectionStage",
     ]
 )
 
@@ -167,4 +173,4 @@ def test_correction_report_json_keys_are_pinned():
         "bumping CORRECTION_REPORT_VERSION (§9); an addition must stay "
         "optional."
     )
-    assert report.report_version == "1.0"
+    assert report.report_version == "2.0"

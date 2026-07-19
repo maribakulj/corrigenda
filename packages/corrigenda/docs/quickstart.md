@@ -99,9 +99,10 @@ op model, and [formats](formats.md) for what each rewriter guarantees.
 
 - `result.corrected_files` — the corrected XML bytes per source file
   name; `result.write(dir)` writes them (plus `report.json`).
-- `result.report` — the versioned **CorrectionReport** (§9): per-line
-  journey (source → model in/out → projected → re-extracted), rewriter
-  path, fallback reason.
+- `result.report` — the versioned **CorrectionReport** (§9, v2): one
+  staged `LineOutcome` per line — `source_text`, `proposal` (producer
+  in/out), `decision` (status, final text, structured reason),
+  `projection` (extracted text, rewriter path).
 - `result.edit_script` — the normalized EditScript the run applied.
 - `result.usage` — aggregated tokens (F14); `Usage(0, 0)` when the
   producer doesn't report.

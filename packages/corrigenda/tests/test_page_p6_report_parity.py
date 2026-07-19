@@ -141,7 +141,7 @@ def test_metrics_as_losses_and_report_field(tmp_path: Path):
     assert "hyphen_preserved" not in losses  # zero counters omitted
 
     report = CorrectionReport(run_id="r1", total_lines=1, format_losses=losses)
-    assert report.report_version == "1.0"  # additive field, no bump
+    assert report.report_version == "2.0"  # additive field, no bump past v2
     assert report.format_losses == losses
     dumped = report.model_dump()
     assert dumped["format_losses"]["words_dropped"] == 2

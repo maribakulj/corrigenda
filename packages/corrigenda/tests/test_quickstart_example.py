@@ -32,7 +32,7 @@ def test_quickstart_runs_offline_and_writes_outputs(tmp_path: Path):
         assert (out / "sample.xml").exists(), f"{variant}: no corrected XML"
         trace = json.loads((out / "report.json").read_text(encoding="utf-8"))
         # report.json IS the CorrectionReport (§9 unification).
-        assert trace["report_version"] == "1.0"
+        assert trace["report_version"] == "2.0"
         assert trace["run_id"] == f"quickstart-{variant}"
         assert trace["total_lines"] > 0
 
@@ -43,6 +43,6 @@ def test_quickstart_runs_offline_and_writes_outputs(tmp_path: Path):
     edited = [
         ln
         for ln in rules_trace["lines"]
-        if ln.get("projected_text") and ln["projected_text"] != ln["source_ocr_text"]
+        if ln["decision"]["final_text"] != ln["source_text"]
     ]
     assert edited, "rules pass edited nothing — demo substitution broken"

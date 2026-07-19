@@ -52,10 +52,13 @@ from corrigenda.core.schemas import (
     ChunkGranularity,
     ChunkPlannerConfig,
     CorrectionReport,
+    DecisionReason,
+    DecisionStage,
     DocumentManifest,
     GuardConfig,
     HyphenRole,
     LineManifest,
+    LineOutcome,
     LineStatus,
     LineTrace,
     LLMLineInput,
@@ -63,6 +66,8 @@ from corrigenda.core.schemas import (
     ModelInfo,
     PageManifest,
     PairingPolicy,
+    ProjectionStage,
+    ProposalStage,
     RetryPolicy,
     Usage,
 )
@@ -219,6 +224,12 @@ __all__ = [
     "PairingPolicy",
     "RetryPolicy",
     "Usage",
+    # Report v2 (§9, P3.5)
+    "LineOutcome",
+    "ProposalStage",
+    "DecisionStage",
+    "DecisionReason",
+    "ProjectionStage",
     # Version
     "__version__",
 ]

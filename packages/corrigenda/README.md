@@ -54,9 +54,9 @@ independent external API review first; see
 - `CorrectionResult` — the run's whole deliverable (ADR-011): the
   corrected XML per source file (`result.corrected_files`), the
   immutable per-line `DecisionSet` (`result.decisions`), a public,
-  versioned `CorrectionReport` (full per-line trace: source → model
-  in/out → projected → re-extracted text, rewriter path, fallback
-  reason), the applied `EditScript` and the run's statistics. The
+  versioned `CorrectionReport` (v2: one staged `LineOutcome` per line —
+  source → proposal → decision → projection, with structured fallback
+  reasons), the applied `EditScript` and the run's statistics. The
   engine never persists anything and never mutates its input — the
   same document can be run again or concurrently; `result.write(dir)`
   is the one-call persistence helper, or feed the bytes to your own

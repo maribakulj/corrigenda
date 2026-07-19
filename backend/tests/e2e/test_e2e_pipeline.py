@@ -183,7 +183,7 @@ def test_absorption_only_is_refused_by_the_line_guard(backend_server, use_absorp
     )
     assert trace.status_code == 200
     tl2 = next(ln for ln in trace.json()["lines"] if ln["line_id"] == "TL2")
-    assert tl2["fallback_reason"] == "absorbs_next_line", tl2
+    assert tl2["decision"]["reason"]["code"] == "absorbs_next_line", tl2
 
 
 # ---------------------------------------------------------------------------
