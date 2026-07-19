@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from corrigenda.core.identity import LineRef, line_ref
 from corrigenda.core.schemas import HyphenRole, LineStatus
 from corrigenda.errors import CorrectionError
 from corrigenda.formats.alto.parser import build_document_manifest
@@ -81,8 +82,8 @@ def test_parses_or_fails_classified(xml_path: Path) -> None:
 
 @pytest.mark.parametrize("xml_path", _corpus_params(), ids=None)
 def test_identity_run_preserves_invariants(xml_path: Path) -> None:
-    """Identity pipeline run over a real file: geometry untouched, no
-    mixed hyphen pairs, every line in a terminal state."""
+    """Identity pipeline run over a real file: input manifest untouched
+    (ADR-011), every line terminally decided, no mixed hyphen pairs."""
     try:
         doc = build_document_manifest([(xml_path, xml_path.name)])
     except CorrectionError:
@@ -90,16 +91,21 @@ def test_identity_run_preserves_invariants(xml_path: Path) -> None:
     if doc.total_lines == 0:
         pytest.skip("no text lines on this page")
 
-    geometry_before = {
-        (lm.page_id, lm.line_id): (
-            lm.coords.hpos,
-            lm.coords.vpos,
-            lm.coords.width,
-            lm.coords.height,
-        )
-        for page in doc.pages
-        for lm in page.lines
-    }
+    def snapshot() -> dict[LineRef, tuple]:
+        return {
+            line_ref(lm): (
+                lm.coords.hpos,
+                lm.coords.vpos,
+                lm.coords.width,
+                lm.coords.height,
+                lm.status,
+                lm.corrected_text,
+            )
+            for page in doc.pages
+            for lm in page.lines
+        }
+
+    snapshot_before = snapshot()
 
     pipeline = CorrectionPipeline.for_provider(
         DictProvider({}),  # identity: every line echoed unchanged
@@ -112,36 +118,33 @@ def test_identity_run_preserves_invariants(xml_path: Path) -> None:
         source_files={xml_path.name: xml_path},
     )
 
-    # Geometry is never touched by a run.
-    geometry_after = {
-        (lm.page_id, lm.line_id): (
-            lm.coords.hpos,
-            lm.coords.vpos,
-            lm.coords.width,
-            lm.coords.height,
-        )
-        for page in doc.pages
-        for lm in page.lines
-    }
-    assert geometry_after == geometry_before
+    # ADR-011 slice E — the input manifest is never mutated: geometry AND
+    # correction state are identical after the run.
+    assert snapshot() == snapshot_before
 
-    lines_by_key = {
-        (lm.page_id, lm.line_id): lm for page in doc.pages for lm in page.lines
-    }
-    for lm in lines_by_key.values():
-        # Every line reached a terminal state.
-        assert lm.status in (
+    # Every line reached a terminal decision — read off the run's
+    # DecisionSet (ADR-011), not the input manifest.
+    decisions = result.decisions.by_ref
+    assert set(decisions) == set(snapshot_before)
+    for decision in decisions.values():
+        assert decision.status in (
             LineStatus.CORRECTED,
             LineStatus.FALLBACK,
-        ), f"{lm.line_id}: non-terminal status {lm.status}"
-        # No mixed hyphen pair: PART1 corrected ⇔ PART2 corrected.
-        if lm.hyphen_role == HyphenRole.PART1 and lm.hyphen_pair_line_id:
-            partner = lines_by_key.get(
-                (lm.hyphen_pair_page_id or lm.page_id, lm.hyphen_pair_line_id)
+        ), f"{decision.ref}: non-terminal status {decision.status}"
+
+    # No mixed hyphen pair: PART1 and PART2 are decided together (ADR-010
+    # unit atomicity — a member never falls back without its partner).
+    for page in doc.pages:
+        for lm in page.lines:
+            if lm.hyphen_role != HyphenRole.PART1 or not lm.hyphen_pair_line_id:
+                continue
+            partner_ref = LineRef(
+                page_id=lm.hyphen_pair_page_id or lm.page_id,
+                line_id=lm.hyphen_pair_line_id,
             )
-            if partner is not None:
-                assert (lm.corrected_text is not None) == (
-                    partner.corrected_text is not None
-                ), f"mixed pair {lm.line_id}/{partner.line_id}"
+            if partner_ref in decisions:
+                assert decisions[line_ref(lm)].status == decisions[partner_ref].status, (
+                    f"mixed pair {line_ref(lm)}/{partner_ref}"
+                )
 
     assert result.report.total_lines == doc.total_lines

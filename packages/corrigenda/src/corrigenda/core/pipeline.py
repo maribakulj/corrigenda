@@ -528,9 +528,10 @@ def _reconcile_one_pair(
 class CorrectionResult:
     """Outcome of a full pipeline run.
 
-    The `document_manifest` is mutated in place during the run; callers
-    can read corrected_text/status on each line. `traces` is the
-    line-by-line text trace through every stage.
+    The input manifest is never mutated (ADR-011 slice E): what the run
+    decided is read off ``decisions`` (and ``corrected_files`` for the
+    artefacts). `traces` is the line-by-line text trace through every
+    stage.
     """
 
     total_chunks: int
