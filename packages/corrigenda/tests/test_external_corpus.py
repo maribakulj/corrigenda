@@ -143,8 +143,8 @@ def test_identity_run_preserves_invariants(xml_path: Path) -> None:
                 line_id=lm.hyphen_pair_line_id,
             )
             if partner_ref in decisions:
-                assert decisions[line_ref(lm)].status == decisions[partner_ref].status, (
-                    f"mixed pair {line_ref(lm)}/{partner_ref}"
-                )
+                assert (
+                    decisions[line_ref(lm)].status == decisions[partner_ref].status
+                ), f"mixed pair {line_ref(lm)}/{partner_ref}"
 
     assert result.report.total_lines == doc.total_lines
