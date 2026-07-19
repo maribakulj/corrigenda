@@ -9,8 +9,8 @@ from corrigenda.errors import ValidationError
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
     GuardConfig,
-    LLMLineOutput,
-    LLMResponse,
+    LineProposal,
+    ProposalBatch,
 )
 
 
@@ -40,9 +40,9 @@ def validate_llm_response(
     *,
     guard_config: GuardConfig = DEFAULT_GUARD_CONFIG,
     target_line_ids: list[str] | None = None,
-) -> LLMResponse:
+) -> ProposalBatch:
     """
-    Validate an LLM response dict and return a typed LLMResponse.
+    Validate an LLM response dict and return a typed ProposalBatch.
 
     Parameters
     ----------
@@ -121,7 +121,7 @@ def validate_llm_response(
         )
 
     seen_ids: set[str] = set()
-    outputs: list[LLMLineOutput] = []
+    outputs: list[LineProposal] = []
 
     for entry in lines_raw:
         if not isinstance(entry, dict):
@@ -153,7 +153,7 @@ def validate_llm_response(
                 f"corrected_text for {line_id!r} contains a line separator"
             )
 
-        outputs.append(LLMLineOutput(line_id=line_id, corrected_text=corrected_text))
+        outputs.append(LineProposal(line_id=line_id, corrected_text=corrected_text))
 
     # --- Check all REQUIRED (target) IDs are present ---
     missing = check_set - seen_ids
@@ -173,7 +173,7 @@ def validate_llm_response(
             guard_config,
         )
 
-    return LLMResponse(lines=outputs)
+    return ProposalBatch(lines=outputs)
 
 
 def _validate_hyphen_integrity(

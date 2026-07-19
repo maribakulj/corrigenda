@@ -64,8 +64,8 @@ from corrigenda.core.schemas import (
     LineOutcome,
     LineStatus,
     LineTrace,
-    LLMLineInput,
-    LLMLineOutput,
+    LineContext,
+    LineProposal,
     ModelInfo,
     PageManifest,
     PairingPolicy,
@@ -104,10 +104,10 @@ if TYPE_CHECKING:  # typed view of the lazy symbols below
     from corrigenda.formats.page.rewriter import (
         rewrite_page_file as rewrite_page_file,
     )
-    from corrigenda.producers.llm import (
+    from corrigenda.integrations.llm import (
         OUTPUT_JSON_SCHEMA as OUTPUT_JSON_SCHEMA,
     )
-    from corrigenda.producers.llm import SYSTEM_PROMPT as SYSTEM_PROMPT
+    from corrigenda.integrations.llm import SYSTEM_PROMPT as SYSTEM_PROMPT
     from corrigenda.producers.llm_edit import LLMEditProducer as LLMEditProducer
     from corrigenda.producers.rules import RulesProducer as RulesProducer
     from corrigenda.producers.rules import SubstitutionRule as SubstitutionRule
@@ -140,8 +140,8 @@ _LAZY: dict[str, str] = {
     "PageFormatAdapter": "corrigenda.formats.page.adapter",
     "parse_page_file": "corrigenda.formats.page.parser",
     "rewrite_page_file": "corrigenda.formats.page.rewriter",
-    "OUTPUT_JSON_SCHEMA": "corrigenda.producers.llm",
-    "SYSTEM_PROMPT": "corrigenda.producers.llm",
+    "OUTPUT_JSON_SCHEMA": "corrigenda.integrations.llm",
+    "SYSTEM_PROMPT": "corrigenda.integrations.llm",
     "LLMEditProducer": "corrigenda.producers.llm_edit",
     "RulesProducer": "corrigenda.producers.rules",
     "SubstitutionRule": "corrigenda.producers.rules",
@@ -224,8 +224,8 @@ __all__ = [
     "LineManifest",
     "LineStatus",
     "LineTrace",
-    "LLMLineInput",
-    "LLMLineOutput",
+    "LineContext",
+    "LineProposal",
     "ModelInfo",
     "PageManifest",
     "PairingPolicy",

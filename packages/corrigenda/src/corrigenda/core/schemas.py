@@ -671,7 +671,7 @@ class LineGeometry(BaseModel):
     page_height: int
 
 
-class LLMLineInput(BaseModel):
+class LineContext(BaseModel):
     """One line worth of context sent to the LLM (OCR text + neighbours + hyphen hints)."""
 
     line_id: str
@@ -690,27 +690,27 @@ class LLMLineInput(BaseModel):
     geometry: LineGeometry | None = None
 
 
-class LLMUserPayload(BaseModel):
+class CorrectionRequest(BaseModel):
     task: str = "correct_ocr_lines"
     granularity: ChunkGranularity
     document_id: str
     page_id: str
     block_id: str | None = None
-    lines: list[LLMLineInput]
+    lines: list[LineContext]
     # Vision envelope (§4.1) — opaque page image reference, populated by the
     # compiler only when the producer asks (``wants_image``); never opened.
     image_ref: ImageRef | None = None
 
 
-class LLMLineOutput(BaseModel):
+class LineProposal(BaseModel):
     """One corrected line returned by the LLM — paired by ``line_id`` with its input."""
 
     line_id: str
     corrected_text: str
 
 
-class LLMResponse(BaseModel):
-    lines: list[LLMLineOutput]
+class ProposalBatch(BaseModel):
+    lines: list[LineProposal]
 
 
 # ---------------------------------------------------------------------------
@@ -932,10 +932,10 @@ __all__ = [
     "ChunkPlan",
     "ImageRef",
     "LineGeometry",
-    "LLMLineInput",
-    "LLMUserPayload",
-    "LLMLineOutput",
-    "LLMResponse",
+    "LineContext",
+    "CorrectionRequest",
+    "LineProposal",
+    "ProposalBatch",
     "ModelInfo",
     "Usage",
     "LineTrace",

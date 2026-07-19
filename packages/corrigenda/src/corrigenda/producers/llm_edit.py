@@ -26,15 +26,15 @@ from typing import Any
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.protocols import StructuredCompletionClient
 from corrigenda.core.protocols import ProducerOptions
-from corrigenda.core.schemas import LLMUserPayload, Usage
-from corrigenda.producers.llm import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
+from corrigenda.core.schemas import CorrectionRequest, Usage
+from corrigenda.integrations.llm import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 
 
 class LLMEditProducer:
     """Wrap a :class:`StructuredCompletionClient` as an :class:`EditProducer`.
 
     ``system_prompt`` / ``output_schema`` default to the canonical LLM
-    contract (:mod:`corrigenda.producers.llm`); inject to experiment.
+    contract (:mod:`corrigenda.integrations.llm`); inject to experiment.
     """
 
     wants_geometry: bool = False
@@ -62,7 +62,7 @@ class LLMEditProducer:
         )
 
     async def produce(
-        self, payload: LLMUserPayload, *, options: ProducerOptions
+        self, payload: CorrectionRequest, *, options: ProducerOptions
     ) -> tuple[EditScript, Usage | None]:
         raw, usage = await self._provider.complete_structured(
             api_key=self._api_key,

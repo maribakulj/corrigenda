@@ -31,7 +31,7 @@ def test_subpackages_importable():
     import corrigenda.core.guards
     import corrigenda.core.validator
     import corrigenda.core.protocols
-    import corrigenda.producers.llm
+    import corrigenda.integrations.llm
     import corrigenda.core.schemas
 
     # Touch attributes that consumers will reach for, so a missing
@@ -40,8 +40,8 @@ def test_subpackages_importable():
     assert corrigenda.core.protocols.BaseProvider
     assert corrigenda.core.protocols.PipelineObserver
     assert corrigenda.core.protocols.FormatAdapter
-    assert corrigenda.producers.llm.OUTPUT_JSON_SCHEMA
-    assert corrigenda.producers.llm.SYSTEM_PROMPT
+    assert corrigenda.integrations.llm.OUTPUT_JSON_SCHEMA
+    assert corrigenda.integrations.llm.SYSTEM_PROMPT
     assert corrigenda.core.schemas.LineManifest
     assert corrigenda.core.schemas.DocumentManifest
 
@@ -70,8 +70,8 @@ def test_top_level_public_api_is_importable():
         LineManifest,
         LineStatus,
         LineTrace,
-        LLMLineInput,
-        LLMLineOutput,
+        LineContext,
+        LineProposal,
         ModelInfo,
         PageManifest,
         PipelineObserver,
@@ -107,8 +107,8 @@ def test_top_level_public_api_is_importable():
             ChunkPlannerConfig,
             ModelInfo,
             LineTrace,
-            LLMLineInput,
-            LLMLineOutput,
+            LineContext,
+            LineProposal,
         )
     )
 
@@ -190,7 +190,7 @@ def test_changelog_added_symbols_are_importable():
                 "ProviderPermanentError",
             ],
         ),
-        ("corrigenda.producers.llm", ["OUTPUT_JSON_SCHEMA", "SYSTEM_PROMPT"]),
+        ("corrigenda.integrations.llm", ["OUTPUT_JSON_SCHEMA", "SYSTEM_PROMPT"]),
         # corrigenda.errors — P0-5 (Unreleased ### Added)
         ("corrigenda.errors", ["DuplicateIdError"]),
     ]

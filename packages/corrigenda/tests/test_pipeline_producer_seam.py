@@ -17,7 +17,7 @@ from corrigenda import CorrectionPipeline
 from corrigenda.errors import ConfigurationError
 from corrigenda.core.editing import EditScript, ReplaceSpan, apply_edit_script
 from corrigenda.core.protocols import ProducerOptions
-from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
+from corrigenda.core.schemas import CorrectionRequest, RetryPolicy, Usage
 from corrigenda.formats.alto.parser import build_document_manifest
 from corrigenda.producers.rules import RulesProducer, SubstitutionRule
 
@@ -97,7 +97,7 @@ class _VisionProducer:
     requires_full_coverage = False
 
     async def produce(
-        self, payload: LLMUserPayload, *, options: ProducerOptions
+        self, payload: CorrectionRequest, *, options: ProducerOptions
     ) -> tuple[EditScript, Usage | None]:
         # Record what the compiler put in the payload, edit nothing.
         self.seen_payload = payload
@@ -196,7 +196,7 @@ class _RecordingVisionProducer:
         self.image_refs: list[str | None] = []
         self.line_ids: list[list[str]] = []
 
-    async def produce(self, payload: LLMUserPayload, *, options: RetryPolicy):
+    async def produce(self, payload: CorrectionRequest, *, options: RetryPolicy):
         self.image_refs.append(payload.image_ref)
         self.line_ids.append([ln.line_id for ln in payload.lines])
         return EditScript(ops=[]), None

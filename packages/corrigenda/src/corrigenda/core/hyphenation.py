@@ -10,7 +10,7 @@ from corrigenda.core.schemas import (
     HyphenRole,
     LineGeometry,
     LineManifest,
-    LLMLineInput,
+    LineContext,
 )
 
 _SENTINEL = object()  # distinguishes "not passed" from None
@@ -162,9 +162,9 @@ def enrich_chunk_lines(
     *,
     include_geometry: bool = False,
     page_dims: dict[str, tuple[int, int]] | None = None,
-) -> list[LLMLineInput]:
+) -> list[LineContext]:
     """
-    Build LLMLineInput list from a chunk's LineManifests.
+    Build LineContext list from a chunk's LineManifests.
 
     For each line:
     - prev_text / next_text come from all_lines_by_id lookups.
@@ -177,7 +177,7 @@ def enrich_chunk_lines(
     text producer's payload is unchanged (byte-stable). The library only
     copies these fields; it never opens an image.
     """
-    result: list[LLMLineInput] = []
+    result: list[LineContext] = []
 
     def _geometry(lm: LineManifest) -> LineGeometry | None:
         if not include_geometry or not page_dims:
@@ -200,7 +200,7 @@ def enrich_chunk_lines(
 
         if lm.hyphen_role == HyphenRole.NONE:
             result.append(
-                LLMLineInput(
+                LineContext(
                     line_id=lm.line_id,
                     prev_text=prev_text,
                     ocr_text=lm.ocr_text,
@@ -212,7 +212,7 @@ def enrich_chunk_lines(
             # Chained: PART2 of previous pair + PART1 of next pair.
             # Both join candidates exposed symmetrically.
             result.append(
-                LLMLineInput(
+                LineContext(
                     line_id=lm.line_id,
                     prev_text=prev_text,
                     ocr_text=lm.ocr_text,
@@ -228,7 +228,7 @@ def enrich_chunk_lines(
             )
         elif lm.hyphen_role == HyphenRole.PART1:
             result.append(
-                LLMLineInput(
+                LineContext(
                     line_id=lm.line_id,
                     prev_text=prev_text,
                     ocr_text=lm.ocr_text,
@@ -243,7 +243,7 @@ def enrich_chunk_lines(
         else:
             # PART2
             result.append(
-                LLMLineInput(
+                LineContext(
                     line_id=lm.line_id,
                     prev_text=prev_text,
                     ocr_text=lm.ocr_text,

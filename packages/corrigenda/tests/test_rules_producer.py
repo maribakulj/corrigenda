@@ -103,20 +103,20 @@ def test_target_ids_restrict_emission():
 
 
 def test_produce_contract_shape_returns_no_usage():
-    """§5.1 — produce(payload, *, options) over an LLMUserPayload."""
+    """§5.1 — produce(payload, *, options) over an CorrectionRequest."""
     from corrigenda.core.schemas import (
         ChunkGranularity,
-        LLMLineInput,
-        LLMUserPayload,
+        LineContext,
+        CorrectionRequest,
     )
 
     prod = RulesProducer(default_french_ocr_rules())
     assert prod.requires_full_coverage is False  # no op == no edit
-    payload = LLMUserPayload(
+    payload = CorrectionRequest(
         granularity=ChunkGranularity.LINE,
         document_id="d",
         page_id="p",
-        lines=[LLMLineInput(line_id="l1", ocr_text="ſi")],
+        lines=[LineContext(line_id="l1", ocr_text="ſi")],
     )
     script, usage = asyncio.run(prod.produce(payload, options=ProducerOptions()))
     assert usage is None

@@ -28,9 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``ModelCatalog`` (``list_models`` — application vocabulary; the demo
   backend's ``/providers/{p}/models`` concern). Both join the public
   surface; ``BaseProvider`` keeps working unchanged for full vendor
-  clients. Remaining P3.7 work (the generic
-  ``CorrectionRequest``/``LineProposal`` renames and
-  ``ProducerMetadata``) follows in later slices.
+  clients.
+
+- **BREAKING — generic vocabulary replaces the LLM-branded names
+  (P3.7, third slice).** ``LLMUserPayload`` → ``CorrectionRequest``,
+  ``LLMLineInput`` → ``LineContext``, ``LLMLineOutput`` →
+  ``LineProposal``, ``LLMResponse`` → ``ProposalBatch`` — a rules or
+  vision producer receives no "LLM payload"; the edit protocol's
+  request/proposal shapes are producer-agnostic. The purely-LLM
+  contract (``SYSTEM_PROMPT``, ``OUTPUT_JSON_SCHEMA``) moves from
+  ``corrigenda.producers.llm`` to ``corrigenda.integrations.llm`` —
+  ``corrigenda.producers`` keeps only producer implementations. No
+  wire/JSON shape changes anywhere: these are Python-surface renames.
+  Remaining P3.7 work: ``ProducerMetadata`` replacing bare
+  ``provider_name``/``model`` (a rules producer has no "model") — the
+  provenance-stamping surface, a later slice.
 
 - **BREAKING — `PipelineEventType` names only engine events (P3.6,
   first slice).** The server-side values — job lifecycle ``started`` /

@@ -92,8 +92,8 @@ from corrigenda.core.schemas import (
     LineManifest,
     LineStatus,
     LineTrace,
-    LLMResponse,
-    LLMUserPayload,
+    ProposalBatch,
+    CorrectionRequest,
     PageManifest,
     PairingPolicy,
     RetryPolicy,
@@ -1454,7 +1454,7 @@ class CorrectionPipeline:
         ctx: RunContext,
         chunk: ChunkRequest,
         chunk_lines: list[LineManifest],
-        response: LLMResponse,
+        response: ProposalBatch,
         line_by_id: dict[str, LineManifest],
         cross_page_partners: dict[LineRef, LineManifest] | None,
         traces: dict[LineRef, LineTrace] | None,
@@ -1583,11 +1583,11 @@ class CorrectionPipeline:
         all_lines_by_id: dict[str, LineManifest],
         traces: dict[LineRef, LineTrace] | None,
         max_attempts: int,
-    ) -> tuple[LLMResponse | None, int, bool, str, Usage | None]:
+    ) -> tuple[ProposalBatch | None, int, bool, str, Usage | None]:
         """Call the edit producer with retries; return the outcome.
 
         Returns ``(response, attempts_used, can_downgrade, last_msg, usage)``:
-          - ``response`` — the validated :class:`LLMResponse`, or ``None``
+          - ``response`` — the validated :class:`ProposalBatch`, or ``None``
             on failure;
           - ``attempts_used`` — how many attempts this call consumed
             (charged against the per-chunk budget by the caller);
@@ -1644,7 +1644,7 @@ class CorrectionPipeline:
                 if ei is not None:
                     _set_trace(traces, lm, model_input_text=ei.ocr_text)
 
-            payload = LLMUserPayload(
+            payload = CorrectionRequest(
                 granularity=chunk.granularity,
                 document_id=chunk.document_id,
                 page_id=chunk.page_id,

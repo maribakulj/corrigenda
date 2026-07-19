@@ -21,7 +21,7 @@ from typing import Any, ClassVar, Protocol, runtime_checkable
 from corrigenda.core.editing import EditScript
 from corrigenda.core.schemas import (
     ImageRef,
-    LLMUserPayload,
+    CorrectionRequest,
     ModelInfo,
     PageManifest,
     Usage,
@@ -186,7 +186,7 @@ class EditProducer(Protocol):
     wants_image: bool
 
     async def produce(
-        self, payload: LLMUserPayload, *, options: ProducerOptions
+        self, payload: CorrectionRequest, *, options: ProducerOptions
     ) -> tuple[EditScript, Usage | None]: ...
 
 

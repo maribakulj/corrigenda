@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from corrigenda.core.validator import validate_llm_response
 
-from corrigenda.core.schemas import LLMResponse
+from corrigenda.core.schemas import ProposalBatch
 
 # ---------------------------------------------------------------------------
 # test_valid_response
@@ -20,7 +20,7 @@ def test_valid_response():
         ]
     }
     result = validate_llm_response(raw, ["L1", "L2"])
-    assert isinstance(result, LLMResponse)
+    assert isinstance(result, ProposalBatch)
     assert len(result.lines) == 2
     assert result.lines[0].line_id == "L1"
     assert result.lines[0].corrected_text == "Bonjour monde"
