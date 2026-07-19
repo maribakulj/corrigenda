@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The result carries its artefacts (ADR-011, slice D).**
+  `CorrectionResult.corrected_files` maps each source file name to its
+  corrected XML bytes on EVERY run — dry runs included, where the bytes
+  were previously unreachable — and `result.write(dir)` persists the
+  artefacts plus the §9 report (`report.json`) caller-side. The
+  injected `OutputWriter` keeps working unchanged; this is the
+  migration path for retiring it from the engine surface.
+
 - **Terminal-decision invariant — no line ends a run undecided.** The
   page loop's ADR-008 absorb branch (recoverable `CorrectionError` →
   `chunk_error` event + continue) now OCR-falls-back every
