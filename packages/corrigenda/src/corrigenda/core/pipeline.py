@@ -80,6 +80,7 @@ from corrigenda.core.protocols import (
 )
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
+    DEFAULT_LOSS_POLICY,
     DEFAULT_PAIRING_POLICY,
     DEFAULT_RETRY_POLICY,
     BlockManifest,
@@ -93,6 +94,7 @@ from corrigenda.core.schemas import (
     LineManifest,
     LineStatus,
     LineTrace,
+    LossPolicy,
     ProposalBatch,
     CorrectionRequest,
     PageManifest,
@@ -666,6 +668,7 @@ class CorrectionPipeline:
         pairing_policy: PairingPolicy | None = None,
         format_adapter: FormatAdapter | None = None,
         *,
+        loss_policy: LossPolicy | None = None,
         producer_metadata: ProducerMetadata | None = None,
     ) -> None:
         self.producer = producer
@@ -682,6 +685,10 @@ class CorrectionPipeline:
         # the configuration fingerprint stamped into the corrected XML covers
         # every §8.2 policy. The pipeline itself never re-pairs lines.
         self.pairing_policy = pairing_policy or DEFAULT_PAIRING_POLICY
+        # ADR-012 — what a run does when projecting a correction would
+        # lose format granularity: REPORT (default, historical) counts
+        # and attributes; STRICT rejects the unit pre-projection.
+        self.loss_policy = loss_policy or DEFAULT_LOSS_POLICY
         # §3 format seam — None derives the adapter from the MANIFEST's
         # stamped source_format at write time (_adapter_for_format); an
         # injected adapter that contradicts that format is refused at
@@ -722,6 +729,7 @@ class CorrectionPipeline:
         guard_config: GuardConfig | None = None,
         pairing_policy: PairingPolicy | None = None,
         format_adapter: FormatAdapter | None = None,
+        loss_policy: LossPolicy | None = None,
         system_prompt: str | None = None,
         output_schema: dict[str, Any] | None = None,
     ) -> CorrectionPipeline:
@@ -755,6 +763,7 @@ class CorrectionPipeline:
             guard_config=guard_config,
             pairing_policy=pairing_policy,
             format_adapter=format_adapter,
+            loss_policy=loss_policy,
             # Vendor vocabulary is native HERE (the LLM convenience):
             # the two strings become the generic identity envelope.
             producer_metadata=ProducerMetadata(
@@ -769,18 +778,21 @@ class CorrectionPipeline:
         (truncated to 16 hex chars) of the sorted JSON object mapping each
         policy name to its ``policy_fingerprint()``::
 
-            {"chunk_planner": …, "guard": …, "pairing": …, "retry": …}
+            {"chunk_planner": …, "guard": …, "loss": …, "pairing": …, "retry": …}
 
-        Covers all four §8.2 policies — RetryPolicy, GuardConfig,
-        ChunkPlannerConfig and PairingPolicy — so the ``processingStep``
-        stamped into a corrected XML records the exact configuration it was
-        produced under, and a consumer holding the same policy objects can
-        recompute and verify it.
+        Covers all five §8.2 policies — RetryPolicy, GuardConfig,
+        ChunkPlannerConfig, PairingPolicy and LossPolicy (ADR-012) — so
+        the ``processingStep`` stamped into a corrected XML records the
+        exact configuration it was produced under, and a consumer holding
+        the same policy objects can recompute and verify it.
         """
         payload = json.dumps(
             {
                 "chunk_planner": self.config.policy_fingerprint(),
                 "guard": self.guard_config.policy_fingerprint(),
+                # ADR-012 — decision-affecting (strict rejects units), so
+                # it must be part of the provenance like every §8.2 policy.
+                "loss": self.loss_policy.policy_fingerprint(),
                 "pairing": self.pairing_policy.policy_fingerprint(),
                 "retry": self.retry_policy.policy_fingerprint(),
             },
@@ -1027,6 +1039,17 @@ class CorrectionPipeline:
         # intra-chunk sweep, the cross-chunk boundary pass and the
         # page-seam pass — that each carried their own comparison base.
         self._global_adjacency_pass(
+            document_manifest=document_manifest,
+            all_lines=all_lines_global,
+            traces=traces,
+        )
+
+        # ADR-012 — STRICT loss policy: a correction that cannot project
+        # without losing word granularity is rejected HERE, before the
+        # decisions materialize and before any output exists — the unit
+        # falls back to source text and the source markup keeps its
+        # Word geometry (the rewrite sees an untouched line).
+        self._loss_policy_pass(
             document_manifest=document_manifest,
             all_lines=all_lines_global,
             traces=traces,
@@ -2068,12 +2091,57 @@ class CorrectionPipeline:
 
         self._apply_unit_reverts(reverts=reverts, all_lines=all_lines, traces=traces)
 
+    def _loss_policy_pass(
+        self,
+        *,
+        document_manifest: DocumentManifest,
+        all_lines: dict[LineRef, LineManifest],
+        traces: dict[LineRef, LineTrace] | None,
+    ) -> None:
+        """STRICT loss policy (ADR-012): reject corrections that cannot
+        project without losing word granularity.
+
+        The PAGE rewriter drops a line's ``Word`` children when the
+        corrected word count diverges from the markup's (6.2 P4 slow
+        path) — the one predictable, decision-relevant format loss.
+        ``LineManifest.word_count`` carries the markup's count from parse
+        time, so the check runs in the pure core, BEFORE the decisions
+        materialize: a rejected line falls back to source (whole hyphen
+        unit, ADR-010) and its rewrite becomes untouched — the source
+        geometry survives. Under REPORT (default) this pass is a no-op:
+        the loss projects, is counted, and is attributed per line.
+        """
+        if not self.loss_policy.strict:
+            return
+        reverts: dict[LineRef, str] = {}
+        for page in document_manifest.pages:
+            for lm in page.lines:
+                if lm.word_count is None or lm.corrected_text is None:
+                    continue
+                if lm.corrected_text == lm.ocr_text:
+                    continue  # identity projects untouched — nothing to lose
+                n_corrected = len(lm.corrected_text.split())
+                if n_corrected != lm.word_count:
+                    reverts[line_ref(lm)] = (
+                        "format_loss: corrected word count "
+                        f"{n_corrected} != source Word markup {lm.word_count} "
+                        "— unprojectable without dropping word geometry "
+                        "(LossPolicy strict)"
+                    )
+        self._apply_unit_reverts(
+            reverts=reverts,
+            all_lines=all_lines,
+            traces=traces,
+            atomicity_reason="format_loss_pair_atomicity",
+        )
+
     def _apply_unit_reverts(
         self,
         *,
         reverts: dict[LineRef, str],
         all_lines: dict[LineRef, LineManifest],
         traces: dict[LineRef, LineTrace] | None,
+        atomicity_reason: str = "adjacent_duplicate_pair_atomicity",
     ) -> None:
         """Revert flagged lines to OCR — atomically with their WHOLE
         hyphen unit.
@@ -2086,8 +2154,8 @@ class CorrectionPipeline:
         on THE derivation (ADR-010): the pass runs after planning, when
         the pointer fields are final, so the derived groups cannot be
         stale. A flagged line keeps its own revert reason; pulled
-        members are stamped ``adjacent_duplicate_pair_atomicity`` unless
-        an earlier fallback path already pinned one.
+        members are stamped ``atomicity_reason`` (the calling pass's
+        vocabulary) unless an earlier fallback path already pinned one.
         """
         if not reverts:
             return
@@ -2098,7 +2166,7 @@ class CorrectionPipeline:
             if group is None:
                 continue
             for member in group.members:
-                to_revert.setdefault(member, "adjacent_duplicate_pair_atomicity")
+                to_revert.setdefault(member, atomicity_reason)
 
         for ref, reason in to_revert.items():
             lm = all_lines.get(ref)
@@ -2235,6 +2303,15 @@ class CorrectionPipeline:
                     t = traces.get(tkey)
                     if t is not None:
                         t.rewriter_path = rpath
+
+            # ADR-012 — the rewrite's per-line loss attribution rides the
+            # traces onto the report's projection stage.
+            for lid, line_losses in result.losses_by_line.items():
+                tkey = lid_to_ref.get(lid)
+                if tkey:
+                    t = traces.get(tkey)
+                    if t is not None:
+                        t.projection_losses = line_losses
 
             for lid, otxt in result.texts.items():
                 tkey = lid_to_ref.get(lid)

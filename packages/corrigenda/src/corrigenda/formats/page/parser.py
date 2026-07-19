@@ -219,6 +219,11 @@ def _parse_page_file(
                 line_id = tl.get("id", f"TL_{block_id}_{line_order_in_block}")
                 coords = _coords_of(tl, ns)
                 ocr_text = canonical_line_text(tl, ns)
+                # ADR-012 — record the word granularity the line carries:
+                # the rewriter drops Word geometry when a correction
+                # changes the word count (6.2 P4 slow path), and the
+                # LossPolicy strict check needs this BEFORE projection.
+                n_words = len(tl.findall(_tag("Word", ns)))
 
                 lm = LineManifest(
                     line_id=line_id,
@@ -228,6 +233,7 @@ def _parse_page_file(
                     line_order_in_block=line_order_in_block,
                     coords=coords,
                     ocr_text=ocr_text,
+                    word_count=n_words if n_words else None,
                 )
                 lines.append(lm)
                 line_ids.append(line_id)

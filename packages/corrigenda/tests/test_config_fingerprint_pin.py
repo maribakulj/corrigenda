@@ -22,6 +22,7 @@ from __future__ import annotations
 from corrigenda.core.schemas import (
     ChunkPlannerConfig,
     GuardConfig,
+    LossPolicy,
     PairingPolicy,
     RetryPolicy,
 )
@@ -65,16 +66,18 @@ def test_config_fingerprint_is_pinned():
 
     History: ``3a06d0a93ac4eedc`` (1.0.0) → ``216aa712f1e99b79`` after the
     P1-2 geometric pairing defaults landed (PairingPolicy grew
-    ``geometric_checks`` / ``max_gap_line_heights`` / ``max_rise_line_heights``;
+    ``geometric_checks`` / ``max_gap_line_heights`` / ``max_rise_line_heights``)
+    → ``55dc80679dd71f94`` when LossPolicy joined the §8.2 surface
+    (ADR-012, P3.8 — a fifth ``loss`` key in the composite payload;
     behaviour change recorded in CHANGELOG under [Unreleased])."""
-    assert _default_pipeline().config_fingerprint() == "216aa712f1e99b79"
+    assert _default_pipeline().config_fingerprint() == "55dc80679dd71f94"
 
 
 def test_each_policy_fingerprint_is_pinned():
     assert GuardConfig().policy_fingerprint() == "48fef9e0d6feb681"
-    # The remaining three are pinned by-shape: any default change trips the
+    # The remaining four are pinned by-shape: any default change trips the
     # composite above, and these lock each policy independently.
-    for policy in (ChunkPlannerConfig(), PairingPolicy(), RetryPolicy()):
+    for policy in (ChunkPlannerConfig(), LossPolicy(), PairingPolicy(), RetryPolicy()):
         fp = policy.policy_fingerprint()
         assert isinstance(fp, str) and len(fp) == 16
 

@@ -84,9 +84,11 @@ class PageRewriterMetrics:
     def total_lines(self) -> int:
         return self.untouched + self.total_processed
 
-    def as_losses(self) -> dict[str, int]:
-        """Non-zero PAGE-specific counters, for ``CorrectionReport.format_losses``."""
-        raw = {
+    def _loss_counters(self) -> dict[str, int]:
+        """The raw loss-counter snapshot (all keys, zeros included) —
+        diffed around each line by the rewrite loop for the per-line
+        attribution (ADR-012)."""
+        return {
             "words_dropped": self.words_dropped,
             "conf_dropped": self.conf_dropped,
             "alt_textequiv_dropped": self.alt_textequiv_dropped,
@@ -94,7 +96,27 @@ class PageRewriterMetrics:
             "hyphen_preserved": self.hyphen_preserved,
             "line_word_disagreement": self.line_word_disagreement,
         }
-        return {k: v for k, v in raw.items() if v}
+
+    def as_losses(self) -> dict[str, int]:
+        """Non-zero PAGE-specific counters, for ``CorrectionReport.format_losses``."""
+        return {k: v for k, v in self._loss_counters().items() if v}
+
+
+def _record_line_losses(
+    losses_by_line: dict[str, dict[str, int]],
+    line_id: str,
+    counters_before: dict[str, int],
+    metrics: PageRewriterMetrics,
+) -> None:
+    """ADR-012 — attribute what the loss counters gained while one line
+    was processed to that line (only lines that lost something appear)."""
+    delta = {
+        key: after - counters_before[key]
+        for key, after in metrics._loss_counters().items()
+        if after > counters_before[key]
+    }
+    if delta:
+        losses_by_line[line_id] = delta
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +334,7 @@ def rewrite_page_file(
     ns = _detect_namespace(root)
     metrics = PageRewriterMetrics()
     line_paths: dict[str, str] = {}
+    losses_by_line: dict[str, dict[str, int]] = {}
 
     # ADR-007 — a bare line_id keys every correction-to-element association
     # below; duplicates (manifest or element side) fail loudly instead of
@@ -335,6 +358,9 @@ def rewrite_page_file(
             )
         seen_element_ids.add(line_id)
         lm = line_by_id[line_id]
+        # ADR-012 — everything the counters gain while THIS line is
+        # processed is this line's own loss attribution.
+        counters_before = metrics._loss_counters()
 
         source_text = canonical_line_text(tl, ns)
         raw_corrected = (
@@ -357,6 +383,7 @@ def rewrite_page_file(
         if corrected == source_text:
             metrics.untouched += 1
             line_paths[line_id] = "untouched"
+            _record_line_losses(losses_by_line, line_id, counters_before, metrics)
             continue
 
         if trailing_hyphen_char(source_text, HYPHEN_CHARS) is not None:
@@ -386,6 +413,7 @@ def rewrite_page_file(
         else:
             metrics.slow_path += 1
         line_paths[line_id] = path
+        _record_line_losses(losses_by_line, line_id, counters_before, metrics)
 
     _add_provenance(root, ns, provider, model, lib_version, config_fingerprint)
     xml_bytes = etree.tostring(
@@ -400,6 +428,7 @@ def rewrite_page_file(
         rewriter_paths=line_paths,
         texts=_extract_texts_from_root(root, ns, set(line_by_id)),
         losses=metrics.as_losses(),
+        losses_by_line=losses_by_line,
     )
 
 

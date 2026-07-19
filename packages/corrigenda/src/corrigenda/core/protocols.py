@@ -306,6 +306,10 @@ class RewriteResult:
     rewriter_paths: dict[str, str]
     texts: dict[str, str]
     losses: dict[str, int] = field(default_factory=dict)
+    #: P3.8 (ADR-012) — per-line attribution of ``losses``: line_id →
+    #: that line's own loss counters (only lines that lost something
+    #: appear). Summing the values reproduces ``losses``.
+    losses_by_line: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def __iter__(self) -> Iterator[Any]:
         """Transitional positional unpacking — the historical rewriter

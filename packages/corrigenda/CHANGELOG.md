@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`LossPolicy` — REPORT or STRICT on format-granularity loss
+  (ADR-012, P3.8).** The PAGE rewriter cannot keep ``Word`` geometry
+  when a correction changes a line's word count (6.2 P4 slow path).
+  ``LossPolicy(strict=False)`` (the default) makes the historical
+  stance explicit: the correction projects, the loss is counted
+  run-wide (``CorrectionReport.format_losses``) and now ATTRIBUTED per
+  decision — ``ProjectionStage.losses`` carries each line's own share
+  (``RewriteResult.losses_by_line`` → ``LineTrace.projection_losses``
+  under the hood). ``LossPolicy(strict=True)`` rejects instead: a
+  correction that cannot project without loss makes its WHOLE hyphen
+  unit fall back to source text (reason code ``format_loss``,
+  ADR-010 atomicity) BEFORE any output exists, so the source markup
+  keeps its word geometry. The check runs in the pure core off the new
+  ``LineManifest.word_count`` (stamped by the PAGE parser; ``None`` on
+  word-less lines and on ALTO, whose per-token geometry redistributes
+  at any count). Stale-annotation drops (``conf``, alternative
+  ``TextEquiv``, offset ``custom`` groups) describe the old reading and
+  stay report-only in both modes; no third mode until a real need
+  shows up. ``LossPolicy`` joins the §8.2 policy surface, the public
+  API, ``for_provider``, and the §11 ``config_fingerprint`` (composite
+  pin ``216aa712f1e99b79`` → ``55dc80679dd71f94`` — a fifth ``loss``
+  key in the payload).
+
 ### Changed
 
 - **BREAKING — `ProducerMetadata` replaces the bare

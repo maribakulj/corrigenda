@@ -137,6 +137,14 @@ class LineManifest(BaseModel):
     line_order_in_block: int
     coords: Coords
     ocr_text: str
+    #: Number of word-granularity elements the physical line carries in
+    #: its source markup (PAGE ``Word`` children), or ``None`` when the
+    #: line has no word markup to lose (word-less PAGE lines, ALTO —
+    #: whose per-token ``String`` geometry redistributes at any token
+    #: count). Feeds the :class:`LossPolicy` strict check (§6.2/ADR-012):
+    #: a correction whose token count diverges from this cannot project
+    #: without dropping the word geometry.
+    word_count: int | None = None
     prev_line_id: str | None = None
     next_line_id: str | None = None
     corrected_text: str | None = None
@@ -517,6 +525,38 @@ class PairingPolicy(FrozenPolicy):
 DEFAULT_PAIRING_POLICY = PairingPolicy()
 
 
+class LossPolicy(FrozenPolicy):
+    """What the run does when projecting a correction would LOSE format
+    granularity (ADR-012, P3.8).
+
+    The PAGE rewriter cannot keep ``Word`` geometry when a correction
+    changes a line's word count (6.2 P4 slow path: the ``Word`` children
+    are dropped and the text lives at line level). Two stances:
+
+    * **REPORT** (``strict=False``, the default — the library's
+      historical behaviour, now explicit): the correction projects, the
+      loss is counted (``CorrectionReport.format_losses`` aggregate) and
+      attributed per line (``ProjectionStage.losses``).
+    * **STRICT** (``strict=True``): a correction that cannot project
+      without loss is REJECTED before any output exists — the whole
+      hyphen unit falls back to source text with a ``format_loss``
+      reason, consistent with the conservative-on-ambiguity fallback
+      philosophy. The source markup keeps its word geometry.
+
+    Scope: word-granularity loss only (``LineManifest.word_count``).
+    Stale-annotation drops (``conf``, alternative ``TextEquiv``,
+    offset-anchored ``custom`` groups) describe the OLD reading — they
+    are inherent to ANY correction, so they stay report-only in both
+    modes. No third mode until a real need shows up.
+    """
+
+    strict: bool = False
+
+
+#: Module-level default reused wherever a caller passes no LossPolicy.
+DEFAULT_LOSS_POLICY = LossPolicy()
+
+
 class RetryPolicy(FrozenPolicy):
     """Per-chunk LLM retry strategy (F9), injectable and frozen.
 
@@ -789,6 +829,10 @@ class LineTrace(BaseModel):
     # Diagnostic metadata
     hyphen_role: str | None = None
     rewriter_path: str | None = None  # untouched / subs_only / fast_path / slow_path
+    #: P3.8 — this line's share of the rewrite's granularity losses
+    #: (e.g. ``{"words_dropped": 4}``), ``None`` when its rewrite lost
+    #: nothing; surfaces on the report's projection stage.
+    projection_losses: dict[str, int] | None = None
     validation_status: str | None = None  # corrected / fallback / failed
     fallback_reason: str | None = None
 
@@ -857,6 +901,12 @@ class ProjectionStage(BaseModel):
     #: library writes PAGE too, the name was wrong.
     extracted_text: str | None = None
     rewriter_path: str | None = None  # untouched / subs_only / fast_path / slow_path
+    #: P3.8 (ADR-012) — THIS line's granularity losses (e.g.
+    #: ``{"words_dropped": 4}``): the per-decision attribution of the
+    #: run-level ``CorrectionReport.format_losses`` aggregate. Absent
+    #: when this line's rewrite lost nothing. Additive and optional —
+    #: no ``report_version`` bump.
+    losses: dict[str, int] | None = None
 
 
 class LineOutcome(BaseModel):
@@ -926,6 +976,7 @@ __all__ = [
     "ChunkPlannerConfig",
     "FrozenPolicy",
     "GuardConfig",
+    "LossPolicy",
     "PairingPolicy",
     "RetryPolicy",
     "ChunkRequest",

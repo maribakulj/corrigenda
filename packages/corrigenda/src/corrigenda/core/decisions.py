@@ -172,6 +172,9 @@ def build_line_outcomes(
                 projection = ProjectionStage(
                     extracted_text=trace.output_alto_text,
                     rewriter_path=trace.rewriter_path,
+                    # ADR-012 — per-decision attribution of the rewrite's
+                    # granularity losses (None when nothing was lost).
+                    losses=trace.projection_losses,
                 )
         outcomes.append(
             LineOutcome(

@@ -93,6 +93,7 @@ PUBLIC_API_1_0 = sorted(
         "LineTrace",
         "LineContext",
         "LineProposal",
+        "LossPolicy",
         "ModelInfo",
         "PageManifest",
         "PairingPolicy",
