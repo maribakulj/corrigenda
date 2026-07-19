@@ -327,12 +327,14 @@ def test_duplicate_revert_extends_to_hyphen_partner():
     part2.hyphen_pair_line_id = part1.line_id
     part1.corrected_text = "mot coupé-"
     part2.corrected_text = "suite du mot"
-    line_by_id = {lm.line_id: lm for lm in (part1, part2)}
+    from corrigenda.core.identity import line_ref
 
-    pipeline._apply_duplicate_reverts(
-        reverts={part2.line_id: "adjacent_duplicate_detected"},
+    all_lines = {line_ref(lm): lm for lm in (part1, part2)}
+
+    pipeline._apply_unit_reverts(
+        reverts={line_ref(part2): "adjacent_duplicate_detected"},
+        all_lines=all_lines,
         traces=None,
-        line_by_id=line_by_id,
     )
     # Both sides reverted — no mixed pair survives.
     assert part2.corrected_text == part2.ocr_text
@@ -370,19 +372,16 @@ def test_duplicate_revert_extends_to_CROSS_PAGE_hyphen_partner():
     part1.corrected_text = "mot coupé-"
     part2.corrected_text = "suite du mot"
 
-    # The page-local index the seam/page pass would hold contains only the
-    # flagged page's line; the partner is reachable solely via the
-    # page-qualified cross-page index.
+    # The document-wide page-qualified index is the only lookup the
+    # global pass holds — the cross-page partner is just another entry.
     from corrigenda.core.identity import line_ref
 
-    line_by_id = {part1.line_id: part1}
-    cross_page_partners = {line_ref(part2): part2}
+    all_lines = {line_ref(part1): part1, line_ref(part2): part2}
 
-    pipeline._apply_duplicate_reverts(
-        reverts={part1.line_id: "adjacent_duplicate_detected"},
+    pipeline._apply_unit_reverts(
+        reverts={line_ref(part1): "adjacent_duplicate_detected"},
+        all_lines=all_lines,
         traces=None,
-        line_by_id=line_by_id,
-        cross_page_partners=cross_page_partners,
     )
     # Both members reverted despite the partner living on another page.
     assert part1.corrected_text == part1.ocr_text

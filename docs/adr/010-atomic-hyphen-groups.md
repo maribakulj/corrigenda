@@ -52,6 +52,13 @@ disagreement.
   becomes a derived detail of group membership rather than a
   load-bearing state — best folded into the immutable-source refactor
   (P3.4), which retires the pointer fields as storage of record.
+- **Global pass (P3.3, landed)**: duplicate detection left the chunks
+  and pages — ONE document-wide adjacency pass over the canonical
+  reading order (LineRef-keyed, broken at source-file transitions) runs
+  after the page loop, and its rejections are a group lookup on the
+  derivation (``_apply_unit_reverts``). The pre-revert snapshot, the
+  finalization-owner map, the intra-chunk sweep and the boundary/seam
+  passes are gone.
 
 ### Design constraint discovered while scoping slice 2
 The LINE-granularity planner UNLINKS over-cap chains mid-run (it cuts a

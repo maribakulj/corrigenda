@@ -71,6 +71,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **One global consistency pass (P3.3).** Adjacent-duplicate detection
+  now runs ONCE over the whole document in canonical reading order
+  (pages in manifest order, lines in page order, never across source
+  files), keyed by qualified line identity. It replaces three partial
+  sweeps — the intra-chunk sweep, the cross-chunk boundary pass and the
+  page-seam pass — that each carried their own comparison base, and the
+  seam pass's ambiguity skip on colliding bare ids is gone with them.
+  Chunk finalization no longer reverts anything, so the pass compares
+  every line's live pre-revert accepted correction on one basis, and a
+  rejection pulls the whole hyphen unit via the shared derivation. Two
+  lines adjacent inside a merged multi-block chunk but not adjacent on
+  the page are no longer spuriously compared. Note: per-page
+  `page_completed` events now report provisional correction counts —
+  final decisions are made by the global pass; the report and the
+  result remain authoritative.
+
 - **Hyphen reconciliation is unit-driven (ADR-010, slice 2 complete).**
   A chunk's target lines and their resolved partners are handed to
   `derive_hyphen_groups` — the single derivation of "these lines travel

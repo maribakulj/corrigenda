@@ -53,10 +53,17 @@ until it was moved to its caller.
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from typing import TypeVar
 
 from corrigenda.core.schemas import DEFAULT_GUARD_CONFIG, GuardConfig
+
+#: Line key type for :func:`check_adjacent_duplicates` — any hashable
+#: identifier (a bare page-scoped line_id, or a LineRef for the
+#: document-wide pass). The guard never interprets the key.
+K = TypeVar("K", bound=Hashable)
 
 
 # ---------------------------------------------------------------------------
@@ -177,23 +184,25 @@ def check_line(
 
 
 def check_adjacent_duplicates(
-    lines: list[tuple[str, str, str]],
+    lines: list[tuple[K, str, str]],
     *,
     config: GuardConfig = DEFAULT_GUARD_CONFIG,
-) -> dict[str, str]:
+) -> dict[K, str]:
     """Detect adjacent duplicate corrections.
 
     Parameters
     ----------
-    lines : list of (line_id, source_ocr, corrected_text)
-        Ordered list of lines in the chunk, already individually accepted.
+    lines : list of (line_key, source_ocr, corrected_text)
+        Ordered list of adjacent lines, already individually accepted.
+        The key is opaque — bare line_ids for a page-scoped caller,
+        LineRefs for the document-wide pass.
 
     Returns
     -------
-    dict mapping line_id → fallback_reason for lines that should revert.
+    dict mapping line_key → fallback_reason for lines that should revert.
     Both lines of a duplicate pair are reverted.
     """
-    revert: dict[str, str] = {}
+    revert: dict[K, str] = {}
     for i in range(len(lines) - 1):
         id_a, src_a, cor_a = lines[i]
         id_b, src_b, cor_b = lines[i + 1]
