@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from corrigenda.core.protocols import RewriteResult
 from corrigenda.core.schemas import PageManifest
-from corrigenda.formats.alto.rewriter import (
-    RewriterMetrics,
-    extract_output_texts,
-    rewrite_alto_file,
-)
+from corrigenda.formats.alto.rewriter import rewrite_alto_file
 
 
 class AltoFormatAdapter:
@@ -28,7 +25,7 @@ class AltoFormatAdapter:
         *,
         lib_version: str | None = None,
         config_fingerprint: str | None = None,
-    ) -> tuple[bytes, RewriterMetrics, dict[str, str]]:
+    ) -> RewriteResult:
         return rewrite_alto_file(
             xml_path,
             pages,
@@ -37,9 +34,6 @@ class AltoFormatAdapter:
             lib_version=lib_version,
             config_fingerprint=config_fingerprint,
         )
-
-    def extract_texts(self, xml_bytes: bytes, line_ids: set[str]) -> dict[str, str]:
-        return extract_output_texts(xml_bytes, line_ids)
 
 
 __all__ = ["AltoFormatAdapter"]

@@ -1,11 +1,12 @@
 """The written artefact must SAY what the run decided (§9 projection).
 
-The pipeline re-extracts every line's text from the rewritten XML for
-the trace. These tests make that re-extraction an enforced invariant
-instead of a diagnostic: any word-level divergence between the decided
-text and what the output bytes actually contain fails the run BEFORE
-the writer persists anything — a divergent artefact is corruption, not
-a degradation.
+The rewrite returns the per-line texts of the final tree its bytes were
+serialized from (ADR-011 — no second parse of the output), and the
+pipeline verifies them against the decided texts BEFORE the writer
+persists anything: any word-level divergence fails the run — a
+divergent artefact is corruption, not a degradation. Serialization
+fidelity (tree → bytes) is lxml's contract; what the invariant guards
+is the rewriter's tree diverging from the run's decisions.
 
 Known, tolerated projection loss: ALTO/PAGE tokenize line text into
 word elements, so runs of consecutive whitespace cannot survive the
@@ -15,6 +16,7 @@ form; exact-spacing accounting belongs to the loss policy, not here.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -53,34 +55,33 @@ class _CaptureWriter:
 
 
 class _CorruptingAdapter:
-    """Real ALTO adapter whose rewrite flips one word in the output bytes —
-    simulates a rewriter bug that writes text the run never decided."""
+    """Real ALTO adapter whose rewrite ends with one line's text altered —
+    simulates a rewriter bug that puts text the run never decided into
+    the tree it serializes."""
 
     def __init__(self) -> None:
         self._inner = AltoFormatAdapter()
 
     def rewrite_file(self, *args, **kwargs):
-        xml_bytes, metrics, paths = self._inner.rewrite_file(*args, **kwargs)
-        return xml_bytes.replace(b' CONTENT="', b' CONTENT="XX', 1), metrics, paths
-
-    def extract_texts(self, xml_bytes, line_ids):
-        return self._inner.extract_texts(xml_bytes, line_ids)
+        result = self._inner.rewrite_file(*args, **kwargs)
+        first = next(iter(sorted(result.texts)))
+        return replace(
+            result, texts={**result.texts, first: "XX" + result.texts[first]}
+        )
 
 
 class _LineDroppingAdapter:
-    """Real ALTO adapter whose extraction loses one line — simulates a
+    """Real ALTO adapter whose rewrite loses one line — simulates a
     rewrite that dropped a TextLine from the artefact."""
 
     def __init__(self) -> None:
         self._inner = AltoFormatAdapter()
 
     def rewrite_file(self, *args, **kwargs):
-        return self._inner.rewrite_file(*args, **kwargs)
-
-    def extract_texts(self, xml_bytes, line_ids):
-        texts = self._inner.extract_texts(xml_bytes, line_ids)
+        result = self._inner.rewrite_file(*args, **kwargs)
+        texts = dict(result.texts)
         texts.pop(next(iter(sorted(texts))))
-        return texts
+        return replace(result, texts=texts)
 
 
 def _pipeline(adapter, writer) -> CorrectionPipeline:

@@ -1013,7 +1013,7 @@ class CorrectionPipeline:
         # document where every line carries a terminal decision.
         _verify_all_lines_terminal(document_manifest)
 
-        await self._write_outputs(
+        format_losses = await self._write_outputs(
             document_manifest=document_manifest,
             source_files=source_files,
             traces=traces,
@@ -1024,6 +1024,10 @@ class CorrectionPipeline:
             run_id=run_id,
             total_lines=len(traces),
             lines=list(traces.values()),
+            # ADR-011 — the rewrite's granularity-loss counters surface on
+            # the report (None when the format is lossless or nothing was
+            # written).
+            format_losses=format_losses or None,
         )
 
         # §9 unification — trace.json IS the CorrectionReport. One artefact,
@@ -2146,22 +2150,26 @@ class CorrectionPipeline:
         source_files: dict[str, Path],
         traces: dict[LineRef, LineTrace],
         apply: bool = True,
-    ) -> None:
-        """Rewrite corrected ALTO files, update traces, and (when ``apply``)
-        persist via the writer.
+    ) -> dict[str, int]:
+        """Rewrite corrected files, update traces, and (when ``apply``)
+        persist via the writer. Returns the format's granularity-loss
+        counters aggregated across every file, for
+        ``CorrectionReport.format_losses``.
 
         §9 dry-run — the rewrite always runs in memory so the report's
         ``rewriter_path`` / ``output_alto_text`` are populated, but when
         ``apply`` is ``False`` the injected ``OutputWriter`` is never
         called: nothing is persisted.
 
-        The heavy calls (``rewrite_file``: a full lxml
+        ADR-011 — the projection invariant verifies against the
+        :class:`RewriteResult`'s texts, read off the very tree the bytes
+        were serialized from: the second full parse of the output is
+        gone. The heavy calls (``rewrite_file``: a full lxml
         parse/rewrite/serialize of the source file; ``write_corrected``:
-        disk IO; ``extract_texts``: another parse) run in worker threads
-        so a ~100 MiB rewrite no longer freezes the host's event loop
-        (SSE keepalives, /health). Observer events stay ON the loop —
-        emit sites must never run from a thread (the store's queues are
-        not thread-safe).
+        disk IO) run in worker threads so a ~100 MiB rewrite no longer
+        freezes the host's event loop (SSE keepalives, /health).
+        Observer events stay ON the loop — emit sites must never run
+        from a thread (the store's queues are not thread-safe).
         """
         # §11 — provenance stamped into every corrected file's processingStep.
         from corrigenda import __version__ as _lib_version
@@ -2171,6 +2179,7 @@ class CorrectionPipeline:
         # output files — every hand-built-manifest dry-run in the test
         # suite passes source_files={} — needs no format at all.
         adapter: FormatAdapter | None = self.format_adapter
+        losses_total: dict[str, int] = {}
 
         for source_name, xml_path in source_files.items():
             pages_for_file = [
@@ -2181,7 +2190,7 @@ class CorrectionPipeline:
             if adapter is None:
                 adapter = _adapter_for_format(document_manifest.source_format)
 
-            xml_bytes, metrics, rewriter_paths = await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 adapter.rewrite_file,
                 xml_path,
                 pages_for_file,
@@ -2193,20 +2202,16 @@ class CorrectionPipeline:
                 config_fingerprint=config_fingerprint,
             )
 
-            file_line_ids = {lm.line_id for p in pages_for_file for lm in p.lines}
-            output_texts = await asyncio.to_thread(
-                adapter.extract_texts, xml_bytes, file_line_ids
-            )
             # Projection invariant: the artefact must SAY what the run
             # decided. Verified BEFORE the writer sees the bytes — a
             # divergent artefact is corruption, never a valid output.
-            _verify_projection(source_name, pages_for_file, output_texts)
+            _verify_projection(source_name, pages_for_file, result.texts)
 
             if apply:
                 await asyncio.to_thread(
                     self.output_writer.write_corrected,
                     source_stem=xml_path.stem,
-                    xml_bytes=xml_bytes,
+                    xml_bytes=result.xml_bytes,
                 )
             # rewriter_stats observability event — pure read-only diagnostic
             # surfacing how each line classified (UNTOUCHED / SUBS_ONLY /
@@ -2215,26 +2220,28 @@ class CorrectionPipeline:
                 PipelineEventType.REWRITER_STATS,
                 {
                     "source_stem": xml_path.stem,
-                    "untouched": metrics.untouched,
-                    "subs_only": metrics.subs_only,
-                    "fast_path": metrics.fast_path,
-                    "slow_path": metrics.slow_path,
+                    "untouched": result.metrics.untouched,
+                    "subs_only": result.metrics.subs_only,
+                    "fast_path": result.metrics.fast_path,
+                    "slow_path": result.metrics.slow_path,
                 },
             )
+            for key, count in result.losses.items():
+                losses_total[key] = losses_total.get(key, 0) + count
 
             lid_to_ref: dict[str, LineRef] = {}
             for p in pages_for_file:
                 for lm in p.lines:
                     lid_to_ref[lm.line_id] = line_ref(lm)
 
-            for lid, rpath in rewriter_paths.items():
+            for lid, rpath in result.rewriter_paths.items():
                 tkey = lid_to_ref.get(lid)
                 if tkey:
                     t = traces.get(tkey)
                     if t is not None:
                         t.rewriter_path = rpath
 
-            for lid, otxt in output_texts.items():
+            for lid, otxt in result.texts.items():
                 tkey = lid_to_ref.get(lid)
                 if tkey:
                     t = traces.get(tkey)
@@ -2243,6 +2250,7 @@ class CorrectionPipeline:
 
         # Trace persistence moved to run(): trace.json IS the
         # CorrectionReport — one §9 artefact, not a parallel JobTrace shape.
+        return losses_total
 
 
 # --- public surface ---
