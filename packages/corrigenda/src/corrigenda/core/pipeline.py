@@ -1030,60 +1030,61 @@ class CorrectionPipeline:
             reconcile_metrics=ctx.reconcile_metrics,
             usage=ctx.usage,
             report=report,
-            edit_script=self._build_final_edit_script(document_manifest, ctx),
+            edit_script=self._build_final_edit_script(decisions, ctx),
         )
 
     def _build_final_edit_script(
-        self, document_manifest: DocumentManifest, ctx: RunContext
+        self, decisions: DecisionSet, ctx: RunContext
     ) -> EditScript:
         """§4 — the EditScript the run *actually applied*, in document order.
 
         Reconciles the captured producer ops against the FINAL per-line
-        state, after reconciliation, the acceptance guard, and every
-        duplicate/seam revert have run. It therefore never carries an op
-        for a line that was reverted to OCR or reconciled to different text
-        (a dry-run consumer replaying it would otherwise diverge
-        from the pipeline's own corrected XML):
+        decision (ADR-011 — read from the immutable :class:`DecisionSet`,
+        which is already in document reading order), after
+        reconciliation, the acceptance guard, and the global consistency
+        pass have run. It therefore never carries an op for a line that
+        was reverted to OCR or reconciled to different text (a dry-run
+        consumer replaying it would otherwise diverge from the
+        pipeline's own corrected XML):
 
-        - line not ``CORRECTED`` (fallback / failed / pending) → no op;
+        - line not ``CORRECTED`` (fallback / failed) → no op;
         - ``CORRECTED`` and the producer's op output survived unchanged →
           the producer's original op, preserving its TYPE (e.g. a rules
           producer's ``replace_span``);
         - ``CORRECTED`` but the final text differs from the op output
           (a reconciled hyphen member) → a ``replace_line`` carrying the
-          final ``corrected_text``, since the original span no longer
-          describes it.
+          final text, since the original span no longer describes it.
         """
         ops: list[EditOp] = []
-        for page in document_manifest.pages:
-            for lm in page.lines:
-                if lm.status is not LineStatus.CORRECTED or lm.corrected_text is None:
-                    continue
-                captured = ctx.producer_ops.get(line_ref(lm))
-                if captured is None:
-                    # An accepted line the producer left untouched (no op) —
-                    # e.g. a rules producer's uncovered line. Nothing applied.
-                    continue
-                line_ops, produced_text = captured
-                if produced_text == lm.corrected_text:
-                    # The producer's output survived every guard unchanged —
-                    # keep its original ops (and their TYPE, e.g. span),
-                    # stamped with the page_id so a consumer can attribute
-                    # them per file (bare line_ids repeat across
-                    # files — ADR-001).
-                    ops.extend(
-                        op.model_copy(update={"page_id": lm.page_id}) for op in line_ops
+        for decision in decisions.decisions:
+            if decision.status is not LineStatus.CORRECTED:
+                continue
+            captured = ctx.producer_ops.get(decision.ref)
+            if captured is None:
+                # An accepted line the producer left untouched (no op) —
+                # e.g. a rules producer's uncovered line. Nothing applied.
+                continue
+            line_ops, produced_text = captured
+            if produced_text == decision.final_text:
+                # The producer's output survived every guard unchanged —
+                # keep its original ops (and their TYPE, e.g. span),
+                # stamped with the page_id so a consumer can attribute
+                # them per file (bare line_ids repeat across
+                # files — ADR-001).
+                ops.extend(
+                    op.model_copy(update={"page_id": decision.ref.page_id})
+                    for op in line_ops
+                )
+            else:
+                # A guard / the reconciler rewrote the final text; the
+                # original ops no longer describe it.
+                ops.append(
+                    ReplaceLine(
+                        line_id=decision.ref.line_id,
+                        text=decision.final_text,
+                        page_id=decision.ref.page_id,
                     )
-                else:
-                    # A guard / the reconciler rewrote the final text; the
-                    # original ops no longer describe it.
-                    ops.append(
-                        ReplaceLine(
-                            line_id=lm.line_id,
-                            text=lm.corrected_text,
-                            page_id=lm.page_id,
-                        )
-                    )
+                )
         return EditScript(ops=ops)
 
     def run_sync(
