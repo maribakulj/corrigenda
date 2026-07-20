@@ -73,10 +73,13 @@ PUBLIC_API_1_0 = sorted(
         "SubstitutionRule",
         "default_french_ocr_rules",
         "LLMEditProducer",
-        # Errors (§8.4)
+        # Errors (§8.4) — canonical names since P3.11; the old names are
+        # 0.9.x deprecation aliases of the SAME classes.
+        "CorrigendaError",
         "CorrectionError",
         "ParseError",
         "DuplicateIdError",  # P0-5 — additive, subclasses ParseError
+        "ProposalValidationError",
         "ValidationError",
         "CorrectionAborted",
         # Ports

@@ -57,7 +57,7 @@ from corrigenda.core.identity import (
 from corrigenda.errors import (
     ConfigurationError,
     CorrectionAborted,
-    CorrectionError,
+    CorrigendaError,
     ProjectionError,
 )
 from corrigenda.core import events as ev
@@ -117,7 +117,7 @@ from corrigenda.core.schemas import (
 #     so an unwrapped one is indistinguishable from a bug and fails the
 #     run rather than degrading to a fake success);
 #   - ValueError — the documented malformed-producer-output family
-#     (ValidationError, HyphenIntegrityError, json.JSONDecodeError all
+#     (ProposalValidationError, HyphenIntegrityError, json.JSONDecodeError all
 #     inherit it; §8.4 keeps them value-shaped for exactly this route).
 # Everything else — RuntimeError, KeyError, a pydantic bug, an SDK
 # exception nobody classified — fails the run: an unknown exception
@@ -1369,7 +1369,7 @@ class CorrectionPipeline:
                 # AttributeError, a pydantic bug, a broken invariant) is a
                 # programming error: continuing would let the run complete
                 # "successfully" with lines in an unknown state.
-                if not isinstance(exc, CorrectionError):
+                if not isinstance(exc, CorrigendaError):
                     raise
                 # The absorbed error may have interrupted the chunk between
                 # its producer attempt and its finalization: any target
@@ -1942,7 +1942,7 @@ class CorrectionPipeline:
           (deterministic producers: no op == no edit), uncovered lines are
           filled with their canonical text so the validator's 1:1 check
           passes. An LLM producer keeps full-coverage semantics: a dropped
-          target line stays missing → ValidationError → retry.
+          target line stays missing → ProposalValidationError → retry.
         """
         canonical = {lm.line_id: lm.ocr_text for lm in chunk_lines}
         entries: list[dict[str, str]] = []

@@ -19,7 +19,7 @@ from contextlib import contextmanager
 
 from lxml import etree
 
-from corrigenda.errors import CorrectionError, ParseError
+from corrigenda.errors import CorrigendaError, ParseError
 
 
 def detect_namespace(root: object) -> str:
@@ -74,7 +74,7 @@ def make_safe_parser() -> etree.XMLParser:
 
 @contextmanager
 def classified_parse_errors(source_name: str) -> Iterator[None]:
-    """§8.4 — a parser may only raise classified :class:`CorrectionError`s.
+    """§8.4 — a parser may only raise classified :class:`CorrigendaError`s.
 
     Wrap a parser entry point's body in this context manager so hostile
     or malformed input can never escape as an unclassified exception
@@ -87,14 +87,14 @@ def classified_parse_errors(source_name: str) -> Iterator[None]:
       - ``OSError`` (unreadable/missing source file) → :class:`ParseError`.
 
     Existing classified errors — :class:`ParseError` itself,
-    :class:`DuplicateIdError`, any :class:`CorrectionError` — pass through
+    :class:`DuplicateIdError`, any :class:`CorrigendaError` — pass through
     untouched. Genuine programming errors (``TypeError``,
     ``AttributeError``, …) are deliberately NOT wrapped: masking a library
     bug as a bad-input error would hide it from every caller.
     """
     try:
         yield
-    except CorrectionError:
+    except CorrigendaError:
         raise
     except (etree.XMLSyntaxError, ValueError) as exc:
         raise ParseError(f"{source_name}: cannot parse document: {exc}") from exc

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The error root gets its final name (P3.11, first slice).**
+  ``CorrigendaError`` — named for the LIBRARY, like
+  ``requests.RequestException`` — replaces ``CorrectionError`` as the
+  §8.4 root, and ``ProposalValidationError`` replaces the bare
+  ``ValidationError`` (which collided with pydantic's in every
+  consumer's imports; the P3.7 vocabulary already calls what it
+  validates a *proposal*). The old names remain 0.9.x deprecation
+  ALIASES of the very same classes — ``except``, ``isinstance`` and
+  subclassing behave identically through either name; machine ``code``
+  attributes are unchanged — and disappear at the P3.11 top-level
+  reduction. Library internals speak the new names; both spellings are
+  top-level exports for now.
+
 - **The three-line happy path (P3.12, §2).**
   ``corrigenda.load(*paths)`` sniffs each file's root namespace (ALTO
   or PAGE — one format per document, unique basenames) and returns a

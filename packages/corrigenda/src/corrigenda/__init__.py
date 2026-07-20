@@ -85,8 +85,10 @@ from corrigenda.core.schemas import (
 from corrigenda.errors import (
     CorrectionAborted,
     CorrectionError,
+    CorrigendaError,
     DuplicateIdError,
     ParseError,
+    ProposalValidationError,
     ValidationError,
 )
 
@@ -222,10 +224,14 @@ __all__ = [
     "SubstitutionRule",
     "default_french_ocr_rules",
     "LLMEditProducer",
-    # Errors (§8.4)
+    # Errors (§8.4) — CorrigendaError/ProposalValidationError are the
+    # canonical names (P3.11); the old names are 0.9.x deprecation
+    # aliases of the SAME classes, removed at the top-level reduction.
+    "CorrigendaError",
     "CorrectionError",
     "ParseError",
     "DuplicateIdError",
+    "ProposalValidationError",
     "ValidationError",
     "CorrectionAborted",
     # Ports

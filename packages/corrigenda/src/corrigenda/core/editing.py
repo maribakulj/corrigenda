@@ -45,7 +45,7 @@ from corrigenda.core.schemas import (
     HyphenRole,
     LineManifest,
 )
-from corrigenda.errors import ValidationError
+from corrigenda.errors import ProposalValidationError
 
 #: Version of THIS edit protocol (P3.10). Bumped only on a breaking
 #: change to the op/anchor semantics; ``apply_edit_script`` refuses a
@@ -447,7 +447,7 @@ def apply_edit_script(
     scope (hand-written scripts keep their historical behaviour).
 
     Preconditions (P3.10): a script stamped with an unknown
-    ``protocol_version`` raises :class:`~corrigenda.errors.ValidationError`
+    ``protocol_version`` raises :class:`~corrigenda.errors.ProposalValidationError`
     — an incompatible script must fail loudly, not half-apply. A line
     whose recorded source :func:`line_digest` differs from the document
     at hand has its ops REJECTED (``precondition_source_digest``): the
@@ -457,7 +457,7 @@ def apply_edit_script(
         script.protocol_version is not None
         and script.protocol_version != EDIT_PROTOCOL_VERSION
     ):
-        raise ValidationError(
+        raise ProposalValidationError(
             f"edit script speaks protocol version "
             f"{script.protocol_version!r}; this library speaks "
             f"{EDIT_PROTOCOL_VERSION!r} — refusing to apply a script whose "

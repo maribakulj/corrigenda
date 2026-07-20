@@ -69,12 +69,12 @@ class ProviderPermanentError(ProviderError):
     :class:`~corrigenda.errors.CorrectionAborted` does — before any
     output is written.
 
-    A :class:`~corrigenda.errors.CorrectionError` (via ``ProviderError``)
+    A :class:`~corrigenda.errors.CorrigendaError` (via ``ProviderError``)
     so the single-root catch contract holds, but deliberately NOT a
     ``ValueError`` (the retry classifier routes ``ValueError`` to the
     malformed-output retry branch). Fatality is enforced by the pipeline's
     explicit ``except ProviderPermanentError: raise`` handlers, which sit
-    BEFORE every branch that absorbs recoverable ``CorrectionError``s —
+    BEFORE every branch that absorbs recoverable ``CorrigendaError``s —
     the hierarchy states ownership, the handler ordering states severity.
     """
 
