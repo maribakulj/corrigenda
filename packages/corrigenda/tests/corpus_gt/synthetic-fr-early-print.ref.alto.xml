@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<alto xmlns="http://www.loc.gov/standards/alto/ns-v4#">
+  <Description>
+    <MeasurementUnit>pixel</MeasurementUnit>
+    <sourceImageInformation>
+      <fileName>synthetic-fr-early-print.tif</fileName>
+    </sourceImageInformation>
+  </Description>
+  <Layout>
+    <Page ID="P1" PHYSICAL_IMG_NR="1" WIDTH="2000" HEIGHT="1000">
+      <PrintSpace HPOS="0" VPOS="0" WIDTH="2000" HEIGHT="1000">
+        <TextBlock ID="TB1" HPOS="200" VPOS="100" WIDTH="1600" HEIGHT="500">
+          <TextLine ID="TL1" HPOS="200" VPOS="100" WIDTH="1165" HEIGHT="50">
+            <String ID="S1_1" CONTENT="Les" HPOS="200" VPOS="100" WIDTH="120" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S1_2" CONTENT="sages" HPOS="345" VPOS="100" WIDTH="200" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S1_3" CONTENT="de" HPOS="570" VPOS="100" WIDTH="80" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S1_4" CONTENT="la" HPOS="675" VPOS="100" WIDTH="80" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S1_5" CONTENT="ville" HPOS="780" VPOS="100" WIDTH="200" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S1_6" CONTENT="assemblés" HPOS="1005" VPOS="100" WIDTH="360" HEIGHT="40"/>
+          </TextLine>
+          <TextLine ID="TL2" HPOS="200" VPOS="170" WIDTH="1445" HEIGHT="50">
+            <String ID="S2_1" CONTENT="discouraient" HPOS="200" VPOS="170" WIDTH="480" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S2_2" CONTENT="des" HPOS="705" VPOS="170" WIDTH="120" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S2_3" CONTENT="sciences" HPOS="850" VPOS="170" WIDTH="320" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S2_4" CONTENT="et" HPOS="1195" VPOS="170" WIDTH="80" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S2_5" CONTENT="des" HPOS="1300" VPOS="170" WIDTH="120" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S2_6" CONTENT="arts," HPOS="1445" VPOS="170" WIDTH="200" HEIGHT="40"/>
+          </TextLine>
+          <TextLine ID="TL3" HPOS="200" VPOS="240" WIDTH="1350" HEIGHT="50">
+            <String ID="S3_1" CONTENT="sans" HPOS="200" VPOS="240" WIDTH="160" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S3_2" CONTENT="que" HPOS="385" VPOS="240" WIDTH="120" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S3_3" CONTENT="la" HPOS="530" VPOS="240" WIDTH="80" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S3_4" CONTENT="moindre" HPOS="635" VPOS="240" WIDTH="280" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S3_5" CONTENT="dispute" HPOS="940" VPOS="240" WIDTH="280" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S3_6" CONTENT="ne" HPOS="1245" VPOS="240" WIDTH="80" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S3_7" CONTENT="trou-" HPOS="1350" VPOS="240" WIDTH="200" HEIGHT="40"/>
+          </TextLine>
+          <TextLine ID="TL4" HPOS="200" VPOS="310" WIDTH="1205" HEIGHT="50">
+            <String ID="S4_1" CONTENT="blât" HPOS="200" VPOS="310" WIDTH="160" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S4_2" CONTENT="la" HPOS="385" VPOS="310" WIDTH="80" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S4_3" CONTENT="paix" HPOS="490" VPOS="310" WIDTH="160" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S4_4" CONTENT="de" HPOS="675" VPOS="310" WIDTH="80" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S4_5" CONTENT="cette" HPOS="780" VPOS="310" WIDTH="200" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S4_6" CONTENT="assemblée." HPOS="1005" VPOS="310" WIDTH="400" HEIGHT="40"/>
+          </TextLine>
+          <TextLine ID="TL5" HPOS="200" VPOS="380" WIDTH="1230" HEIGHT="50">
+            <String ID="S5_1" CONTENT="Il" HPOS="200" VPOS="380" WIDTH="80" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S5_2" CONTENT="fut" HPOS="305" VPOS="380" WIDTH="120" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S5_3" CONTENT="résolu" HPOS="450" VPOS="380" WIDTH="240" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S5_4" CONTENT="que" HPOS="715" VPOS="380" WIDTH="120" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S5_5" CONTENT="la" HPOS="860" VPOS="380" WIDTH="80" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S5_6" CONTENT="fidélité" HPOS="965" VPOS="380" WIDTH="320" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S5_7" CONTENT="aux" HPOS="1310" VPOS="380" WIDTH="120" HEIGHT="40"/>
+          </TextLine>
+          <TextLine ID="TL6" HPOS="200" VPOS="450" WIDTH="1235" HEIGHT="50">
+            <String ID="S6_1" CONTENT="usages" HPOS="200" VPOS="450" WIDTH="240" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S6_2" CONTENT="anciens" HPOS="465" VPOS="450" WIDTH="280" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S6_3" CONTENT="serait" HPOS="770" VPOS="450" WIDTH="240" HEIGHT="40"/>
+            <SP WIDTH="25"/>
+            <String ID="S6_4" CONTENT="conservée." HPOS="1035" VPOS="450" WIDTH="400" HEIGHT="40"/>
+          </TextLine>
+        </TextBlock>
+      </PrintSpace>
+    </Page>
+  </Layout>
+</alto>

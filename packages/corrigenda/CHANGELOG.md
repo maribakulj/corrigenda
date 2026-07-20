@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Versioned correction benchmark + ground-truth corpus seed (P4.2).**
+  ``scripts/benchmark.py`` (repo tooling, not part of the package)
+  measures a producer against ``tests/corpus_gt/`` — micro-averaged
+  CER/WER before/after, improved/degraded line counts, false positives
+  (already-correct lines a run changed), fallbacks, reconcile outcomes,
+  structural losses, latency/page and peak memory — and emits a JSON
+  report a release can cite: ``benchmark_version``, ``lib_version``,
+  ``corpus_version``, the §11 ``config_fingerprint`` and the producer's
+  ``ProducerMetadata`` identity. Three deterministic, offline
+  producers: ``rules``, ``oracle`` (cassette derived from the
+  reference — the upper bound the guards still arbitrate) and
+  ``cassette:<path>`` (recorded ``{line_id: text}`` replay, the P4.2
+  LLM-cassette seam). The corpus ships one clearly-marked SYNTHETIC
+  seed case (documented scripted degradations: long s, ﬁ ligature, one
+  ``rn`` confusion the default rules deliberately cannot fix; one
+  heuristic hyphen pair) — real human-reviewed Gallica pages remain
+  P4.1's human work, and the corpus README pins the provenance rules.
+  House rule now in force: no guard/ramp default changes without a
+  measured improvement here. Smoke-tested in CI (report contract,
+  rules improvement with residual, oracle at CER 0, cassette ≡ oracle).
+
 - **The error root gets its final name (P3.11, first slice).**
   ``CorrigendaError`` — named for the LIBRARY, like
   ``requests.RequestException`` — replaces ``CorrectionError`` as the
