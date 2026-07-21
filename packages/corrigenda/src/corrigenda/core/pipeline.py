@@ -68,7 +68,11 @@ from corrigenda.core.decisions import (
 )
 from corrigenda.core.planner import downgrade_granularity, plan_page
 from corrigenda.core.units import derive_hyphen_groups, hyphen_group_by_line
-from corrigenda.core.guards import check_adjacent_duplicates, check_line
+from corrigenda.core.guards import (
+    check_adjacent_duplicates,
+    check_boundary_migration,
+    check_line,
+)
 from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
 from corrigenda.core.protocols import (
     EditProducer,
@@ -2170,6 +2174,14 @@ class CorrectionPipeline:
             if len(segment) > 1:
                 reverts.update(
                     check_adjacent_duplicates(segment, config=self.guard_config)
+                )
+                # A word migrating across a line seam is invisible to the
+                # pair-level guards when the OCR mangled the break glyph
+                # (the line was never paired). This line-role-agnostic pass
+                # catches it; reverts merge — a line flagged by either guard
+                # falls back, atomically with its hyphen unit below.
+                reverts.update(
+                    check_boundary_migration(segment, config=self.guard_config)
                 )
             segment.clear()
 
