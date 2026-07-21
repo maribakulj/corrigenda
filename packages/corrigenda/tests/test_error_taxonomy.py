@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.core.protocols import (
     ProviderPermanentError,
@@ -107,7 +108,7 @@ class _PermanentlyRejectedProducer:
     wants_image = False
     requires_full_coverage = False
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         raise ProviderPermanentError("invalid credentials", status_code=401)
 
 
@@ -120,15 +121,12 @@ async def test_permanent_provider_error_still_fails_the_whole_run() -> None:
     pipeline = CorrectionPipeline(
         producer=_PermanentlyRejectedProducer(),
         observer=_Null(),
-        output_writer=_Null(),
-        provider_name="rejected",
-        model="m",
+        producer_metadata=ProducerMetadata(name="rejected", implementation="m"),
     )
     with pytest.raises(ProviderPermanentError):
         await pipeline.run(
             document_manifest=doc,
             source_files={_SAMPLE.name: _SAMPLE},
-            apply=False,
         )
     # And the single-root contract now actually covers it:
     assert issubclass(ProviderPermanentError, CorrectionError)

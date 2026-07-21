@@ -58,7 +58,7 @@ async def test_pipeline_aggregates_usage_into_result():
     provider = _UsageProvider()
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
     pipeline = CorrectionPipeline.for_provider(
-        provider, api_key="k", model="m", observer=_Null(), output_writer=_Null()
+        provider, api_key="k", model="m", observer=_Null()
     )
     result = await pipeline.run(
         document_manifest=doc,
@@ -103,7 +103,7 @@ async def test_chunk_completed_reports_chunk_total_across_retries():
     capture = _Capture()
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
     pipeline = CorrectionPipeline.for_provider(
-        provider, api_key="k", model="m", observer=capture, output_writer=_Null()
+        provider, api_key="k", model="m", observer=capture
     )
     result = await pipeline.run(
         document_manifest=doc,
@@ -127,7 +127,7 @@ async def test_usage_is_zero_when_provider_reports_none():
 
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
     pipeline = CorrectionPipeline.for_provider(
-        _NoUsage(), api_key="k", model="m", observer=_Null(), output_writer=_Null()
+        _NoUsage(), api_key="k", model="m", observer=_Null()
     )
     result = await pipeline.run(
         document_manifest=doc,

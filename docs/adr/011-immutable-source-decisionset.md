@@ -49,27 +49,43 @@ rewriter already knew.
   are computed fields (still serialized); the lying-totals validator is
   retired — a derived count cannot contradict the content, and legacy
   constructor kwargs are ignored rather than trusted.
-- **Slice C** (model + first readers landed): `corrigenda.core.decisions`
-  defines `LineDecision`/`DecisionSet`, materialized once after the
-  global consistency pass; the terminality backstop became the set's
+- **Slice C (landed)**: `corrigenda.core.decisions` defines
+  `LineDecision`/`DecisionSet`, materialized once after the global
+  consistency pass; the terminality backstop became the set's
   construction invariant (a PENDING line refuses materialization), and
-  the projection invariant, the result's fallback accounting and the
-  final-EditScript builder read the DecisionSet instead of re-walking
-  the manifests. Remaining: the report builder flips (P3.5's LineOutcome
-  restructure is its natural vehicle); the pointer fields' retirement
-  folds in ADR-010's `BOTH`-as-derived-detail.
-- **Slice D** (additive half landed): `CorrectionResult.corrected_files`
-  carries every corrected XML (dry runs included — the result IS the
-  output) and `result.write(dir)` persists artefacts + report
-  caller-side. Remaining: consumers migrate, then `OutputWriter` and
-  `apply=` leave the engine surface; the backend keeps its own
-  commit/discard transaction either way.
-- **Slice E**: immutable `Source*` models, mutation ends, `_running`
-  removed, ADR-005 replaced; P0's "two runs on two deep copies"
-  property becomes "two runs on the SAME document".
+  the projection invariant, the result's fallback accounting, the
+  final-EditScript builder AND the report builder (P3.5's `LineOutcome`
+  restructure, `build_line_outcomes`) read the DecisionSet instead of
+  re-walking the manifests. The pointer fields' retirement still folds
+  in ADR-010's `BOTH`-as-derived-detail.
+- **Slice D (landed)**: `CorrectionResult.corrected_files` carries
+  every corrected XML (the result IS the output) and
+  `result.write(dir)` persists artefacts + report caller-side. D-fin:
+  `OutputWriter` and `apply=` left the engine surface — the engine
+  never persists; the backend's JobRunner stages the result's bytes
+  through ITS OWN writer port (`app.protocols.OutputWriter`, moved
+  out of the library) and keeps the commit/discard transaction; the
+  quickstart and docs migrated to `result.write(dir)`. ADR-005's guard
+  survives on its remaining rationale (shared observer + manifest
+  mutation) until slice E.
+- **Slice E (landed)**: mutation ends at the engine boundary — `run()`
+  works on its own deep copy of the input; the caller's document is
+  never written, and the run's outcome is `result.decisions` (the
+  `DecisionSet`, now exported with `LineDecision`/`LineRef`). The
+  `_running` guard is removed (ADR-005 superseded): concurrent runs on
+  one instance work, and the P0 run-independence property is now "two
+  runs on the SAME document object". The backend projects
+  `result.decisions` onto ITS stored manifest for its read models
+  (/diff, /layout, lines_modified) — server-owned state, server-owned
+  mutation. Remaining tail (folds into P3.5's model restructure):
+  freezing the manifest TYPES themselves (`Source*` renames) and
+  retiring the per-line pointer/SUBS fields the working copy still
+  uses internally — behaviourally invisible either way, since no
+  caller can observe the working copy.
 
 ## Consequences
-The engine becomes a function: same input, same decisions, no side
-effects; concurrency and caching stop being dangerous. Until slice E,
-the manifests remain mutable and ADR-005 stands — each slice keeps the
-whole suite (and the chunking-invariance gates) green on its own.
+The engine is now a function of its input: same document, same
+decisions, no side effects — the input can be reused, cached, or run
+concurrently. The cost, re-decided from ADR-005's point 3, is one deep
+copy per run. Each slice kept the whole suite (and the
+chunking-invariance gates) green on its own.

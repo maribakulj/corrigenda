@@ -32,7 +32,7 @@ from corrigenda.core.schemas import (
 )
 from corrigenda.formats.alto.parser import build_document_manifest
 
-from tests._pipeline_harness import DictProvider, RecordingObserver, _NoopWriter
+from tests._pipeline_harness import apply_decisions, DictProvider, RecordingObserver
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -226,7 +226,6 @@ def test_cross_chunk_adjacent_duplicate_is_reverted(tmp_path: Path):
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
         config=ChunkPlannerConfig(
             max_input_chars_per_request=200,  # force WINDOW granularity
             max_lines_per_request=50,
@@ -242,9 +241,9 @@ def test_cross_chunk_adjacent_duplicate_is_reverted(tmp_path: Path):
     result = pipeline.run_sync(
         document_manifest=doc,
         source_files={"doc.xml": path},
-        apply=False,
     )
 
+    apply_decisions(doc, result)
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
     # Sanity: the two lines really were split across chunks — the per-chunk
     # guard alone could not have compared them (asserted via reverts below).
@@ -253,7 +252,7 @@ def test_cross_chunk_adjacent_duplicate_is_reverted(tmp_path: Path):
     assert lines["L3"].status == LineStatus.FALLBACK
     assert lines["L4"].status == LineStatus.FALLBACK
     reasons = {
-        t.line_id: t.fallback_reason
+        t.line_id: t.decision.reason.code
         for t in result.report.lines
         if t.line_id in ("L3", "L4")
     }
@@ -274,7 +273,6 @@ def test_intra_chunk_duplicates_still_reverted(tmp_path: Path):
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
         config=ChunkPlannerConfig(
             max_input_chars_per_request=200,
             max_lines_per_request=50,
@@ -283,8 +281,8 @@ def test_intra_chunk_duplicates_still_reverted(tmp_path: Path):
         ),
         guard_config=GuardConfig(min_source_similarity=0.0, neighbour_margin=1.0),
     )
-    pipeline.run_sync(
-        document_manifest=doc, source_files={"doc.xml": path}, apply=False
+    apply_decisions(
+        doc, pipeline.run_sync(document_manifest=doc, source_files={"doc.xml": path})
     )
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
     assert lines["L1"].corrected_text == lines["L1"].ocr_text
@@ -326,13 +324,14 @@ def test_page_seam_duplicate_not_reverted_across_DIFFERENT_files(tmp_path: Path)
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
         guard_config=GuardConfig(min_source_similarity=0.0, neighbour_margin=1.0),
     )
-    pipeline.run_sync(
-        document_manifest=doc,
-        source_files={"A.xml": file_a, "B.xml": file_b},
-        apply=False,
+    apply_decisions(
+        doc,
+        pipeline.run_sync(
+            document_manifest=doc,
+            source_files={"A.xml": file_a, "B.xml": file_b},
+        ),
     )
     lines = {lm.line_id: lm for p in doc.pages for lm in p.lines}
     # Neither seam line was reverted: the correction stands, status CORRECTED.

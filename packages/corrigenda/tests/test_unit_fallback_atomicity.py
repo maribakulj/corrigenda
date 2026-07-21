@@ -21,6 +21,9 @@ from pathlib import Path
 
 import pytest
 
+from tests._pipeline_harness import apply_decisions
+
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline, ValidationError
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.schemas import HyphenRole, LineStatus, RetryPolicy
@@ -77,7 +80,7 @@ class _FailsPages:
     def __init__(self, failing_line_ids: set[str]) -> None:
         self._failing = failing_line_ids
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         ids = {ln.line_id for ln in payload.lines}
         if ids & self._failing:
             raise ValidationError("chunk rejected on purpose")
@@ -112,13 +115,11 @@ async def _run(tmp_path: Path, failing: set[str]):
     pipeline = CorrectionPipeline(
         producer=_FailsPages(failing),
         observer=_Null(),
-        output_writer=_Null(),
         retry_policy=RetryPolicy(transient_backoff_base=0.0, output_backoff_base=0.0),
-        provider_name="x",
-        model="m",
+        producer_metadata=ProducerMetadata(name="x", implementation="m"),
     )
-    await pipeline.run(document_manifest=doc, source_files={src.name: src}, apply=False)
-    return doc
+    result = await pipeline.run(document_manifest=doc, source_files={src.name: src})
+    return apply_decisions(doc, result)
 
 
 @pytest.mark.asyncio

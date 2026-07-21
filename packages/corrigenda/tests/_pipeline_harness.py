@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from corrigenda.core.identity import LineRef
 from corrigenda.core.pipeline import CorrectionPipeline, CorrectionResult
 from corrigenda.core.schemas import DocumentManifest, LineManifest
 from corrigenda.formats.alto.parser import build_document_manifest
@@ -83,12 +84,25 @@ class RecordingObserver:
         return sum(1 for v, _ in self.events if v == event_value)
 
 
-class _NoopWriter:
-    def write_corrected(self, *, source_stem: str, xml_bytes: bytes) -> None:
-        pass
+def apply_decisions(
+    doc: DocumentManifest, result: CorrectionResult
+) -> DocumentManifest:
+    """Project ``result.decisions`` onto ``doc`` — the decided view.
 
-    def write_trace(self, *, traces_payload: str) -> None:
-        pass
+    Since ADR-011 slice E the engine never mutates its input; tests that
+    assert per-line outcomes against the manifest shape re-create the
+    pre-slice-E post-run state with this helper (the same projection the
+    backend applies for its read models). Faithfulness of the projection
+    itself is pinned by ``test_decisions.py``.
+    """
+    for page in doc.pages:
+        for lm in page.lines:
+            decision = result.decisions.by_ref[
+                LineRef(page_id=lm.page_id, line_id=lm.line_id)
+            ]
+            lm.corrected_text = decision.final_text
+            lm.status = decision.status
+    return doc
 
 
 @dataclass
@@ -112,12 +126,15 @@ def run_pipeline(
 ) -> PipelineRun:
     """Run the real ``CorrectionPipeline`` over ``examples/<xml_name>``.
 
-    ``apply=False`` (dry-run): the in-memory rewrite runs so reconciliation
-    and acceptance execute exactly as in production, but nothing is
-    persisted (the ``OutputWriter`` is never called). The document manifest
-    is mutated in place; read ``run.lines`` for per-line corrected_text /
-    status, and ``run.result.reconcile_metrics`` for the real pipeline's
-    reconciliation counts (NOT a test-side re-implementation).
+    The in-memory rewrite runs so reconciliation and acceptance execute
+    exactly as in production; nothing is persisted (the engine has no
+    writer — ADR-011). Since slice E the engine never mutates its input,
+    so the harness projects ``result.decisions`` back onto its parsed
+    manifest — ``run.lines`` therefore reads as "the decided view":
+    per-line corrected_text / status alongside the parse-time structure
+    (hyphen roles, geometry). ``run.result.reconcile_metrics`` carries
+    the real pipeline's reconciliation counts (NOT a test-side
+    re-implementation).
     """
     path = EXAMPLES / xml_name
     doc = build_document_manifest([(path, xml_name)])
@@ -127,11 +144,11 @@ def run_pipeline(
         api_key="k",
         model="m",
         observer=observer,
-        output_writer=_NoopWriter(),
     )
     result = pipeline.run_sync(
         document_manifest=doc,
         source_files={xml_name: path},
-        apply=False,
     )
+    # Decided view: what the backend's read models do with the same set.
+    apply_decisions(doc, result)
     return PipelineRun(result=result, document_manifest=doc, observer=observer)

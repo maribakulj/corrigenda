@@ -3,21 +3,21 @@
 The pipeline takes a parsed :class:`DocumentManifest`, drives the chunk
 planner, asks the injected :class:`EditProducer` for an
 :class:`EditScript` per chunk, validates the result, reconciles hyphen
-pairs, and writes outputs via the injected :class:`OutputWriter`. It
-depends only on the Protocols in :mod:`corrigenda.core.protocols` — no
-job store, no FastAPI, no filesystem path manipulation beyond reading
-source files. Credentials never reach the pipeline: an LLM's API key
-lives inside its producer (see :class:`LLMEditProducer` and the
+pairs, and renders the corrected XML in memory. It depends only on the
+Protocols in :mod:`corrigenda.core.protocols` — no job store, no
+FastAPI, no filesystem path manipulation beyond reading source files.
+Credentials never reach the pipeline: an LLM's API key lives inside its
+producer (see :class:`LLMEditProducer` and the
 :meth:`CorrectionPipeline.for_provider` convenience).
 
 Side effects:
   - producer calls via :class:`EditProducer` (LLM HTTP, rules engine, …)
   - Event notifications via :class:`PipelineObserver`
-  - Persistence via :class:`OutputWriter`
 
-Statistics (retry count, fallback count, total chunks, hyphen pairs
-reconciled) are returned in :class:`CorrectionResult` so the caller can
-update its job state.
+The engine never persists (ADR-011): the corrected artefacts, the §9
+report and the run's statistics all travel on
+:class:`CorrectionResult`; the caller persists them
+(:meth:`CorrectionResult.write`, or its own transaction).
 """
 
 from __future__ import annotations
@@ -33,11 +33,14 @@ from typing import Any
 from pathlib import Path
 
 from corrigenda.core.editing import (
+    EDIT_PROTOCOL_VERSION,
     EditOp,
     EditScript,
+    LinePrecondition,
     ReplaceLine,
     ReplaceSpan,
     apply_edit_script,
+    line_digest,
 )
 from corrigenda.core.hyphenation import (
     ReconcileMetrics,
@@ -54,26 +57,33 @@ from corrigenda.core.identity import (
 from corrigenda.errors import (
     ConfigurationError,
     CorrectionAborted,
-    CorrectionError,
+    CorrigendaError,
     ProjectionError,
 )
-from corrigenda.core.decisions import DecisionSet, derive_decision_set
+from corrigenda.core import events as ev
+from corrigenda.core.decisions import (
+    DecisionSet,
+    build_line_outcomes,
+    derive_decision_set,
+)
 from corrigenda.core.planner import downgrade_granularity, plan_page
 from corrigenda.core.units import derive_hyphen_groups, hyphen_group_by_line
 from corrigenda.core.guards import check_adjacent_duplicates, check_line
 from corrigenda.core.validator import HyphenIntegrityError, validate_llm_response
 from corrigenda.core.protocols import (
-    BaseProvider,
     EditProducer,
     FormatAdapter,
-    OutputWriter,
     PipelineObserver,
+    ProducerMetadata,
+    ProducerOptions,
+    StructuredCompletionClient,
     ProviderPermanentError,
     ProviderTransientError,
     require_page_images,
 )
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
+    DEFAULT_LOSS_POLICY,
     DEFAULT_PAIRING_POLICY,
     DEFAULT_RETRY_POLICY,
     BlockManifest,
@@ -87,12 +97,14 @@ from corrigenda.core.schemas import (
     LineManifest,
     LineStatus,
     LineTrace,
-    LLMResponse,
-    LLMUserPayload,
+    LossPolicy,
+    ProducerProvenance,
+    ProposalBatch,
+    CorrectionRequest,
     PageManifest,
     PairingPolicy,
-    PipelineEventType,
     RetryPolicy,
+    RunProvenance,
     Usage,
 )
 
@@ -105,7 +117,7 @@ from corrigenda.core.schemas import (
 #     so an unwrapped one is indistinguishable from a bug and fails the
 #     run rather than degrading to a fake success);
 #   - ValueError — the documented malformed-producer-output family
-#     (ValidationError, HyphenIntegrityError, json.JSONDecodeError all
+#     (ProposalValidationError, HyphenIntegrityError, json.JSONDecodeError all
 #     inherit it; §8.4 keeps them value-shaped for exactly this route).
 # Everything else — RuntimeError, KeyError, a pydantic bug, an SDK
 # exception nobody classified — fails the run: an unknown exception
@@ -180,6 +192,40 @@ def _adapter_for_format(source_format: str | None) -> FormatAdapter:
         "corrigenda format parser, or inject format_adapter explicitly "
         "on the pipeline"
     )
+
+
+#: Critical dependencies recorded on the run's provenance (P3.9, §11).
+#: Versions come from package METADATA (importlib.metadata), never from
+#: an import — the pure core stays lxml-free by construction.
+_PROVENANCE_DEPENDENCIES = ("lxml", "pydantic")
+
+
+def _dependency_versions() -> dict[str, str]:
+    """Installed versions of the critical dependencies; a package that
+    is not installed is simply absent (never an error — a core-only
+    consumer legitimately runs without lxml)."""
+    import importlib.metadata as _md
+
+    versions: dict[str, str] = {}
+    for package in _PROVENANCE_DEPENDENCIES:
+        try:
+            versions[package] = _md.version(package)
+        except _md.PackageNotFoundError:
+            continue
+    return versions
+
+
+def _digest_sources(source_files: dict[str, Path]) -> dict[str, str]:
+    """``sha256:<hex>`` of every input file's bytes, as GIVEN (P3.9/P3.10).
+
+    Computed once per run and shared by the provenance record and the
+    final edit script's preconditions — the two must agree by
+    construction, not by coincidence.
+    """
+    return {
+        name: "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in source_files.items()
+    }
 
 
 def sanitize_error(msg: str, api_key: str | None = None) -> str:
@@ -524,9 +570,10 @@ def _reconcile_one_pair(
 class CorrectionResult:
     """Outcome of a full pipeline run.
 
-    The `document_manifest` is mutated in place during the run; callers
-    can read corrected_text/status on each line. `traces` is the
-    line-by-line text trace through every stage.
+    The input manifest is never mutated (ADR-011 slice E): what the run
+    decided is read off ``decisions`` (and ``corrected_files`` for the
+    artefacts). `traces` is the line-by-line text trace through every
+    stage.
     """
 
     total_chunks: int
@@ -555,14 +602,18 @@ class CorrectionResult:
     report: CorrectionReport
     #: §4 — the normalized EditScript the run applied, accumulated across
     #: chunks. In v1 the LLM path emits ``replace_line`` ops (byte-identical
-    #: to the direct correction); a dry run (``apply=False``) returns it as
-    #: the whole deliverable, and a rules/​span producer would surface its
+    #: to the direct correction); a rules/​span producer surfaces its
     #: ``replace_span`` ops here too.
     edit_script: EditScript
+    #: ADR-011 — the run's immutable :class:`DecisionSet`: one terminal
+    #: decision per line in document reading order. Since slice E the
+    #: input manifest is never mutated, so THIS is where a caller reads
+    #: what the run decided (``decisions.by_ref[LineRef(...)]``).
+    decisions: DecisionSet
     #: ADR-011 — the corrected artefacts themselves, keyed by source file
-    #: name, computed on EVERY run (dry runs included): the result IS the
-    #: output; persisting it is the caller's choice (:meth:`write`, or a
-    #: host-owned transaction like the demo backend's staging writer).
+    #: name, computed on EVERY run: the result IS the output; persisting
+    #: it is the caller's choice (:meth:`write`, or a host-owned
+    #: transaction like the demo backend's staging writer).
     corrected_files: dict[str, bytes] = field(default_factory=dict)
 
     def write(self, directory: str | Path) -> list[Path]:
@@ -591,10 +642,11 @@ class CorrectionResult:
 
 @dataclass
 class RunContext:
-    """All mutable state of ONE pipeline execution (ADR-005).
+    """All mutable state of ONE pipeline execution.
 
-    Created fresh at the top of every :meth:`CorrectionPipeline.run` and
-    threaded through the internal methods, so ``CorrectionPipeline``
+    Created fresh at the top of every :meth:`CorrectionPipeline.run`
+    (together with the run's private manifest copy — ADR-011 slice E)
+    and threaded through the internal methods, so ``CorrectionPipeline``
     itself carries only immutable configuration and injected
     dependencies. Nothing here survives the run: the public outcome is
     copied into :class:`CorrectionResult` before returning.
@@ -619,6 +671,9 @@ class RunContext:
     #: bare-id key would let the last file's ops overwrite an earlier
     #: file's, corrupting the dry-run edit_script.
     producer_ops: dict[LineRef, tuple[list[EditOp], str]] = field(default_factory=dict)
+    #: The run's cooperative cancellation probe, forwarded to producers
+    #: via :class:`ProducerOptions` (P3.7) so long I/O can be abandoned.
+    should_abort: Callable[[], bool] | None = None
     #: §4.1 vision envelope — resolved once per run from run(page_images=…).
     image_ref_by_page_id: dict[str, ImageRef] = field(default_factory=dict)
     page_dims: dict[str, tuple[int, int]] = field(default_factory=dict)
@@ -629,14 +684,15 @@ class CorrectionPipeline:
 
     Dependencies are injected via the constructor; the pipeline never
     reaches for global state. The instance holds only immutable
-    configuration (ADR-005): every run creates a fresh :class:`RunContext`
-    for its mutable state, and the stats it accumulates are exposed in
-    the final `CorrectionResult` for the caller to persist.
+    configuration: every run creates a fresh :class:`RunContext` and its
+    own deep copy of the input manifest (ADR-011 — the input is never
+    modified, the instance is reentrant), and everything the run decided
+    is exposed on the final `CorrectionResult` for the caller to persist.
 
     §5.1 resorption — the pipeline is constructed around an
     :class:`EditProducer`; there is no ``api_key``/``model`` anywhere on
     the pipeline surface. For the common LLM case, use
-    :meth:`for_provider`, which wraps a :class:`BaseProvider` +
+    :meth:`for_provider`, which wraps a :class:`StructuredCompletionClient` +
     credentials into an ``LLMEditProducer`` and sets the provenance
     labels in one call.
     """
@@ -645,19 +701,17 @@ class CorrectionPipeline:
         self,
         producer: EditProducer,
         observer: PipelineObserver,
-        output_writer: OutputWriter,
         config: ChunkPlannerConfig | None = None,
         retry_policy: RetryPolicy | None = None,
         guard_config: GuardConfig | None = None,
         pairing_policy: PairingPolicy | None = None,
         format_adapter: FormatAdapter | None = None,
         *,
-        provider_name: str = "unknown",
-        model: str = "unknown",
+        loss_policy: LossPolicy | None = None,
+        producer_metadata: ProducerMetadata | None = None,
     ) -> None:
         self.producer = producer
         self.observer = observer
-        self.output_writer = output_writer
         self.config = config or ChunkPlannerConfig()
         # F9 — retry ramp / attempt cap / per-chunk budget. Default reproduces
         # the historical temperature ramp (0.0/0.3/0.5) and 3-attempt cap.
@@ -670,42 +724,59 @@ class CorrectionPipeline:
         # the configuration fingerprint stamped into the corrected XML covers
         # every §8.2 policy. The pipeline itself never re-pairs lines.
         self.pairing_policy = pairing_policy or DEFAULT_PAIRING_POLICY
+        # ADR-012 — what a run does when projecting a correction would
+        # lose format granularity: REPORT (default, historical) counts
+        # and attributes; STRICT rejects the unit pre-projection.
+        self.loss_policy = loss_policy or DEFAULT_LOSS_POLICY
         # §3 format seam — None derives the adapter from the MANIFEST's
         # stamped source_format at write time (_adapter_for_format); an
         # injected adapter that contradicts that format is refused at
         # run start. There is no implicit default format.
         self.format_adapter = format_adapter
-        # §11 — provenance labels stamped into the corrected XML's
-        # processingStep. Pure strings: the pipeline never dials a vendor.
-        self.provider_name = provider_name
-        self.model = model
-        # Reentrancy guard (ADR-005). Per-run state lives in RunContext,
-        # but the injected observer and output_writer are shared instance
-        # dependencies: two concurrent runs would interleave their events
-        # and overwrite each other's outputs (write_trace has no run
-        # discriminator). One instance therefore still means one run at
-        # a time; concurrent callers build one pipeline per run.
-        self._running = False
+        # §11 — provenance identity stamped into the corrected XML's
+        # processingStep (P3.7-4: ProducerMetadata replaces the bare
+        # provider_name/model strings — a rules producer has no "model").
+        # Explicit constructor metadata wins; else the producer's own
+        # declaration (optional `metadata` attribute, same convention as
+        # requires_full_coverage); else anonymous. The pipeline never
+        # dials a vendor either way.
+        if producer_metadata is None:
+            declared = getattr(producer, "metadata", None)
+            producer_metadata = (
+                declared if isinstance(declared, ProducerMetadata) else None
+            )
+        self.producer_metadata = producer_metadata or ProducerMetadata()
+        # No reentrancy guard (ADR-011 slice E, retiring ADR-005): the
+        # instance carries only immutable configuration, every run works
+        # on a fresh RunContext plus its own deep copy of the input
+        # manifest, so concurrent runs on one instance cannot contaminate
+        # each other. The shared observer sees interleaved events under
+        # concurrency — inherent to sharing an observer, and the
+        # caller's choice.
 
     @classmethod
     def for_provider(
         cls,
-        provider: BaseProvider,
+        provider: StructuredCompletionClient,
         *,
         api_key: str,
         model: str,
         provider_name: str = "unknown",
         observer: PipelineObserver,
-        output_writer: OutputWriter,
         config: ChunkPlannerConfig | None = None,
         retry_policy: RetryPolicy | None = None,
         guard_config: GuardConfig | None = None,
         pairing_policy: PairingPolicy | None = None,
         format_adapter: FormatAdapter | None = None,
+        loss_policy: LossPolicy | None = None,
         system_prompt: str | None = None,
         output_schema: dict[str, Any] | None = None,
     ) -> CorrectionPipeline:
-        """Build a pipeline around a raw LLM ``BaseProvider`` (§5.1).
+        """Build a pipeline around a raw ``StructuredCompletionClient`` (§5.1).
+
+        P3.7 split — the core only requires ``complete_structured``: a
+        client with no ``list_models`` is fully supported (model
+        discovery is application vocabulary, see ``ModelCatalog``).
 
         Composition-boundary convenience: wraps the provider + credentials
         + prompt contract into an ``LLMEditProducer`` so callers migrating
@@ -726,14 +797,17 @@ class CorrectionPipeline:
         return cls(
             producer=producer,
             observer=observer,
-            output_writer=output_writer,
             config=config,
             retry_policy=retry_policy,
             guard_config=guard_config,
             pairing_policy=pairing_policy,
             format_adapter=format_adapter,
-            provider_name=provider_name,
-            model=model,
+            loss_policy=loss_policy,
+            # Vendor vocabulary is native HERE (the LLM convenience):
+            # the two strings become the generic identity envelope.
+            producer_metadata=ProducerMetadata(
+                name=provider_name, implementation=model
+            ),
         )
 
     def config_fingerprint(self) -> str:
@@ -743,18 +817,21 @@ class CorrectionPipeline:
         (truncated to 16 hex chars) of the sorted JSON object mapping each
         policy name to its ``policy_fingerprint()``::
 
-            {"chunk_planner": …, "guard": …, "pairing": …, "retry": …}
+            {"chunk_planner": …, "guard": …, "loss": …, "pairing": …, "retry": …}
 
-        Covers all four §8.2 policies — RetryPolicy, GuardConfig,
-        ChunkPlannerConfig and PairingPolicy — so the ``processingStep``
-        stamped into a corrected XML records the exact configuration it was
-        produced under, and a consumer holding the same policy objects can
-        recompute and verify it.
+        Covers all five §8.2 policies — RetryPolicy, GuardConfig,
+        ChunkPlannerConfig, PairingPolicy and LossPolicy (ADR-012) — so
+        the ``processingStep`` stamped into a corrected XML records the
+        exact configuration it was produced under, and a consumer holding
+        the same policy objects can recompute and verify it.
         """
         payload = json.dumps(
             {
                 "chunk_planner": self.config.policy_fingerprint(),
                 "guard": self.guard_config.policy_fingerprint(),
+                # ADR-012 — decision-affecting (strict rejects units), so
+                # it must be part of the provenance like every §8.2 policy.
+                "loss": self.loss_policy.policy_fingerprint(),
                 "pairing": self.pairing_policy.policy_fingerprint(),
                 "retry": self.retry_policy.policy_fingerprint(),
             },
@@ -762,6 +839,12 @@ class CorrectionPipeline:
             separators=(",", ":"),
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+    def _emit(self, event: ev.EngineEvent) -> None:
+        """Render a typed event onto the wire-shaped observer port
+        (P3.6): the dataclass is the payload's single definition; the
+        observer keeps receiving ``(event_type, payload_dict)``."""
+        self.observer.on_event(event.type, event.payload())
 
     @staticmethod
     def _record_reconcile_outcome(ctx: RunContext, outcome: str) -> None:
@@ -784,24 +867,22 @@ class CorrectionPipeline:
         source_files: dict[str, Path],
         run_id: str | None = None,
         should_abort: Callable[[], bool] | None = None,
-        apply: bool = True,
         page_images: dict[str, ImageRef] | None = None,
     ) -> CorrectionResult:
-        """Run the full pipeline. Mutates `document_manifest.pages` in place.
+        """Run the full pipeline. The input manifest is never modified.
 
-        **Concurrency contract (ADR-005)** — one instance, one run at
-        a time. All per-run state lives in a fresh :class:`RunContext`
-        created here (the pipeline instance itself carries only
-        immutable configuration), but the injected ``observer`` and
-        ``output_writer`` are shared instance dependencies: two
-        concurrent runs would interleave their events and overwrite each
-        other's outputs. Guarded: a concurrent call raises
-        :class:`RuntimeError` immediately. Instances are not
-        thread-safe; concurrent callers build one pipeline per run.
-        The input manifest is CONSUMED (mutated in place); re-running on
-        the same manifest starts from the previous run's corrected
-        state, not from the original OCR text. Sequential re-use of one
-        instance on fresh manifests is supported.
+        **Immutability & reentrancy (ADR-011 slice E, retiring
+        ADR-005)** — the engine works on its own deep copy of
+        ``document_manifest``: the input is read, never written, so the
+        same document object can be run again (or concurrently) and
+        every run starts from the original OCR text. All per-run state
+        lives in a fresh :class:`RunContext` plus that copy; the
+        instance carries only immutable configuration, so one pipeline
+        instance supports concurrent ``run()`` calls (within one event
+        loop — instances are still not thread-safe). The run's
+        decisions are returned on the result
+        (:attr:`CorrectionResult.decisions`), not written back onto the
+        caller's manifest.
 
         §5.1 resorption — there is no ``api_key``/``model``/``provider_name``
         here anymore: credentials and the vendor call live inside the
@@ -825,53 +906,43 @@ class CorrectionPipeline:
 
         ``should_abort`` (F10) is an optional cancellation probe. It is
         polled between pages and between chunks; when it returns ``True``
-        the run raises :class:`CorrectionAborted` and **no output is
-        written** (neither corrected XML nor trace). A provider call
-        already in flight is not interrupted — cancellation is cooperative
-        and observed only at chunk/page boundaries.
+        the run raises :class:`CorrectionAborted` and no result is
+        produced. A provider call already in flight is not interrupted —
+        cancellation is cooperative and observed only at chunk/page
+        boundaries.
 
-        ``apply`` (§9 dry-run) — when ``False``, the full pipeline runs
-        (production, guards, reconciliation, and an in-memory rewrite so the
-        report's ``rewriter_path`` / ``output_alto_text`` are populated) but
-        the injected ``OutputWriter`` is **never called**: no corrected XML
-        and no trace are persisted. The returned :class:`CorrectionResult`
-        (and its :class:`CorrectionReport`) is the whole deliverable —
-        useful for preview or for a consumer benchmarking without writing.
+        **Persistence (ADR-011)** — the engine never writes: the
+        returned :class:`CorrectionResult` carries the corrected XML
+        (:attr:`~CorrectionResult.corrected_files`) and the §9 report,
+        and persisting them is the caller's choice —
+        :meth:`CorrectionResult.write` for the simple case, or a
+        host-owned transaction (like the demo backend's staging writer)
+        when the host needs commit/discard semantics.
         """
-        if self._running:
-            raise RuntimeError(
-                "CorrectionPipeline.run() is already executing on this instance — "
-                "one instance supports one run at a time (per-run state lives on "
-                "the instance). Create a separate pipeline per concurrent run."
-            )
-        self._running = True
-        try:
-            return await self._run_exclusive(
-                document_manifest=document_manifest,
-                source_files=source_files,
-                run_id=run_id,
-                should_abort=should_abort,
-                apply=apply,
-                page_images=page_images,
-            )
-        finally:
-            self._running = False
+        # ADR-011 slice E — the working copy IS the run's mutable state;
+        # the caller's document stays exactly as parsed.
+        return await self._run_impl(
+            document_manifest=document_manifest.model_copy(deep=True),
+            source_files=source_files,
+            run_id=run_id,
+            should_abort=should_abort,
+            page_images=page_images,
+        )
 
-    async def _run_exclusive(
+    async def _run_impl(
         self,
         *,
         document_manifest: DocumentManifest,
         source_files: dict[str, Path],
         run_id: str | None,
         should_abort: Callable[[], bool] | None,
-        apply: bool,
         page_images: dict[str, ImageRef] | None,
     ) -> CorrectionResult:
-        """Body of :meth:`run`, executing under the reentrancy guard."""
+        """Body of :meth:`run`, working on the run's private manifest copy."""
         run_id = run_id or str(uuid.uuid4())
-        # ADR-005 — one fresh context per execution; no per-run state
-        # remains on the instance.
-        ctx = RunContext()
+        # One fresh context per execution; no per-run state remains on
+        # the instance.
+        ctx = RunContext(should_abort=should_abort)
 
         # §5.1 — a vision producer without its images is a start-up error,
         # never a silent image-less call.
@@ -932,13 +1003,12 @@ class CorrectionPipeline:
             for page in document_manifest.pages
         )
 
-        self.observer.on_event(
-            PipelineEventType.DOCUMENT_PARSED,
-            {
-                "total_pages": document_manifest.total_pages,
-                "total_lines": document_manifest.total_lines,
-                "hyphen_pairs": total_hyphen_pairs,
-            },
+        self._emit(
+            ev.DocumentParsed(
+                total_pages=document_manifest.total_pages,
+                total_lines=document_manifest.total_lines,
+                hyphen_pairs=total_hyphen_pairs,
+            )
         )
 
         # Initialize line traces
@@ -1013,35 +1083,49 @@ class CorrectionPipeline:
             traces=traces,
         )
 
+        # ADR-012 — STRICT loss policy: a correction that cannot project
+        # without losing word granularity is rejected HERE, before the
+        # decisions materialize and before any output exists — the unit
+        # falls back to source text and the source markup keeps its
+        # Word geometry (the rewrite sees an untouched line).
+        self._loss_policy_pass(
+            document_manifest=document_manifest,
+            all_lines=all_lines_global,
+            traces=traces,
+        )
+
         # ADR-011 — materialize the run's decisions. Refuses a PENDING
         # line (the run-level terminality backstop): outputs exist only
         # for a document where every line carries a terminal decision.
         decisions = derive_decision_set(document_manifest, traces)
 
-        format_losses, corrected_files = await self._write_outputs(
+        format_losses, corrected_files = await self._render_outputs(
             document_manifest=document_manifest,
             source_files=source_files,
             traces=traces,
             decisions=decisions,
-            apply=apply,
         )
+
+        # P3.9/P3.10 — one digest computation feeds BOTH the provenance
+        # record and the final edit script's preconditions.
+        source_digests = _digest_sources(source_files)
 
         report = CorrectionReport(
             run_id=run_id,
-            total_lines=len(traces),
-            lines=list(traces.values()),
+            total_lines=len(decisions.decisions),
+            # P3.5 / ADR-011 slice C — the report builder reads the
+            # DecisionSet (terminal stage) + the working traces
+            # (proposal/projection stages), staged per line (§9 v2).
+            lines=build_line_outcomes(decisions, traces),
             # ADR-011 — the rewrite's granularity-loss counters surface on
             # the report (None when the format is lossless or nothing was
             # written).
             format_losses=format_losses or None,
+            # P3.9 (§11) — the run's full provenance record.
+            provenance=self._build_provenance(
+                document_manifest=document_manifest, source_digests=source_digests
+            ),
         )
-
-        # §9 unification — trace.json IS the CorrectionReport. One artefact,
-        # one versioned schema; the parallel JobTrace shape is gone.
-        if apply:
-            self.output_writer.write_trace(
-                traces_payload=report.model_dump_json(indent=2),
-            )
 
         # Line-level fallback accounting, read from the DecisionSet
         # (ADR-011): it covers every path that leaves a line at its OCR
@@ -1058,12 +1142,47 @@ class CorrectionPipeline:
             reconcile_metrics=ctx.reconcile_metrics,
             usage=ctx.usage,
             report=report,
-            edit_script=self._build_final_edit_script(decisions, ctx),
+            edit_script=self._build_final_edit_script(
+                decisions, ctx, source_digests=source_digests
+            ),
+            decisions=decisions,
             corrected_files=corrected_files,
         )
 
+    def _build_provenance(
+        self,
+        *,
+        document_manifest: DocumentManifest,
+        source_digests: dict[str, str],
+    ) -> RunProvenance:
+        """The run's §11 provenance record (P3.9): library + producer
+        identity, policy fingerprint, per-file digests of the INPUT
+        bytes (computed once in :meth:`run` via ``_digest_sources`` and
+        shared with the edit script's preconditions), and critical
+        dependency versions."""
+        from corrigenda import __version__ as _lib_version
+
+        md = self.producer_metadata
+        return RunProvenance(
+            lib_version=_lib_version,
+            config_fingerprint=self.config_fingerprint(),
+            producer=ProducerProvenance(
+                name=md.name,
+                version=md.version,
+                implementation=md.implementation,
+                configuration_fingerprint=md.configuration_fingerprint,
+            ),
+            source_digests=source_digests,
+            source_format=document_manifest.source_format,
+            dependencies=_dependency_versions(),
+        )
+
     def _build_final_edit_script(
-        self, decisions: DecisionSet, ctx: RunContext
+        self,
+        decisions: DecisionSet,
+        ctx: RunContext,
+        *,
+        source_digests: dict[str, str] | None = None,
     ) -> EditScript:
         """§4 — the EditScript the run *actually applied*, in document order.
 
@@ -1083,8 +1202,15 @@ class CorrectionPipeline:
         - ``CORRECTED`` but the final text differs from the op output
           (a reconciled hyphen member) → a ``replace_line`` carrying the
           final text, since the original span no longer describes it.
+
+        P3.10 — the script is stamped with its protocol version, the
+        run's source-file digests, and one :class:`LinePrecondition`
+        per op-carrying line (the digest of the SOURCE text the ops
+        were computed against), so replaying it on a different document
+        fails explicitly instead of editing a lookalike line.
         """
         ops: list[EditOp] = []
+        preconditions: list[LinePrecondition] = []
         for decision in decisions.decisions:
             if decision.status is not LineStatus.CORRECTED:
                 continue
@@ -1093,6 +1219,13 @@ class CorrectionPipeline:
                 # An accepted line the producer left untouched (no op) —
                 # e.g. a rules producer's uncovered line. Nothing applied.
                 continue
+            preconditions.append(
+                LinePrecondition(
+                    line_id=decision.ref.line_id,
+                    page_id=decision.ref.page_id,
+                    digest=line_digest(decision.source_text),
+                )
+            )
             line_ops, produced_text = captured
             if produced_text == decision.final_text:
                 # The producer's output survived every guard unchanged —
@@ -1114,7 +1247,12 @@ class CorrectionPipeline:
                         page_id=decision.ref.page_id,
                     )
                 )
-        return EditScript(ops=ops)
+        return EditScript(
+            ops=ops,
+            protocol_version=EDIT_PROTOCOL_VERSION,
+            source_digests=source_digests or {},
+            preconditions=preconditions,
+        )
 
     def run_sync(
         self,
@@ -1123,7 +1261,6 @@ class CorrectionPipeline:
         source_files: dict[str, Path],
         run_id: str | None = None,
         should_abort: Callable[[], bool] | None = None,
-        apply: bool = True,
         page_images: dict[str, ImageRef] | None = None,
     ) -> CorrectionResult:
         """Synchronous façade over :meth:`run` (§8.1).
@@ -1140,7 +1277,6 @@ class CorrectionPipeline:
                 source_files=source_files,
                 run_id=run_id,
                 should_abort=should_abort,
-                apply=apply,
                 page_images=page_images,
             )
         )
@@ -1166,25 +1302,23 @@ class CorrectionPipeline:
             for lm in page.lines
             if lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
         )
-        self.observer.on_event(
-            PipelineEventType.PAGE_STARTED,
-            {
-                "page_id": page.page_id,
-                "page_index": page.page_index,
-                "line_count": len(page.lines),
-                "hyphen_pair_count": page_hyphen_pairs,
-            },
+        self._emit(
+            ev.PageStarted(
+                page_id=page.page_id,
+                page_index=page.page_index,
+                line_count=len(page.lines),
+                hyphen_pair_count=page_hyphen_pairs,
+            )
         )
 
         plan = plan_page(page, document_id, self.config)
 
-        self.observer.on_event(
-            PipelineEventType.CHUNK_PLANNED,
-            {
-                "page_id": page.page_id,
-                "chunk_count": len(plan.chunks),
-                "granularity": plan.granularity.value,
-            },
+        self._emit(
+            ev.ChunkPlanned(
+                page_id=page.page_id,
+                chunk_count=len(plan.chunks),
+                granularity=plan.granularity.value,
+            )
         )
 
         page_reconciled = 0
@@ -1223,20 +1357,19 @@ class CorrectionPipeline:
             except Exception as exc:
                 # ADR-006: pipeline does not log directly; emit an
                 # event the host application can log/trace.
-                self.observer.on_event(
-                    PipelineEventType.CHUNK_ERROR,
-                    {
-                        "chunk_id": chunk.chunk_id,
-                        "message": str(exc)[:200],
-                        "exception_type": type(exc).__name__,
-                    },
+                self._emit(
+                    ev.ChunkError(
+                        chunk_id=chunk.chunk_id,
+                        message=str(exc)[:200],
+                        exception_type=type(exc).__name__,
+                    )
                 )
                 # ADR-008 — only RECOVERABLE domain errors may be absorbed as
                 # a chunk_error + continue. Anything else (KeyError,
                 # AttributeError, a pydantic bug, a broken invariant) is a
                 # programming error: continuing would let the run complete
                 # "successfully" with lines in an unknown state.
-                if not isinstance(exc, CorrectionError):
+                if not isinstance(exc, CorrigendaError):
                     raise
                 # The absorbed error may have interrupted the chunk between
                 # its producer attempt and its finalization: any target
@@ -1281,14 +1414,13 @@ class CorrectionPipeline:
             for lm in page.lines
             if lm.corrected_text is not None and lm.corrected_text != lm.ocr_text
         )
-        self.observer.on_event(
-            PipelineEventType.PAGE_COMPLETED,
-            {
-                "page_id": page.page_id,
-                "page_index": page.page_index,
-                "corrections": page_corrections,
-                "hyphen_pairs_reconciled": page_reconciled,
-            },
+        self._emit(
+            ev.PageCompleted(
+                page_id=page.page_id,
+                page_index=page.page_index,
+                corrections=page_corrections,
+                hyphen_pairs_reconciled=page_reconciled,
+            )
         )
 
         return page_chunks, page_reconciled
@@ -1340,13 +1472,12 @@ class CorrectionPipeline:
 
         hyphen_pairs = _build_hyphen_pairs(chunk_lines)
 
-        self.observer.on_event(
-            PipelineEventType.CHUNK_STARTED,
-            {
-                "chunk_id": chunk.chunk_id,
-                "granularity": chunk.granularity.value,
-                "line_count": len(chunk_lines),
-            },
+        self._emit(
+            ev.ChunkStarted(
+                chunk_id=chunk.chunk_id,
+                granularity=chunk.granularity.value,
+                line_count=len(chunk_lines),
+            )
         )
 
         attempts_cap = min(self.retry_policy.max_attempts, max(budget[0], 0))
@@ -1388,16 +1519,15 @@ class CorrectionPipeline:
             # skip them (acceptance ignores already-corrected lines).
             target_ids = set(chunk.targets())
             descent_lines = [lm for lm in chunk_lines if lm.line_id in target_ids]
-            self.observer.on_event(
-                PipelineEventType.CHUNK_DOWNGRADED,
-                {
-                    "chunk_id": chunk.chunk_id,
-                    "from_granularity": chunk.granularity.value,
-                    "to_granularity": next_g.value,
-                    "line_count": len(chunk_lines),
-                    "target_count": len(descent_lines),
-                    "budget_remaining": budget[0],
-                },
+            self._emit(
+                ev.ChunkDowngraded(
+                    chunk_id=chunk.chunk_id,
+                    from_granularity=chunk.granularity.value,
+                    to_granularity=next_g.value,
+                    line_count=len(chunk_lines),
+                    target_count=len(descent_lines),
+                    budget_remaining=budget[0],
+                )
             )
             sub_plan = plan_page(
                 _subpage_for_lines(page, descent_lines),
@@ -1460,7 +1590,7 @@ class CorrectionPipeline:
         ctx: RunContext,
         chunk: ChunkRequest,
         chunk_lines: list[LineManifest],
-        response: LLMResponse,
+        response: ProposalBatch,
         line_by_id: dict[str, LineManifest],
         cross_page_partners: dict[LineRef, LineManifest] | None,
         traces: dict[LineRef, LineTrace] | None,
@@ -1500,18 +1630,15 @@ class CorrectionPipeline:
         )
         self._finalize_chunk_traces(chunk_lines=target_lines, traces=traces)
 
-        self.observer.on_event(
-            PipelineEventType.CHUNK_COMPLETED,
-            {
-                "chunk_id": chunk.chunk_id,
-                "line_count": len(chunk_lines),
-                "target_count": len(target_lines),
-                "hyphen_pairs_reconciled": reconciled_count,
-                # F14 — token usage for this chunk's producer call (0 when
-                # the provider did not report it).
-                "input_tokens": usage.input_tokens if usage else 0,
-                "output_tokens": usage.output_tokens if usage else 0,
-            },
+        self._emit(
+            ev.ChunkCompleted(
+                chunk_id=chunk.chunk_id,
+                line_count=len(chunk_lines),
+                target_count=len(target_lines),
+                hyphen_pairs_reconciled=reconciled_count,
+                input_tokens=usage.input_tokens if usage else 0,
+                output_tokens=usage.output_tokens if usage else 0,
+            )
         )
         return reconciled_count
 
@@ -1545,12 +1672,11 @@ class CorrectionPipeline:
         call site — both counters are pipeline-orchestration state, not
         chunk-level side effects.
         """
-        self.observer.on_event(
-            PipelineEventType.WARNING,
-            {
-                "chunk_id": chunk.chunk_id,
-                "message": f"Fallback to OCR source: {sanitised_msg[:120]}",
-            },
+        self._emit(
+            ev.Warning(
+                chunk_id=chunk.chunk_id,
+                message=f"Fallback to OCR source: {sanitised_msg[:120]}",
+            )
         )
         target_ids = set(chunk.targets())
         targets = [lm for lm in chunk_lines if lm.line_id in target_ids]
@@ -1593,11 +1719,11 @@ class CorrectionPipeline:
         all_lines_by_id: dict[str, LineManifest],
         traces: dict[LineRef, LineTrace] | None,
         max_attempts: int,
-    ) -> tuple[LLMResponse | None, int, bool, str, Usage | None]:
+    ) -> tuple[ProposalBatch | None, int, bool, str, Usage | None]:
         """Call the edit producer with retries; return the outcome.
 
         Returns ``(response, attempts_used, can_downgrade, last_msg, usage)``:
-          - ``response`` — the validated :class:`LLMResponse`, or ``None``
+          - ``response`` — the validated :class:`ProposalBatch`, or ``None``
             on failure;
           - ``attempts_used`` — how many attempts this call consumed
             (charged against the per-chunk budget by the caller);
@@ -1654,7 +1780,7 @@ class CorrectionPipeline:
                 if ei is not None:
                     _set_trace(traces, lm, model_input_text=ei.ocr_text)
 
-            payload = LLMUserPayload(
+            payload = CorrectionRequest(
                 granularity=chunk.granularity,
                 document_id=chunk.document_id,
                 page_id=chunk.page_id,
@@ -1668,15 +1794,17 @@ class CorrectionPipeline:
             )
 
             try:
-                # §5.1 — the pipeline drives the temperature ramp: it hands
-                # the producer a policy whose FIRST temperature is this
-                # attempt's, so the ramp (and the hyphen 0.0 pin) is decided
-                # here regardless of the producer implementation.
-                per_attempt_policy = self.retry_policy.model_copy(
-                    update={"temperatures": (temperature,)}
-                )
+                # P3.7 — the producer gets a per-call envelope, not the
+                # engine's whole RetryPolicy: the ramp (and the hyphen
+                # 0.0 pin) is decided HERE; the probe lets long I/O be
+                # abandoned mid-flight.
                 script, usage = await self.producer.produce(
-                    payload, policy=per_attempt_policy
+                    payload,
+                    options=ProducerOptions(
+                        attempt=attempt,
+                        temperature=temperature,
+                        should_abort=ctx.should_abort,
+                    ),
                 )
                 raw = self._script_to_raw(script, chunk_lines)
                 if usage is not None:
@@ -1780,13 +1908,12 @@ class CorrectionPipeline:
                         hyphen_violation = True
                     if decision.backoff > 0:
                         await asyncio.sleep(decision.backoff)
-                    self.observer.on_event(
-                        PipelineEventType.RETRY,
-                        {
-                            "chunk_id": chunk.chunk_id,
-                            "attempt": attempt,
-                            "error": decision.error_tag,
-                        },
+                    self._emit(
+                        ev.Retry(
+                            chunk_id=chunk.chunk_id,
+                            attempt=attempt,
+                            error=decision.error_tag,
+                        )
                     )
                     ctx.retry_count += 1
                     continue
@@ -1815,7 +1942,7 @@ class CorrectionPipeline:
           (deterministic producers: no op == no edit), uncovered lines are
           filled with their canonical text so the validator's 1:1 check
           passes. An LLM producer keeps full-coverage semantics: a dropped
-          target line stays missing → ValidationError → retry.
+          target line stays missing → ProposalValidationError → retry.
         """
         canonical = {lm.line_id: lm.ocr_text for lm in chunk_lines}
         entries: list[dict[str, str]] = []
@@ -1894,14 +2021,13 @@ class CorrectionPipeline:
                 cross_page_partners=cross_page_partners,
             )
             if partner is None:
-                self.observer.on_event(
-                    PipelineEventType.HYPHEN_PARTNER_MISSING,
-                    {
-                        "chunk_id": chunk_id,
-                        "line_id": lm.line_id,
-                        "missing_partner_id": partner_id,
-                        "direction": "forward" if is_forward else "backward",
-                    },
+                self._emit(
+                    ev.HyphenPartnerMissing(
+                        chunk_id=chunk_id,
+                        line_id=lm.line_id,
+                        missing_partner_id=partner_id,
+                        direction="forward" if is_forward else "backward",
+                    )
                 )
                 continue
             pool[line_ref(partner)] = partner
@@ -2007,6 +2133,9 @@ class CorrectionPipeline:
                 lm.ocr_text, corrected, prev_ocr, next_ocr, config=self.guard_config
             )
             lm.corrected_text = result.text
+            # P3.5 — the guard's once-computed metrics ride the trace to
+            # the report's decision stage, accepted or not.
+            _set_trace(traces, lm, proposal_features=result.features)
             if result.accepted:
                 lm.status = LineStatus.CORRECTED
             else:
@@ -2062,12 +2191,57 @@ class CorrectionPipeline:
 
         self._apply_unit_reverts(reverts=reverts, all_lines=all_lines, traces=traces)
 
+    def _loss_policy_pass(
+        self,
+        *,
+        document_manifest: DocumentManifest,
+        all_lines: dict[LineRef, LineManifest],
+        traces: dict[LineRef, LineTrace] | None,
+    ) -> None:
+        """STRICT loss policy (ADR-012): reject corrections that cannot
+        project without losing word granularity.
+
+        The PAGE rewriter drops a line's ``Word`` children when the
+        corrected word count diverges from the markup's (6.2 P4 slow
+        path) — the one predictable, decision-relevant format loss.
+        ``LineManifest.word_count`` carries the markup's count from parse
+        time, so the check runs in the pure core, BEFORE the decisions
+        materialize: a rejected line falls back to source (whole hyphen
+        unit, ADR-010) and its rewrite becomes untouched — the source
+        geometry survives. Under REPORT (default) this pass is a no-op:
+        the loss projects, is counted, and is attributed per line.
+        """
+        if not self.loss_policy.strict:
+            return
+        reverts: dict[LineRef, str] = {}
+        for page in document_manifest.pages:
+            for lm in page.lines:
+                if lm.word_count is None or lm.corrected_text is None:
+                    continue
+                if lm.corrected_text == lm.ocr_text:
+                    continue  # identity projects untouched — nothing to lose
+                n_corrected = len(lm.corrected_text.split())
+                if n_corrected != lm.word_count:
+                    reverts[line_ref(lm)] = (
+                        "format_loss: corrected word count "
+                        f"{n_corrected} != source Word markup {lm.word_count} "
+                        "— unprojectable without dropping word geometry "
+                        "(LossPolicy strict)"
+                    )
+        self._apply_unit_reverts(
+            reverts=reverts,
+            all_lines=all_lines,
+            traces=traces,
+            atomicity_reason="format_loss_pair_atomicity",
+        )
+
     def _apply_unit_reverts(
         self,
         *,
         reverts: dict[LineRef, str],
         all_lines: dict[LineRef, LineManifest],
         traces: dict[LineRef, LineTrace] | None,
+        atomicity_reason: str = "adjacent_duplicate_pair_atomicity",
     ) -> None:
         """Revert flagged lines to OCR — atomically with their WHOLE
         hyphen unit.
@@ -2080,8 +2254,8 @@ class CorrectionPipeline:
         on THE derivation (ADR-010): the pass runs after planning, when
         the pointer fields are final, so the derived groups cannot be
         stale. A flagged line keeps its own revert reason; pulled
-        members are stamped ``adjacent_duplicate_pair_atomicity`` unless
-        an earlier fallback path already pinned one.
+        members are stamped ``atomicity_reason`` (the calling pass's
+        vocabulary) unless an earlier fallback path already pinned one.
         """
         if not reverts:
             return
@@ -2092,7 +2266,7 @@ class CorrectionPipeline:
             if group is None:
                 continue
             for member in group.members:
-                to_revert.setdefault(member, "adjacent_duplicate_pair_atomicity")
+                to_revert.setdefault(member, atomicity_reason)
 
         for ref, reason in to_revert.items():
             lm = all_lines.get(ref)
@@ -2135,39 +2309,34 @@ class CorrectionPipeline:
             )
 
     # ------------------------------------------------------------------
-    # Output writing (rewriter + trace assembly)
+    # Output rendering (rewriter + trace assembly)
     # ------------------------------------------------------------------
 
-    async def _write_outputs(
+    async def _render_outputs(
         self,
         *,
         document_manifest: DocumentManifest,
         source_files: dict[str, Path],
         traces: dict[LineRef, LineTrace],
         decisions: DecisionSet,
-        apply: bool = True,
     ) -> tuple[dict[str, int], dict[str, bytes]]:
-        """Rewrite corrected files, update traces, and (when ``apply``)
-        persist via the writer. Returns ``(losses, corrected_files)`` —
-        the format's granularity-loss counters aggregated across every
-        file (for ``CorrectionReport.format_losses``) and the corrected
-        bytes per source file name (for
-        ``CorrectionResult.corrected_files``).
+        """Rewrite corrected files in memory and update the traces.
+        Returns ``(losses, corrected_files)`` — the format's
+        granularity-loss counters aggregated across every file (for
+        ``CorrectionReport.format_losses``) and the corrected bytes per
+        source file name (for ``CorrectionResult.corrected_files``).
 
-        §9 dry-run — the rewrite always runs in memory so the report's
-        ``rewriter_path`` / ``output_alto_text`` are populated, but when
-        ``apply`` is ``False`` the injected ``OutputWriter`` is never
-        called: nothing is persisted.
-
-        ADR-011 — the projection invariant verifies against the
+        ADR-011 — pure computation: nothing is persisted here (the
+        engine has no writer; the caller persists from the result). The
+        projection invariant verifies against the
         :class:`RewriteResult`'s texts, read off the very tree the bytes
         were serialized from: the second full parse of the output is
-        gone. The heavy calls (``rewrite_file``: a full lxml
-        parse/rewrite/serialize of the source file; ``write_corrected``:
-        disk IO) run in worker threads so a ~100 MiB rewrite no longer
-        freezes the host's event loop (SSE keepalives, /health).
-        Observer events stay ON the loop — emit sites must never run
-        from a thread (the store's queues are not thread-safe).
+        gone. The heavy ``rewrite_file`` call (a full lxml
+        parse/rewrite/serialize of the source file) runs in a worker
+        thread so a ~100 MiB rewrite no longer freezes the host's event
+        loop (SSE keepalives, /health). Observer events stay ON the
+        loop — emit sites must never run from a thread (the store's
+        queues are not thread-safe).
         """
         # §11 — provenance stamped into every corrected file's processingStep.
         from corrigenda import __version__ as _lib_version
@@ -2189,14 +2358,15 @@ class CorrectionPipeline:
             if adapter is None:
                 adapter = _adapter_for_format(document_manifest.source_format)
 
+            provider_label, model_label = self.producer_metadata.provenance_labels()
             result = await asyncio.to_thread(
                 adapter.rewrite_file,
                 xml_path,
                 pages_for_file,
                 # §11 provenance labels — constructor state since the §5.1
                 # resorption (run() no longer carries provider/model).
-                self.provider_name,
-                self.model,
+                provider_label,
+                model_label,
                 lib_version=_lib_version,
                 config_fingerprint=config_fingerprint,
             )
@@ -2207,24 +2377,17 @@ class CorrectionPipeline:
             _verify_projection(source_name, pages_for_file, result.texts, decisions)
             corrected_files[source_name] = result.xml_bytes
 
-            if apply:
-                await asyncio.to_thread(
-                    self.output_writer.write_corrected,
-                    source_stem=xml_path.stem,
-                    xml_bytes=result.xml_bytes,
-                )
             # rewriter_stats observability event — pure read-only diagnostic
             # surfacing how each line classified (UNTOUCHED / SUBS_ONLY /
             # FAST_PATH / SLOW_PATH). Zero impact on the corrected XML.
-            self.observer.on_event(
-                PipelineEventType.REWRITER_STATS,
-                {
-                    "source_stem": xml_path.stem,
-                    "untouched": result.metrics.untouched,
-                    "subs_only": result.metrics.subs_only,
-                    "fast_path": result.metrics.fast_path,
-                    "slow_path": result.metrics.slow_path,
-                },
+            self._emit(
+                ev.RewriterStats(
+                    source_stem=xml_path.stem,
+                    untouched=result.metrics.untouched,
+                    subs_only=result.metrics.subs_only,
+                    fast_path=result.metrics.fast_path,
+                    slow_path=result.metrics.slow_path,
+                )
             )
             for key, count in result.losses.items():
                 losses_total[key] = losses_total.get(key, 0) + count
@@ -2241,6 +2404,15 @@ class CorrectionPipeline:
                     if t is not None:
                         t.rewriter_path = rpath
 
+            # ADR-012 — the rewrite's per-line loss attribution rides the
+            # traces onto the report's projection stage.
+            for lid, line_losses in result.losses_by_line.items():
+                tkey = lid_to_ref.get(lid)
+                if tkey:
+                    t = traces.get(tkey)
+                    if t is not None:
+                        t.projection_losses = line_losses
+
             for lid, otxt in result.texts.items():
                 tkey = lid_to_ref.get(lid)
                 if tkey:
@@ -2248,8 +2420,8 @@ class CorrectionPipeline:
                     if t is not None:
                         t.output_alto_text = otxt
 
-        # Trace persistence moved to run(): trace.json IS the
-        # CorrectionReport — one §9 artefact, not a parallel JobTrace shape.
+        # No trace persistence anywhere in the engine: trace.json IS the
+        # CorrectionReport (§9), carried on the result for the caller.
         return losses_total, corrected_files
 
 

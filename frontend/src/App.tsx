@@ -14,7 +14,7 @@ import { ProviderSelector } from './components/ProviderSelector'
 import { useJobStream } from './hooks/useJobStream'
 import { useModels } from './hooks/useModels'
 import { buildTraceMap, lineKey, type LineKey } from './lib/lineKey'
-import type { DiffData, JobStats, LayoutData, LineTrace, Provider, TraceData } from './types'
+import type { DiffData, JobStats, LayoutData, LineOutcome, Provider, TraceData } from './types'
 
 export default function App() {
   // Upload state
@@ -44,7 +44,7 @@ export default function App() {
   const [traceError, setTraceError] = useState(false)
   // Keyed on (page_id, line_id) — line_id alone repeats across pages
   // and made the last file's trace shadow every homonymous line.
-  const [traceByLineKey, setTraceByLineKey] = useState<Map<LineKey, LineTrace>>(new Map())
+  const [traceByLineKey, setTraceByLineKey] = useState<Map<LineKey, LineOutcome>>(new Map())
   const [selectedLineKey, setSelectedLineKey] = useState<LineKey | null>(null)
 
   // Models

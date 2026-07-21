@@ -19,16 +19,24 @@ producer-bound symbols are exposed LAZILY (PEP 562) so that importing
 
 from typing import TYPE_CHECKING, Any
 
+from corrigenda.core.decisions import (
+    DecisionSet,
+    LineDecision,
+)
+from corrigenda.core.identity import LineRef
 from corrigenda.core.editing import (
+    EDIT_PROTOCOL_VERSION,
     EditOp,
     EditRejection,
     EditResult,
     EditScript,
+    LinePrecondition,
     MatchAnchor,
     RangeAnchor,
     ReplaceLine,
     ReplaceSpan,
     apply_edit_script,
+    line_digest,
     normalize_anchor,
 )
 from corrigenda.core.pipeline import (
@@ -39,8 +47,11 @@ from corrigenda.core.pipeline import (
 from corrigenda.core.protocols import (
     BaseProvider,
     EditProducer,
-    OutputWriter,
+    ModelCatalog,
     PipelineObserver,
+    ProducerMetadata,
+    ProducerOptions,
+    StructuredCompletionClient,
     require_page_images,
 )
 from corrigenda.core.schemas import (
@@ -48,25 +59,36 @@ from corrigenda.core.schemas import (
     ChunkGranularity,
     ChunkPlannerConfig,
     CorrectionReport,
+    DecisionReason,
+    DecisionStage,
     DocumentManifest,
     GuardConfig,
     HyphenRole,
     LineManifest,
+    LineOutcome,
     LineStatus,
     LineTrace,
-    LLMLineInput,
-    LLMLineOutput,
+    LineContext,
+    LineProposal,
+    LossPolicy,
     ModelInfo,
     PageManifest,
     PairingPolicy,
+    ProducerProvenance,
+    ProjectionStage,
+    ProposalFeatures,
+    ProposalStage,
     RetryPolicy,
+    RunProvenance,
     Usage,
 )
 from corrigenda.errors import (
     CorrectionAborted,
     CorrectionError,
+    CorrigendaError,
     DuplicateIdError,
     ParseError,
+    ProposalValidationError,
     ValidationError,
 )
 
@@ -91,10 +113,14 @@ if TYPE_CHECKING:  # typed view of the lazy symbols below
     from corrigenda.formats.page.rewriter import (
         rewrite_page_file as rewrite_page_file,
     )
-    from corrigenda.producers.llm import (
+    from corrigenda.facade import LoadedDocument as LoadedDocument
+    from corrigenda.facade import correct as correct
+    from corrigenda.facade import correct_sync as correct_sync
+    from corrigenda.facade import load as load
+    from corrigenda.integrations.llm import (
         OUTPUT_JSON_SCHEMA as OUTPUT_JSON_SCHEMA,
     )
-    from corrigenda.producers.llm import SYSTEM_PROMPT as SYSTEM_PROMPT
+    from corrigenda.integrations.llm import SYSTEM_PROMPT as SYSTEM_PROMPT
     from corrigenda.producers.llm_edit import LLMEditProducer as LLMEditProducer
     from corrigenda.producers.rules import RulesProducer as RulesProducer
     from corrigenda.producers.rules import SubstitutionRule as SubstitutionRule
@@ -127,8 +153,12 @@ _LAZY: dict[str, str] = {
     "PageFormatAdapter": "corrigenda.formats.page.adapter",
     "parse_page_file": "corrigenda.formats.page.parser",
     "rewrite_page_file": "corrigenda.formats.page.rewriter",
-    "OUTPUT_JSON_SCHEMA": "corrigenda.producers.llm",
-    "SYSTEM_PROMPT": "corrigenda.producers.llm",
+    "OUTPUT_JSON_SCHEMA": "corrigenda.integrations.llm",
+    "SYSTEM_PROMPT": "corrigenda.integrations.llm",
+    "LoadedDocument": "corrigenda.facade",
+    "correct": "corrigenda.facade",
+    "correct_sync": "corrigenda.facade",
+    "load": "corrigenda.facade",
     "LLMEditProducer": "corrigenda.producers.llm_edit",
     "RulesProducer": "corrigenda.producers.rules",
     "SubstitutionRule": "corrigenda.producers.rules",
@@ -159,10 +189,20 @@ __all__ = [
     "rewrite_page_file",
     "AltoFormatAdapter",
     "PageFormatAdapter",
+    # Happy path (§2, P3.12 — lazy: formats)
+    "load",
+    "correct",
+    "correct_sync",
+    "LoadedDocument",
     # Pipeline
     "CorrectionPipeline",
     "CorrectionResult",
+    # Decisions (ADR-011) — the run's outcome, read off the result
+    "DecisionSet",
+    "LineDecision",
+    "LineRef",
     # Edit protocol (§4) — pure core
+    "EDIT_PROTOCOL_VERSION",
     "EditScript",
     "EditOp",
     "ReplaceLine",
@@ -171,25 +211,34 @@ __all__ = [
     "RangeAnchor",
     "EditResult",
     "EditRejection",
+    "LinePrecondition",
     "apply_edit_script",
+    "line_digest",
     "normalize_anchor",
     # Producers (§5)
     "EditProducer",
+    "ProducerMetadata",
+    "ProducerOptions",
     "require_page_images",
     "RulesProducer",
     "SubstitutionRule",
     "default_french_ocr_rules",
     "LLMEditProducer",
-    # Errors (§8.4)
+    # Errors (§8.4) — CorrigendaError/ProposalValidationError are the
+    # canonical names (P3.11); the old names are 0.9.x deprecation
+    # aliases of the SAME classes, removed at the top-level reduction.
+    "CorrigendaError",
     "CorrectionError",
     "ParseError",
     "DuplicateIdError",
+    "ProposalValidationError",
     "ValidationError",
     "CorrectionAborted",
     # Ports
     "BaseProvider",
-    "OutputWriter",
+    "ModelCatalog",
     "PipelineObserver",
+    "StructuredCompletionClient",
     # LLM contract (lazy — producers)
     "OUTPUT_JSON_SCHEMA",
     "SYSTEM_PROMPT",
@@ -205,13 +254,24 @@ __all__ = [
     "LineManifest",
     "LineStatus",
     "LineTrace",
-    "LLMLineInput",
-    "LLMLineOutput",
+    "LineContext",
+    "LineProposal",
+    "LossPolicy",
     "ModelInfo",
     "PageManifest",
     "PairingPolicy",
     "RetryPolicy",
     "Usage",
+    # Report v2 (§9, P3.5)
+    "LineOutcome",
+    "ProposalStage",
+    "ProposalFeatures",
+    "DecisionStage",
+    "DecisionReason",
+    "ProjectionStage",
+    # Provenance (§11, P3.9)
+    "ProducerProvenance",
+    "RunProvenance",
     # Version
     "__version__",
 ]

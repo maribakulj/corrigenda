@@ -1,0 +1,12 @@
+{
+  "corpus_version": "0.1.0",
+  "cases": [
+    {
+      "name": "synthetic-fr-early-print",
+      "format": "alto",
+      "source": "synthetic-fr-early-print.alto.xml",
+      "reference": "synthetic-fr-early-print.ref.alto.xml",
+      "provenance": "synthetic — reference written for this corpus; source derived by scripted degradations (long s, fi ligature, one rn confusion). See README.md."
+    }
+  ]
+}

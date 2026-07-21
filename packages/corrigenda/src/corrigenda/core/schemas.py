@@ -55,27 +55,17 @@ class HyphenRole(str, Enum):
 
 
 class PipelineEventType(str, Enum):
-    """Canonical event names emitted by the correction pipeline.
+    """Canonical event names emitted by the correction ENGINE (P3.6).
 
-    This enum is the authoritative source of truth for every event
-    name the pipeline or its observers can emit. The backend's SSE
-    layer transports the same strings; ``frontend/src/hooks/useJobStream
-    .ts::EVENTS`` lists them on the consumer side.
-    Synchronisation is enforced by
-    ``backend/tests/test_sse_event_contract.py`` at every CI run.
-
-    The string values are part of the wire contract and stay stable
-    across releases.
+    Only events the pipeline itself (or a host reporting the pipeline's
+    metrics) can emit live here. Server-side job lifecycle
+    (started/completed/failed/cancelled/queued) and SSE transport
+    events (keepalive/error) are the HOST's vocabulary — the demo
+    backend owns them in ``app.jobs.events.JobEventType``. The wire
+    strings of both enums are part of the SSE contract with the
+    frontend, enforced by ``backend/tests/test_sse_event_contract.py``
+    at every CI run, and stay stable across releases.
     """
-
-    # Pipeline lifecycle (emitted by JobRunner on the backend)
-    STARTED = "started"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    #: Cooperative cancellation (``should_abort`` probe tripped): the
-    #: run raised :class:`~corrigenda.errors.CorrectionAborted`, no
-    #: output was written. Terminal, like ``completed``/``failed``.
-    CANCELLED = "cancelled"
 
     # Document / page / chunk lifecycle (emitted by CorrectionPipeline)
     DOCUMENT_PARSED = "document_parsed"
@@ -97,15 +87,6 @@ class PipelineEventType(str, Enum):
     # influence the corrected XML output.
     REWRITER_STATS = "rewriter_stats"
     RECONCILE_STATS = "reconcile_stats"
-
-    # Frontend-only initial state (kept here so the contract test can
-    # verify the frontend list against this canonical set).
-    QUEUED = "queued"
-
-    # Transport-layer events (emitted by JobStore.stream_events on the
-    # backend, not by the pipeline itself).
-    KEEPALIVE = "keepalive"
-    ERROR = "error"
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +137,14 @@ class LineManifest(BaseModel):
     line_order_in_block: int
     coords: Coords
     ocr_text: str
+    #: Number of word-granularity elements the physical line carries in
+    #: its source markup (PAGE ``Word`` children), or ``None`` when the
+    #: line has no word markup to lose (word-less PAGE lines, ALTO —
+    #: whose per-token ``String`` geometry redistributes at any token
+    #: count). Feeds the :class:`LossPolicy` strict check (§6.2/ADR-012):
+    #: a correction whose token count diverges from this cannot project
+    #: without dropping the word geometry.
+    word_count: int | None = None
     prev_line_id: str | None = None
     next_line_id: str | None = None
     corrected_text: str | None = None
@@ -536,6 +525,38 @@ class PairingPolicy(FrozenPolicy):
 DEFAULT_PAIRING_POLICY = PairingPolicy()
 
 
+class LossPolicy(FrozenPolicy):
+    """What the run does when projecting a correction would LOSE format
+    granularity (ADR-012, P3.8).
+
+    The PAGE rewriter cannot keep ``Word`` geometry when a correction
+    changes a line's word count (6.2 P4 slow path: the ``Word`` children
+    are dropped and the text lives at line level). Two stances:
+
+    * **REPORT** (``strict=False``, the default — the library's
+      historical behaviour, now explicit): the correction projects, the
+      loss is counted (``CorrectionReport.format_losses`` aggregate) and
+      attributed per line (``ProjectionStage.losses``).
+    * **STRICT** (``strict=True``): a correction that cannot project
+      without loss is REJECTED before any output exists — the whole
+      hyphen unit falls back to source text with a ``format_loss``
+      reason, consistent with the conservative-on-ambiguity fallback
+      philosophy. The source markup keeps its word geometry.
+
+    Scope: word-granularity loss only (``LineManifest.word_count``).
+    Stale-annotation drops (``conf``, alternative ``TextEquiv``,
+    offset-anchored ``custom`` groups) describe the OLD reading — they
+    are inherent to ANY correction, so they stay report-only in both
+    modes. No third mode until a real need shows up.
+    """
+
+    strict: bool = False
+
+
+#: Module-level default reused wherever a caller passes no LossPolicy.
+DEFAULT_LOSS_POLICY = LossPolicy()
+
+
 class RetryPolicy(FrozenPolicy):
     """Per-chunk LLM retry strategy (F9), injectable and frozen.
 
@@ -690,7 +711,7 @@ class LineGeometry(BaseModel):
     page_height: int
 
 
-class LLMLineInput(BaseModel):
+class LineContext(BaseModel):
     """One line worth of context sent to the LLM (OCR text + neighbours + hyphen hints)."""
 
     line_id: str
@@ -709,27 +730,27 @@ class LLMLineInput(BaseModel):
     geometry: LineGeometry | None = None
 
 
-class LLMUserPayload(BaseModel):
+class CorrectionRequest(BaseModel):
     task: str = "correct_ocr_lines"
     granularity: ChunkGranularity
     document_id: str
     page_id: str
     block_id: str | None = None
-    lines: list[LLMLineInput]
+    lines: list[LineContext]
     # Vision envelope (§4.1) — opaque page image reference, populated by the
     # compiler only when the producer asks (``wants_image``); never opened.
     image_ref: ImageRef | None = None
 
 
-class LLMLineOutput(BaseModel):
+class LineProposal(BaseModel):
     """One corrected line returned by the LLM — paired by ``line_id`` with its input."""
 
     line_id: str
     corrected_text: str
 
 
-class LLMResponse(BaseModel):
-    lines: list[LLMLineOutput]
+class ProposalBatch(BaseModel):
+    lines: list[LineProposal]
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +803,15 @@ class Usage(BaseModel):
 
 
 class LineTrace(BaseModel):
-    """Full text trace for a single line through the correction pipeline."""
+    """Working text trace for a single line through the correction run.
+
+    This is the PYTHON-side accumulator the pipeline fills as the run
+    progresses (exposed on ``CorrectionResult.traces``). The report's
+    JSON artefact does not serialize it: the report builder projects
+    each line's trace + terminal decision into a staged
+    :class:`LineOutcome` (P3.5 — report v2). The two surfaces version
+    independently (see ``docs/versioning.md``).
+    """
 
     line_id: str
     page_id: str
@@ -792,50 +821,203 @@ class LineTrace(BaseModel):
     projected_text: str | None = (
         None  # text retained after validation/reconciliation/fallback
     )
-    output_alto_text: str | None = None  # text re-extracted from the output ALTO XML
+    output_alto_text: str | None = None  # text re-extracted from the output XML
+    #: P3.5 — the acceptance guard's once-computed metrics (see
+    #: :class:`ProposalFeatures`); surfaces on the report's decision stage.
+    proposal_features: ProposalFeatures | None = None
 
     # Diagnostic metadata
     hyphen_role: str | None = None
     rewriter_path: str | None = None  # untouched / subs_only / fast_path / slow_path
+    #: P3.8 — this line's share of the rewrite's granularity losses
+    #: (e.g. ``{"words_dropped": 4}``), ``None`` when its rewrite lost
+    #: nothing; surfaces on the report's projection stage.
+    projection_losses: dict[str, int] | None = None
     validation_status: str | None = None  # corrected / fallback / failed
     fallback_reason: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# Report v2 (§9, P3.5) — one staged LineOutcome per line:
+# source → proposal → decision → projection
+# ---------------------------------------------------------------------------
+
+
+class ProposalStage(BaseModel):
+    """What the producer was asked and what it answered — absent when the
+    line never reached a producer (e.g. a rules producer's uncovered
+    line)."""
+
+    input_text: str | None = None  # enriched text sent to the producer
+    output_text: str | None = None  # raw producer output, pre-guards
+
+
+class DecisionReason(BaseModel):
+    """Structured decision motif: a machine-stable ``code`` (the family a
+    consumer aggregates on — same normalization as
+    ``CorrectionResult.fallback_reasons``) plus the free-text remainder."""
+
+    code: str
+    detail: str | None = None
+
+
+class ProposalFeatures(BaseModel):
+    """Metrics the acceptance guard computed ONCE while deciding (P3.5) —
+    recorded so no consumer re-derives them. Each field is ``None`` when
+    the guard's path never computed it (e.g. neighbour similarities on a
+    line whose source-similarity check already rejected it, or a line
+    that never went through per-line acceptance at all)."""
+
+    #: SequenceMatcher ratio proposal ↔ source (1.0 for an identity
+    #: proposal).
+    source_similarity: float | None = None
+    #: SequenceMatcher ratio proposal ↔ previous line's source.
+    prev_similarity: float | None = None
+    #: SequenceMatcher ratio proposal ↔ next line's source.
+    next_similarity: float | None = None
+    #: len(proposal) / len(source) (source clamped to ≥ 1 char).
+    length_ratio: float | None = None
+
+
+class DecisionStage(BaseModel):
+    """The line's terminal decision (always present — every line ends
+    ``corrected`` or ``fallback``, enforced by the DecisionSet)."""
+
+    status: str  # corrected / fallback
+    final_text: str  # the text the artefact carries
+    reason: DecisionReason | None = None  # why a fallen line fell
+    #: The guard's once-computed metrics for the proposal this decision
+    #: judged; ``None`` for lines that never reached per-line acceptance
+    #: (chunk-level fallbacks, hyphen-unit extensions, …).
+    features: ProposalFeatures | None = None
+
+
+class ProjectionStage(BaseModel):
+    """How the decided text landed in the rewritten artefact — absent
+    when no output file was rendered (e.g. ``source_files={}``)."""
+
+    #: Text re-extracted from the very tree the output bytes were
+    #: serialized from. Renamed from the v1 ``output_alto_text`` — this
+    #: library writes PAGE too, the name was wrong.
+    extracted_text: str | None = None
+    rewriter_path: str | None = None  # untouched / subs_only / fast_path / slow_path
+    #: P3.8 (ADR-012) — THIS line's granularity losses (e.g.
+    #: ``{"words_dropped": 4}``): the per-decision attribution of the
+    #: run-level ``CorrectionReport.format_losses`` aggregate. Absent
+    #: when this line's rewrite lost nothing. Additive and optional —
+    #: no ``report_version`` bump.
+    losses: dict[str, int] | None = None
+
+
+class LineOutcome(BaseModel):
+    """One line's whole journey through a run (report v2, §9)."""
+
+    line_id: str
+    page_id: str
+    hyphen_role: str | None = None
+    source_text: str
+    proposal: ProposalStage | None = None
+    decision: DecisionStage
+    projection: ProjectionStage | None = None
+
+
 #: Bumped on any breaking change to the CorrectionReport JSON shape (§9).
-CORRECTION_REPORT_VERSION = "1.0"
+#: 2.0 (P3.5): flat ``LineTrace`` entries became staged ``LineOutcome``
+#: objects (``source_text`` / ``proposal`` / ``decision`` /
+#: ``projection``); ``output_alto_text`` renamed to
+#: ``projection.extracted_text``; ``fallback_reason`` became the
+#: structured ``decision.reason`` (code + detail).
+CORRECTION_REPORT_VERSION = "2.0"
+
+
+class ProducerProvenance(BaseModel):
+    """The producer's identity as recorded on the report (P3.9, §11).
+
+    Mirrors :class:`corrigenda.core.protocols.ProducerMetadata` field for
+    field (the dataclass cannot be the report type directly — protocols
+    imports schemas, and the report is a schemas artefact). GENERIC
+    vocabulary: a rules producer has no "model", so ``implementation``
+    is simply ``None`` — never an artificial vendor pair.
+    """
+
+    name: str = "unknown"
+    version: str | None = None
+    implementation: str | None = None
+    configuration_fingerprint: str | None = None
+
+
+class RunProvenance(BaseModel):
+    """Everything needed to say WHAT produced this report (P3.9, §11).
+
+    Extends the §11 story beyond the policy fingerprint: the exact
+    library, the exact producer identity, the exact SOURCE bytes
+    (per-file sha256), the format, and the critical dependencies.
+    A consumer holding the same inputs and versions can re-run and
+    compare; a consumer holding only the report can say precisely what
+    it is looking at. Present on every run, including dry runs
+    (``source_digests`` is then empty).
+
+    Generation parameters are not duplicated here: the temperature ramp
+    and retry strategy live in :class:`RetryPolicy`, already covered by
+    ``config_fingerprint``.
+    """
+
+    #: corrigenda's own version.
+    lib_version: str
+    #: The §8.2 composite policy fingerprint (chunk_planner / guard /
+    #: loss / pairing / retry) — same value stamped into the XML.
+    config_fingerprint: str
+    #: Who produced the edits (generic identity, P3.7-4).
+    producer: ProducerProvenance
+    #: source file name → ``sha256:<hex>`` of the INPUT bytes, so the
+    #: report is verifiably tied to the exact document it corrected.
+    #: Empty on dry runs (no source files given).
+    source_digests: dict[str, str] = Field(default_factory=dict)
+    #: The manifest's stamped source format ("alto" / "page"), None for
+    #: hand-built manifests that never went through a parser.
+    source_format: str | None = None
+    #: Critical dependency versions ({"lxml": …, "pydantic": …}),
+    #: resolved from package metadata without importing the packages —
+    #: the pure core stays lxml-free. A package that is not installed
+    #: is simply absent.
+    dependencies: dict[str, str] = Field(default_factory=dict)
 
 
 class CorrectionReport(BaseModel):
     """Public, versioned correction report (§9).
 
-    Promotes the per-line :class:`LineTrace` from a backend-internal
-    ``trace.json`` to a documented output artefact with a **stable,
-    versioned JSON schema**. Each line records its full journey — source
-    OCR → model input → model output → projected text → re-extracted ALTO
-    text — plus the rewriter path taken and any fallback reason, so a
-    consumer can render a diff/preview or measure a run without re-deriving
-    anything. Returned on every run and, for a dry run
-    (``run(apply=False)``), it is the whole point: the report is produced
-    without writing any XML.
+    Each line is a staged :class:`LineOutcome` (v2, P3.5) recording its
+    full journey — source → proposal (producer in/out) → decision
+    (terminal status, final text, structured reason) → projection
+    (re-extracted text, rewriter path) — so a consumer can render a
+    diff/preview or measure a run without re-deriving anything.
+    Returned on every run; the engine never persists it (ADR-011) — it
+    is ``result.report``, written as ``report.json`` by
+    :meth:`CorrectionResult.write` or by the host's own transaction.
     """
 
     report_version: str = CORRECTION_REPORT_VERSION
     run_id: str
     total_lines: int = 0
-    lines: list[LineTrace] = Field(default_factory=list)
+    lines: list[LineOutcome] = Field(default_factory=list)
     #: Format-specific granularity losses aggregated over the run — e.g. the
     #: PAGE rewriter reports ``words_dropped`` / ``custom_offset_stripped`` /
     #: ``alt_textequiv_dropped`` (6.2 P4/P6) here. ``None`` when the format
     #: has nothing to report (ALTO's per-path counts already live on the
-    #: line traces). Additive and optional, so this does NOT bump
+    #: line outcomes). Additive and optional, so this does NOT bump
     #: ``report_version`` — the field's contract is to bump only on a
     #: *breaking* JSON change, and a new optional key is backward-compatible.
     format_losses: dict[str, int] | None = None
+    #: P3.9 (§11) — the run's full provenance record. Optional and
+    #: additive (no ``report_version`` bump): a v2.0 consumer that
+    #: ignores unknown keys keeps working, one that reads it gains the
+    #: source digests, producer identity and dependency versions.
+    provenance: RunProvenance | None = None
 
     @property
-    def fallback_lines(self) -> list[LineTrace]:
+    def fallback_lines(self) -> list[LineOutcome]:
         """Lines that fell back to OCR (a quick health signal for consumers)."""
-        return [ln for ln in self.lines if ln.validation_status == "fallback"]
+        return [ln for ln in self.lines if ln.decision.status == "fallback"]
 
 
 # --- public surface ---
@@ -852,18 +1034,27 @@ __all__ = [
     "ChunkPlannerConfig",
     "FrozenPolicy",
     "GuardConfig",
+    "LossPolicy",
     "PairingPolicy",
     "RetryPolicy",
     "ChunkRequest",
     "ChunkPlan",
     "ImageRef",
     "LineGeometry",
-    "LLMLineInput",
-    "LLMUserPayload",
-    "LLMLineOutput",
-    "LLMResponse",
+    "LineContext",
+    "CorrectionRequest",
+    "LineProposal",
+    "ProposalBatch",
     "ModelInfo",
     "Usage",
     "LineTrace",
+    "LineOutcome",
+    "ProposalStage",
+    "ProposalFeatures",
+    "DecisionStage",
+    "DecisionReason",
+    "ProjectionStage",
+    "ProducerProvenance",
+    "RunProvenance",
     "CorrectionReport",
 ]

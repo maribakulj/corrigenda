@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from corrigenda.core.protocols import ProducerOptions
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.hyphenation import enrich_chunk_lines
 from corrigenda.core.protocols import EditProducer, require_page_images
@@ -16,7 +17,7 @@ from corrigenda.core.schemas import (
     ChunkGranularity,
     Coords,
     LineManifest,
-    LLMUserPayload,
+    CorrectionRequest,
     RetryPolicy,
     Usage,
 )
@@ -76,7 +77,7 @@ def test_enrich_copies_geometry_when_requested():
 
 def test_payload_carries_opaque_image_ref():
     lm = _line("l1")
-    payload = LLMUserPayload(
+    payload = CorrectionRequest(
         granularity=ChunkGranularity.LINE,
         document_id="d",
         page_id="pg",
@@ -95,7 +96,7 @@ class _VisionProducer:
     wants_geometry = True
     wants_image = True
 
-    async def produce(self, payload: LLMUserPayload, *, policy: RetryPolicy):
+    async def produce(self, payload: CorrectionRequest, *, options: RetryPolicy):
         return EditScript(ops=[]), None
 
 
@@ -175,10 +176,10 @@ def test_llm_adapter_produces_replace_line_script_and_usage():
         provider, "key", "model", system_prompt="sys", output_schema={}
     )
     assert isinstance(prod, EditProducer)  # structural
-    payload = LLMUserPayload(
+    payload = CorrectionRequest(
         granularity=ChunkGranularity.LINE, document_id="d", page_id="pg", lines=[]
     )
-    script, usage = asyncio.run(prod.produce(payload, policy=RetryPolicy.default()))
+    script, usage = asyncio.run(prod.produce(payload, options=ProducerOptions()))
     ops = script.ops
     assert all(isinstance(o, ReplaceLine) for o in ops)
     assert {o.line_id: o.text for o in ops} == {"l1": "Hello", "l2": "World"}

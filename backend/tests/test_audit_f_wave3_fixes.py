@@ -524,8 +524,8 @@ async def test_review_w6_evicted_stream_delivers_buffered_terminal(monkeypatch, 
     import asyncio
 
     from app import storage as storage_module
+    from app.jobs.events import JobEventType
     from app.jobs.store import JobStore, SSEEvent
-    from app.schemas import PipelineEventType
 
     monkeypatch.setattr(storage_module, "_BASE_DIR", tmp_path / "jobs")
     store = JobStore()
@@ -546,7 +546,7 @@ async def test_review_w6_evicted_stream_delivers_buffered_terminal(monkeypatch, 
                 if queues:
                     queues[0].put_nowait(
                         SSEEvent(
-                            event=PipelineEventType.COMPLETED,
+                            event=JobEventType.COMPLETED,
                             data={"total_lines": 7},
                         )
                     )

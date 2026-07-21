@@ -31,6 +31,7 @@ format, no producer) — the import-contract test keeps it that way.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -44,6 +45,22 @@ from corrigenda.core.schemas import (
     HyphenRole,
     LineManifest,
 )
+from corrigenda.errors import ProposalValidationError
+
+#: Version of THIS edit protocol (P3.10). Bumped only on a breaking
+#: change to the op/anchor semantics; ``apply_edit_script`` refuses a
+#: script stamped with a version it does not speak.
+EDIT_PROTOCOL_VERSION = "1"
+
+
+def line_digest(text: str) -> str:
+    """Stable 16-hex digest of one line's canonical text (P3.10).
+
+    The unit of the script's per-line preconditions: same shape as the
+    §11 policy fingerprints. Consumers building scripts by hand compute
+    theirs with this exact function.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +127,40 @@ class ReplaceSpan(BaseModel):
 EditOp = Annotated[Union[ReplaceLine, ReplaceSpan], Field(discriminator="op")]
 
 
+class LinePrecondition(BaseModel):
+    """What one targeted line's SOURCE text must be for the script to
+    apply to it (P3.10).
+
+    ``digest`` is :func:`line_digest` of the canonical source text at
+    script-build time. ``page_id`` qualifies the line like the ops'
+    stamp does (bare line_ids repeat across files); ``None`` keeps
+    hand-written single-file scripts simple.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    line_id: str
+    page_id: str | None = None
+    digest: str
+
+
 class EditScript(BaseModel):
     ops: list[EditOp] = Field(default_factory=list)
+    #: P3.10 — the protocol this script speaks. Scripts built by this
+    #: library stamp the current version; ``apply_edit_script`` raises
+    #: on a version it does not know. ``None`` (hand-written / legacy
+    #: JSON) is accepted as the current version.
+    protocol_version: str | None = None
+    #: P3.10 — source file name → ``sha256:<hex>`` of the INPUT bytes
+    #: the script was derived from (same shape as
+    #: ``RunProvenance.source_digests``). Recorded for consumers
+    #: replaying against files; not verifiable by ``apply_edit_script``
+    #: itself, which sees only canonical text.
+    source_digests: dict[str, str] = Field(default_factory=dict)
+    #: P3.10 — per targeted line, the digest of the source text the
+    #: ops were computed against. ``apply_edit_script`` REJECTS the
+    #: line's ops when the document at hand carries the same line_id
+    #: with different content — an op must never land on a lookalike.
+    preconditions: list[LinePrecondition] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +190,7 @@ R_ANCHOR_NOT_FOUND = "anchor_not_found"
 R_ANCHOR_AMBIGUOUS = "anchor_ambiguous"
 R_ANCHOR_RANGE = "anchor_out_of_range"
 R_ANCHOR_EMPTY = "anchor_empty_match"
+R_PRECONDITION = "precondition_source_digest"
 
 
 class EditResult(BaseModel):
@@ -395,8 +445,35 @@ def apply_edit_script(
     consumer can replay the whole final edit_script one page at a time
     even when files reuse line_ids. Ops without a stamp are always in
     scope (hand-written scripts keep their historical behaviour).
+
+    Preconditions (P3.10): a script stamped with an unknown
+    ``protocol_version`` raises :class:`~corrigenda.errors.ProposalValidationError`
+    — an incompatible script must fail loudly, not half-apply. A line
+    whose recorded source :func:`line_digest` differs from the document
+    at hand has its ops REJECTED (``precondition_source_digest``): the
+    same line_id over different content is a lookalike, never a target.
     """
+    if (
+        script.protocol_version is not None
+        and script.protocol_version != EDIT_PROTOCOL_VERSION
+    ):
+        raise ProposalValidationError(
+            f"edit script speaks protocol version "
+            f"{script.protocol_version!r}; this library speaks "
+            f"{EDIT_PROTOCOL_VERSION!r} — refusing to apply a script whose "
+            "semantics may have changed."
+        )
+
     result = EditResult()
+
+    # Precondition index, page-scoped exactly like the ops are.
+    digest_by_line: dict[str, str] = {
+        pc.line_id: pc.digest
+        for pc in script.preconditions
+        if not (
+            page_id is not None and pc.page_id is not None and pc.page_id != page_id
+        )
+    }
 
     ops_by_line: dict[str, list[ReplaceLine | ReplaceSpan]] = {}
     for op in script.ops:
@@ -416,6 +493,25 @@ def apply_edit_script(
             continue
 
         canonical = canonical_by_id[line_id]
+
+        # P3.10 — the document at hand must carry the SAME source text
+        # the ops were computed against; same id + different content is
+        # a lookalike, never a target.
+        expected = digest_by_line.get(line_id)
+        if expected is not None and line_digest(canonical) != expected:
+            for op in ops:
+                result.rejected.append(
+                    EditRejection(
+                        line_id=line_id,
+                        op=op.op,
+                        reason=R_PRECONDITION,
+                        detail=(
+                            f"source digest {line_digest(canonical)} != "
+                            f"recorded {expected}"
+                        ),
+                    )
+                )
+            continue
         role = (
             line_by_id[line_id].hyphen_role
             if line_by_id and line_id in line_by_id
@@ -443,6 +539,7 @@ def replace_line_script(text_by_id: dict[str, str]) -> EditScript:
 
 
 __all__ = [
+    "EDIT_PROTOCOL_VERSION",
     "RangeAnchor",
     "MatchAnchor",
     "ReplaceLine",
@@ -451,6 +548,8 @@ __all__ = [
     "EditScript",
     "EditRejection",
     "EditResult",
+    "LinePrecondition",
+    "line_digest",
     "normalize_anchor",
     "apply_edit_script",
     "replace_line_script",

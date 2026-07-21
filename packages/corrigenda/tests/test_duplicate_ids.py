@@ -51,7 +51,7 @@ from corrigenda.formats.page.rewriter import (
 )
 from corrigenda.formats.page.rewriter import rewrite_page_file
 
-from tests._pipeline_harness import DictProvider, RecordingObserver, _NoopWriter
+from tests._pipeline_harness import DictProvider, RecordingObserver
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -330,7 +330,6 @@ def _pipeline() -> CorrectionPipeline:
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
     )
 
 
@@ -349,7 +348,6 @@ def test_pipeline_run_rejects_duplicate_line_id_in_manifest(tmp_path: Path):
         _pipeline().run_sync(
             document_manifest=doc,
             source_files={"doc.xml": tmp_path / "doc.xml"},
-            apply=False,
         )
 
 
@@ -370,7 +368,6 @@ def test_pipeline_run_rejects_cross_file_page_id_collision(tmp_path: Path):
         _pipeline().run_sync(
             document_manifest=doc,
             source_files={"a.xml": tmp_path / "a.xml", "b.xml": tmp_path / "b.xml"},
-            apply=False,
         )
 
 
@@ -382,7 +379,6 @@ def test_pipeline_end_to_end_with_cross_file_reused_line_ids(tmp_path: Path):
     result = _pipeline().run_sync(
         document_manifest=doc,
         source_files={"a.xml": a, "b.xml": b},
-        apply=False,
     )
     assert result.report is not None
     assert doc.total_lines == 4

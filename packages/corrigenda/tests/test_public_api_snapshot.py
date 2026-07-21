@@ -38,10 +38,20 @@ PUBLIC_API_1_0 = sorted(
         "rewrite_page_file",
         "AltoFormatAdapter",
         "PageFormatAdapter",
+        # Happy path (§2, P3.12 — lazy: formats)
+        "load",
+        "correct",
+        "correct_sync",
+        "LoadedDocument",
         # Pipeline
         "CorrectionPipeline",
         "CorrectionResult",
+        # Decisions (ADR-011, slice E)
+        "DecisionSet",
+        "LineDecision",
+        "LineRef",
         # Edit protocol (§4)
+        "EDIT_PROTOCOL_VERSION",
         "EditScript",
         "EditOp",
         "ReplaceLine",
@@ -50,25 +60,33 @@ PUBLIC_API_1_0 = sorted(
         "RangeAnchor",
         "EditResult",
         "EditRejection",
+        "LinePrecondition",
         "apply_edit_script",
+        "line_digest",
         "normalize_anchor",
         # Producers (§5)
         "EditProducer",
+        "ProducerMetadata",
+        "ProducerOptions",
         "require_page_images",
         "RulesProducer",
         "SubstitutionRule",
         "default_french_ocr_rules",
         "LLMEditProducer",
-        # Errors (§8.4)
+        # Errors (§8.4) — canonical names since P3.11; the old names are
+        # 0.9.x deprecation aliases of the SAME classes.
+        "CorrigendaError",
         "CorrectionError",
         "ParseError",
         "DuplicateIdError",  # P0-5 — additive, subclasses ParseError
+        "ProposalValidationError",
         "ValidationError",
         "CorrectionAborted",
         # Ports
         "BaseProvider",
-        "OutputWriter",
+        "ModelCatalog",
         "PipelineObserver",
+        "StructuredCompletionClient",
         # LLM contract (lazy — producers)
         "OUTPUT_JSON_SCHEMA",
         "SYSTEM_PROMPT",
@@ -84,13 +102,24 @@ PUBLIC_API_1_0 = sorted(
         "LineManifest",
         "LineStatus",
         "LineTrace",
-        "LLMLineInput",
-        "LLMLineOutput",
+        "LineContext",
+        "LineProposal",
+        "LossPolicy",
         "ModelInfo",
         "PageManifest",
         "PairingPolicy",
         "RetryPolicy",
         "Usage",
+        # Report v2 (§9, P3.5)
+        "LineOutcome",
+        "ProposalStage",
+        "ProposalFeatures",
+        "DecisionStage",
+        "DecisionReason",
+        "ProjectionStage",
+        # Provenance (§11, P3.9)
+        "ProducerProvenance",
+        "RunProvenance",
     ]
 )
 
@@ -131,7 +160,6 @@ def test_run_and_run_sync_signatures_are_pinned():
         "source_files",
         "run_id",
         "should_abort",
-        "apply",
         "page_images",
     ]
     assert _param_names(corrigenda.CorrectionPipeline.run) == expected
@@ -144,8 +172,11 @@ def test_run_and_run_sync_signatures_are_pinned():
 def test_for_provider_signature_is_pinned():
     params = _param_names(corrigenda.CorrectionPipeline.for_provider)
     assert params[0] == "provider"
-    for required in ("api_key", "model", "provider_name", "observer", "output_writer"):
+    for required in ("api_key", "model", "provider_name", "observer"):
         assert required in params
+    # ADR-011 slice D-fin — persistence left the engine surface for good.
+    assert "output_writer" not in params
+    assert "output_writer" not in _param_names(corrigenda.CorrectionPipeline.__init__)
 
 
 def test_correction_report_json_keys_are_pinned():
@@ -157,9 +188,10 @@ def test_correction_report_json_keys_are_pinned():
         "total_lines",
         "lines",
         "format_losses",
+        "provenance",  # P3.9 — optional, additive (no version bump)
     }, (
         "CorrectionReport JSON shape moved — a key removal/rename requires "
         "bumping CORRECTION_REPORT_VERSION (§9); an addition must stay "
         "optional."
     )
-    assert report.report_version == "1.0"
+    assert report.report_version == "2.0"

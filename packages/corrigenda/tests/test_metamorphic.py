@@ -29,7 +29,8 @@ from pathlib import Path
 import pytest
 from hypothesis import given, settings
 
-from corrigenda import CorrectionPipeline
+from corrigenda.core.protocols import ProducerMetadata
+from corrigenda import CorrectionPipeline, CorrectionResult
 from corrigenda.core.editing import EditScript
 from corrigenda.core.schemas import ChunkPlannerConfig, DocumentManifest, LineStatus
 from corrigenda.formats.alto.parser import build_document_manifest
@@ -76,26 +77,6 @@ class _Null:
     def on_event(self, *a, **k):
         pass
 
-    def write_corrected(self, *, source_stem, xml_bytes):
-        pass
-
-    def write_trace(self, *, traces_payload):
-        pass
-
-
-class _Capture:
-    def __init__(self) -> None:
-        self.outputs: dict[str, bytes] = {}
-
-    def on_event(self, *a, **k):
-        pass
-
-    def write_corrected(self, *, source_stem, xml_bytes):
-        self.outputs[source_stem] = xml_bytes
-
-    def write_trace(self, *, traces_payload):
-        pass
-
 
 class _IdentityProducer:
     """Proposes nothing — every line must come out exactly as it went in."""
@@ -104,40 +85,36 @@ class _IdentityProducer:
     wants_image = False
     requires_full_coverage = False
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         return EditScript(ops=[]), None
 
 
-def _outcomes(doc: DocumentManifest) -> dict[tuple[str, str], tuple[str, str]]:
-    """(page_id, line_id) → (final text, status) for the whole document."""
+def _outcomes(result: CorrectionResult) -> dict[tuple[str, str], tuple[str, str]]:
+    """(page_id, line_id) → (final text, status) — read off the run's
+    DecisionSet (ADR-011 slice E: the input manifest is never mutated)."""
     return {
-        (lm.page_id, lm.line_id): (
-            lm.corrected_text if lm.corrected_text is not None else lm.ocr_text,
-            lm.status.value,
-        )
-        for page in doc.pages
-        for lm in page.lines
+        (d.ref.page_id, d.ref.line_id): (d.final_text, d.status.value)
+        for d in result.decisions.decisions
     }
 
 
 async def _run_partition(
-    path: Path, config: ChunkPlannerConfig | None
-) -> DocumentManifest:
-    doc = build_document_manifest([(path, path.name)])
+    path: Path,
+    config: ChunkPlannerConfig | None,
+    doc: DocumentManifest | None = None,
+) -> CorrectionResult:
+    if doc is None:
+        doc = build_document_manifest([(path, path.name)])
     pipeline = CorrectionPipeline(
         producer=RulesProducer(_RULES),
         observer=_Null(),
-        output_writer=_Null(),
         config=config,
-        provider_name="rules",
-        model="fr-ocr-v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="fr-ocr-v1"),
     )
-    await pipeline.run(
+    return await pipeline.run(
         document_manifest=doc,
         source_files={path.name: path},
-        apply=False,
     )
-    return doc
 
 
 # ---------------------------------------------------------------------------
@@ -196,24 +173,24 @@ async def test_final_text_is_invariant_under_chunk_partition_on_sample() -> None
 def test_identity_producer_preserves_content_and_geometry(doc: str) -> None:
     path = _write_tmp(doc)
     try:
-        writer = _Capture()
 
-        async def run() -> None:
+        async def run() -> dict[str, bytes]:
             manifest = build_document_manifest([(path, path.name)])
             pipeline = CorrectionPipeline(
                 producer=_IdentityProducer(),
                 observer=_Null(),
-                output_writer=writer,
-                provider_name="identity",
-                model="none",
+                producer_metadata=ProducerMetadata(
+                    name="identity", implementation="none"
+                ),
             )
-            await pipeline.run(
+            result = await pipeline.run(
                 document_manifest=manifest,
                 source_files={path.name: path},
             )
+            return result.corrected_files
 
-        asyncio.run(run())
-        out = next(iter(writer.outputs.values()))
+        corrected = asyncio.run(run())
+        out = next(iter(corrected.values()))
         src = doc.encode("utf-8")
         assert _string_contents(out) == _string_contents(src)
         assert _textline_geometry(out) == _textline_geometry(src)
@@ -227,16 +204,19 @@ def test_identity_producer_preserves_content_and_geometry(doc: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_sequential_runs_from_same_file_are_identical() -> None:
-    """Fresh parse + fresh pipeline per run, same config ⇒ same outcome.
-
-    Guards against state leaking through module/class-level caches. The
-    planned immutable-source refactor (PLAN-1.0 P3.4) strengthens this to
-    two runs over the SAME document object.
-    """
-    first = _outcomes(await _run_partition(_SAMPLE, None))
-    second = _outcomes(await _run_partition(_SAMPLE, None))
+async def test_two_runs_on_the_same_document_are_identical() -> None:
+    """ADR-011 slice E — the P0 property in its final form: two runs on
+    the SAME document object (not two parses, not two deep copies) yield
+    identical outcomes, and the input never carries run state."""
+    doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
+    first = _outcomes(await _run_partition(_SAMPLE, None, doc=doc))
+    second = _outcomes(await _run_partition(_SAMPLE, None, doc=doc))
     assert first == second
+    # The input is exactly as parsed: no decision leaked back onto it.
+    for page in doc.pages:
+        for lm in page.lines:
+            assert lm.corrected_text is None
+            assert lm.status is LineStatus.PENDING
 
 
 # ---------------------------------------------------------------------------
@@ -346,24 +326,24 @@ def test_identity_producer_preserves_rich_docs(
     doc, _ = doc_and_roles
     path = _write_tmp(doc)
     try:
-        writer = _Capture()
 
-        async def run() -> None:
+        async def run() -> dict[str, bytes]:
             manifest = build_document_manifest([(path, path.name)])
             pipeline = CorrectionPipeline(
                 producer=_IdentityProducer(),
                 observer=_Null(),
-                output_writer=writer,
-                provider_name="identity",
-                model="none",
+                producer_metadata=ProducerMetadata(
+                    name="identity", implementation="none"
+                ),
             )
-            await pipeline.run(
+            result = await pipeline.run(
                 document_manifest=manifest,
                 source_files={path.name: path},
             )
+            return result.corrected_files
 
-        asyncio.run(run())
-        out = next(iter(writer.outputs.values()))
+        corrected = asyncio.run(run())
+        out = next(iter(corrected.values()))
         src = doc.encode("utf-8")
         assert _string_contents(out) == _string_contents(src)
         assert _textline_geometry(out) == _textline_geometry(src)
@@ -418,11 +398,11 @@ async def test_degenerate_chain_identity_survives_every_partition(
     path.write_text(_DEGENERATE_CHAIN, encoding="utf-8")
     outcomes = {}
     for name, config in _CHAIN_PARTITIONS.items():
-        doc = await _run_partition(path, config)
-        for lm in (lm for page in doc.pages for lm in page.lines):
-            assert lm.status is LineStatus.CORRECTED, (
-                f"{name}: {lm.line_id} ended {lm.status.value} — identity "
+        result = await _run_partition(path, config)
+        for d in result.decisions.decisions:
+            assert d.status is LineStatus.CORRECTED, (
+                f"{name}: {d.ref.line_id} ended {d.status.value} — identity "
                 "was rejected by a validation false positive"
             )
-        outcomes[name] = _outcomes(doc)
+        outcomes[name] = _outcomes(result)
     assert all(o == outcomes["default"] for o in outcomes.values())

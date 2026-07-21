@@ -396,7 +396,12 @@ class TestX0000002ReconcileInvariant:
         # Both reverted to OCR text; SUBS neutralised; pair not mixed.
         assert p1.corrected_text == p1.ocr_text
         assert p2.corrected_text == p2.ocr_text
-        assert p1.hyphen_subs_content is None
+        # SUBS neutralisation is observable on the ARTEFACT (ADR-011
+        # slice E: the input manifest is never mutated, so the dropped
+        # SUBS_CONTENT shows in the rewritten XML, not on the parse).
+        out = run.result.corrected_files["X0000002.xml"]
+        assert b'SUBS_CONTENT="condamne"' not in out
+        assert run.result.reconcile_metrics.neutralised >= 1
         assert self._pairs_not_mixed(run)
         # LineStatus is a real enum on both sides (regression guard on the
         # neutralise-to-OCR path leaving a coherent, non-fallback status).

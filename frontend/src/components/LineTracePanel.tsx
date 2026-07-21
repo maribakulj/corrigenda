@@ -1,16 +1,21 @@
-import type { LineTrace } from '../types'
+import type { LineOutcome } from '../types'
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const STAGE_LABELS: { key: keyof LineTrace; label: string }[] = [
-  { key: 'source_ocr_text', label: 'Source OCR' },
-  { key: 'model_input_text', label: 'Model input' },
-  { key: 'model_corrected_text', label: 'Model output' },
-  { key: 'projected_text', label: 'Projected (retained)' },
-  { key: 'output_alto_text', label: 'Output ALTO' },
-]
+/** Report v2 (§9): the outcome's stages flattened for display, in
+ * pipeline order. Absent stages (no producer call, no rendered output)
+ * surface as null texts. */
+function stagesOf(outcome: LineOutcome): { label: string; text: string | null }[] {
+  return [
+    { label: 'Source', text: outcome.source_text },
+    { label: 'Producer input', text: outcome.proposal?.input_text ?? null },
+    { label: 'Producer output', text: outcome.proposal?.output_text ?? null },
+    { label: 'Decision (retained)', text: outcome.decision.final_text },
+    { label: 'Output (extracted)', text: outcome.projection?.extracted_text ?? null },
+  ]
+}
 
 function Badge({ children, color }: { children: React.ReactNode; color: string }) {
   return (
@@ -72,11 +77,13 @@ function textsDiffer(a: string | null, b: string | null): boolean {
 // ---------------------------------------------------------------------------
 
 interface LineTracePanelProps {
-  trace: LineTrace
+  trace: LineOutcome
   onClose: () => void
 }
 
 export function LineTracePanel({ trace, onClose }: LineTracePanelProps) {
+  const stages = stagesOf(trace)
+  const reason = trace.decision.reason
   return (
     <div className="rounded-lg border border-slate-700/60 bg-slate-800/50 overflow-hidden">
       {/* Header */}
@@ -84,10 +91,10 @@ export function LineTracePanel({ trace, onClose }: LineTracePanelProps) {
         <div className="flex items-center gap-3 flex-wrap">
           <h3 className="font-mono text-xs font-bold text-slate-200">{trace.line_id}</h3>
           <Badge color={hyphenColor(trace.hyphen_role)}>{trace.hyphen_role ?? 'none'}</Badge>
-          <Badge color={statusColor(trace.validation_status)}>
-            {trace.validation_status ?? 'pending'}
+          <Badge color={statusColor(trace.decision.status)}>{trace.decision.status}</Badge>
+          <Badge color={pathColor(trace.projection?.rewriter_path ?? null)}>
+            {trace.projection?.rewriter_path ?? '—'}
           </Badge>
-          <Badge color={pathColor(trace.rewriter_path)}>{trace.rewriter_path ?? '—'}</Badge>
         </div>
         <button
           onClick={onClose}
@@ -109,25 +116,24 @@ export function LineTracePanel({ trace, onClose }: LineTracePanelProps) {
         </button>
       </div>
 
-      {/* Fallback reason */}
-      {trace.fallback_reason && (
+      {/* Structured decision reason (v2: code + optional detail) */}
+      {reason && (
         <div className="px-4 py-2 border-b border-slate-700/40 bg-orange-900/10">
           <span className="font-mono text-[10px] text-orange-400">
-            Fallback: {trace.fallback_reason}
+            Fallback: {reason.code}
+            {reason.detail ? `: ${reason.detail}` : ''}
           </span>
         </div>
       )}
 
       {/* 5 text stages */}
       <div className="divide-y divide-slate-800/60">
-        {STAGE_LABELS.map(({ key, label }, idx) => {
-          const text = trace[key] as string | null
-          const prevKey = idx > 0 ? STAGE_LABELS[idx - 1].key : null
-          const prevText = prevKey ? (trace[prevKey] as string | null) : null
+        {stages.map(({ label, text }, idx) => {
+          const prevText = idx > 0 ? stages[idx - 1].text : null
           const changed = idx > 0 && textsDiffer(prevText, text)
 
           return (
-            <div key={key} className="px-4 py-2.5">
+            <div key={label} className="px-4 py-2.5">
               <div className="flex items-center gap-2 mb-1">
                 <span className="font-mono text-[10px] text-slate-500 uppercase tracking-wider">
                   {idx + 1}. {label}

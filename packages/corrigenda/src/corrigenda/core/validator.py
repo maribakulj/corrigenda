@@ -5,20 +5,20 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from corrigenda.core._norm import has_line_separator, ncfold
-from corrigenda.errors import ValidationError
+from corrigenda.errors import ProposalValidationError
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
     GuardConfig,
-    LLMLineOutput,
-    LLMResponse,
+    LineProposal,
+    ProposalBatch,
 )
 
 
-class HyphenIntegrityError(ValidationError):
+class HyphenIntegrityError(ProposalValidationError):
     """Raised when an LLM response broke a hyphen-pair invariant.
 
-    Subclass of :class:`corrigenda.errors.ValidationError` (itself a
-    ``CorrectionError`` and a ``ValueError``, §8.4) so existing
+    Subclass of :class:`corrigenda.errors.ProposalValidationError` (itself a
+    ``CorrigendaError`` and a ``ValueError``, §8.4) so existing
     ``except ValueError`` catches keep working. Carrying the type
     explicitly lets the pipeline's retry classifier use ``isinstance(exc,
     HyphenIntegrityError)`` instead of substring-matching
@@ -40,9 +40,9 @@ def validate_llm_response(
     *,
     guard_config: GuardConfig = DEFAULT_GUARD_CONFIG,
     target_line_ids: list[str] | None = None,
-) -> LLMResponse:
+) -> ProposalBatch:
     """
-    Validate an LLM response dict and return a typed LLMResponse.
+    Validate an LLM response dict and return a typed ProposalBatch.
 
     Parameters
     ----------
@@ -82,23 +82,23 @@ def validate_llm_response(
         "hyphen_integrity_violation".
     """
     # --- Basic structure ---
-    # Guard against non-dict input UPFRONT with a ValidationError: the
+    # Guard against non-dict input UPFRONT with a ProposalValidationError: the
     # orchestrator's retry classifier only catches
     # `(ValueError, json.JSONDecodeError)`, so a provider returning
     # None/list/int must surface as a ValueError-shaped error to stay on
     # the standard retry path (a TypeError would bypass retries AND the
     # OCR fallback — ADR-008).
     if not isinstance(raw, dict):
-        raise ValidationError(
+        raise ProposalValidationError(
             f"LLM response is not a JSON object (got {type(raw).__name__})"
         )
 
     if "lines" not in raw:
-        raise ValidationError("Missing key 'lines' in LLM response")
+        raise ProposalValidationError("Missing key 'lines' in LLM response")
 
     lines_raw = raw["lines"]
     if not isinstance(lines_raw, list):
-        raise ValidationError("'lines' must be a list")
+        raise ProposalValidationError("'lines' must be a list")
 
     expected_set = set(expected_line_ids)
     # F8 — the ids whose output is REQUIRED. When target_line_ids is None
@@ -108,7 +108,7 @@ def validate_llm_response(
     # --- Count ---
     if target_line_ids is None:
         if len(lines_raw) != len(expected_line_ids):
-            raise ValidationError(
+            raise ProposalValidationError(
                 f"Line count mismatch: expected {len(expected_line_ids)}, got {len(lines_raw)}"
             )
     elif len(lines_raw) > len(expected_line_ids):
@@ -116,26 +116,28 @@ def validate_llm_response(
         # counting; only a response LARGER than everything sent is flagged
         # here (it necessarily contains duplicates or unknown ids anyway,
         # but the early message is clearer).
-        raise ValidationError(
+        raise ProposalValidationError(
             f"Line count mismatch: sent {len(expected_line_ids)}, got {len(lines_raw)}"
         )
 
     seen_ids: set[str] = set()
-    outputs: list[LLMLineOutput] = []
+    outputs: list[LineProposal] = []
 
     for entry in lines_raw:
         if not isinstance(entry, dict):
-            raise ValidationError(f"Each line entry must be a dict, got {type(entry)}")
+            raise ProposalValidationError(
+                f"Each line entry must be a dict, got {type(entry)}"
+            )
 
         line_id = entry.get("line_id")
         corrected_text = entry.get("corrected_text")
 
         if not line_id:
-            raise ValidationError(f"Entry missing 'line_id': {entry}")
+            raise ProposalValidationError(f"Entry missing 'line_id': {entry}")
         if line_id in seen_ids:
-            raise ValidationError(f"Duplicate line_id in response: {line_id!r}")
+            raise ProposalValidationError(f"Duplicate line_id in response: {line_id!r}")
         if line_id not in expected_set:
-            raise ValidationError(f"Unknown line_id in response: {line_id!r}")
+            raise ProposalValidationError(f"Unknown line_id in response: {line_id!r}")
 
         seen_ids.add(line_id)
 
@@ -144,21 +146,25 @@ def validate_llm_response(
         # obliterate the original word. `.strip()` catches every
         # whitespace-only case (ASCII + Unicode whitespace incl. NBSP).
         if not isinstance(corrected_text, str) or corrected_text.strip() == "":
-            raise ValidationError(f"corrected_text for {line_id!r} is empty or missing")
+            raise ProposalValidationError(
+                f"corrected_text for {line_id!r} is empty or missing"
+            )
         # Reject EVERY str.splitlines boundary, not just \n/\r:
         # U+2028/U+2029 (and \x0b \x0c \x85 \x1c-\x1e) would survive
         # clean_content into a single-line CONTENT attribute otherwise.
         if has_line_separator(corrected_text):
-            raise ValidationError(
+            raise ProposalValidationError(
                 f"corrected_text for {line_id!r} contains a line separator"
             )
 
-        outputs.append(LLMLineOutput(line_id=line_id, corrected_text=corrected_text))
+        outputs.append(LineProposal(line_id=line_id, corrected_text=corrected_text))
 
     # --- Check all REQUIRED (target) IDs are present ---
     missing = check_set - seen_ids
     if missing:
-        raise ValidationError(f"Missing line_ids in response: {sorted(missing)}")
+        raise ProposalValidationError(
+            f"Missing line_ids in response: {sorted(missing)}"
+        )
 
     # --- Hyphen integrity (over the required set — F8 keeps hyphen pairs
     # within one target set, so both members are guaranteed present) ---
@@ -173,7 +179,7 @@ def validate_llm_response(
             guard_config,
         )
 
-    return LLMResponse(lines=outputs)
+    return ProposalBatch(lines=outputs)
 
 
 def _validate_hyphen_integrity(

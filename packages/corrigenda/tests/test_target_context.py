@@ -10,6 +10,8 @@ target boundary.
 from __future__ import annotations
 
 from corrigenda.core.planner import plan_page
+from tests._pipeline_harness import apply_decisions
+
 from corrigenda.core.schemas import (
     ChunkGranularity,
     ChunkPlannerConfig,
@@ -160,13 +162,13 @@ async def test_window_run_finalizes_every_line_once():
         api_key="k",
         model="m",
         observer=_Null(),
-        output_writer=_Null(),
         config=cfg,
     )
-    await pipeline.run(
+    result = await pipeline.run(
         document_manifest=doc,
-        source_files={},  # skip XML rewrite; inspect manifests directly
+        source_files={},  # skip XML rewrite; inspect the decided view
     )
+    apply_decisions(doc, result)
     for lm in doc.pages[0].lines:
         assert lm.status in (LineStatus.CORRECTED, LineStatus.FALLBACK), (
             f"{lm.line_id} left {lm.status} (never targeted)"

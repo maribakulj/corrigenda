@@ -1,4 +1,12 @@
-"""Dry-run (apply=False) and the public CorrectionReport (spec §9)."""
+"""Every run is side-effect-free and fully reported (spec §9, ADR-011).
+
+Historically ``run(apply=False)`` was the dry-run mode: the full
+pipeline ran but the injected ``OutputWriter`` stayed untouched. Slice
+D-fin removed the writer and the flag from the engine surface — now
+EVERY run behaves that way: the engine touches no filesystem, and the
+returned :class:`CorrectionResult` (report, EditScript, corrected
+bytes) is the whole deliverable.
+"""
 
 from __future__ import annotations
 
@@ -27,87 +35,82 @@ class _IdentityProvider:
         }, None
 
 
-class _RecordingWriter:
-    def __init__(self) -> None:
-        self.corrected = 0
-        self.trace = 0
-
-    def write_corrected(self, *, source_stem: str, xml_bytes: bytes) -> None:
-        self.corrected += 1
-
-    def write_trace(self, *, traces_payload: str) -> None:
-        self.trace += 1
-
-
 class _Null:
     def on_event(self, *a, **k):
         pass
 
 
-async def _run(writer: _RecordingWriter, *, apply: bool):
+async def _run():
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
     pipeline = CorrectionPipeline.for_provider(
         _IdentityProvider(),
         api_key="k",
         model="m",
         observer=_Null(),
-        output_writer=writer,
     )
     return await pipeline.run(
         document_manifest=doc,
         source_files={_SAMPLE.name: _SAMPLE},
-        apply=apply,
     )
 
 
 @pytest.mark.asyncio
-async def test_dry_run_writes_nothing_but_reports():
-    writer = _RecordingWriter()
-    result = await _run(writer, apply=False)
-    # Writer never touched.
-    assert writer.corrected == 0
-    assert writer.trace == 0
-    # But the report is fully populated, including the in-memory rewrite.
+async def test_run_persists_nothing_but_reports(tmp_path, monkeypatch):
+    # Run from an empty cwd: if the engine wrote anything anywhere
+    # relative, it would land here.
+    monkeypatch.chdir(tmp_path)
+    result = await _run()
+    assert list(tmp_path.iterdir()) == [], "the engine must not touch the fs"
+    # The report is fully populated, including the in-memory rewrite.
     assert isinstance(result.report, CorrectionReport)
     assert result.report.total_lines > 0
     assert result.report.lines
-    assert all(ln.rewriter_path is not None for ln in result.report.lines)
-    assert all(ln.output_alto_text is not None for ln in result.report.lines)
+    assert all(
+        ln.projection is not None and ln.projection.rewriter_path is not None
+        for ln in result.report.lines
+    )
+    assert all(ln.projection.extracted_text is not None for ln in result.report.lines)
+    # And the artefact travels on the result instead.
+    assert result.corrected_files[_SAMPLE.name].startswith(b"<?xml")
 
 
-@pytest.mark.asyncio
-async def test_apply_true_persists():
-    writer = _RecordingWriter()
-    result = await _run(writer, apply=True)
-    assert writer.corrected >= 1
-    assert writer.trace == 1
-    assert result.report.report_version == "1.0"
+def test_engine_surface_has_no_writer_and_no_apply():
+    """The retirement itself, pinned: neither the constructor nor run()
+    accepts the pre-ADR-011 persistence surface."""
+    import inspect
+
+    ctor = inspect.signature(CorrectionPipeline.__init__).parameters
+    assert "output_writer" not in ctor
+    for method in (CorrectionPipeline.run, CorrectionPipeline.run_sync):
+        assert "apply" not in inspect.signature(method).parameters
+    assert (
+        "output_writer"
+        not in inspect.signature(CorrectionPipeline.for_provider).parameters
+    )
 
 
 @pytest.mark.asyncio
 async def test_report_version_is_stable():
-    writer = _RecordingWriter()
-    result = await _run(writer, apply=False)
-    assert result.report.report_version == "1.0"
+    result = await _run()
+    assert result.report.report_version == "2.0"
     # round-trips through JSON with a stable schema
     dumped = result.report.model_dump_json()
-    assert '"report_version":"1.0"' in dumped.replace(" ", "")
+    assert '"report_version":"2.0"' in dumped.replace(" ", "")
 
 
 @pytest.mark.asyncio
-async def test_dry_run_returns_normalized_edit_script():
-    """§4 — a dry run returns the normalized EditScript it would apply.
-    With the identity provider every op is a replace_line whose text equals
+async def test_run_returns_normalized_edit_script():
+    """§4 — the run returns the normalized EditScript it applied. With
+    the identity provider every op is a replace_line whose text equals
     the line's OCR text, one op per corrected line."""
     from corrigenda.core.editing import EditScript, ReplaceLine
 
-    writer = _RecordingWriter()
-    result = await _run(writer, apply=False)
+    result = await _run()
     script = result.edit_script
     assert isinstance(script, EditScript)
-    assert script.ops, "dry run must surface the EditScript"
+    assert script.ops, "the run must surface the EditScript"
     assert all(isinstance(op, ReplaceLine) for op in script.ops)
     # One op per line trace; the op text matches the projected line text.
     by_line = {op.line_id: op.text for op in script.ops}
     for tr in result.report.lines:
-        assert by_line.get(tr.line_id) == tr.source_ocr_text
+        assert by_line.get(tr.line_id) == tr.source_text

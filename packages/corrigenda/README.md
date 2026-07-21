@@ -51,14 +51,19 @@ independent external API review first; see
 - `corrigenda.errors` — one root, `CorrectionError`, over `ParseError`,
   `ValidationError` (both also `ValueError`) and `CorrectionAborted`
   (raised by the cooperative `should_abort` cancellation probe).
-- `CorrectionResult.report` — a public, versioned `CorrectionReport`
-  (full per-line trace: source → model in/out → projected → re-extracted
-  text, rewriter path, fallback reason). `run(apply=False)` executes the
-  whole pipeline without persisting anything — the report is the
-  deliverable (dry-run / preview / benchmarking).
-- `corrigenda.core.protocols` — ports (`BaseProvider`, `PipelineObserver`,
-  `OutputWriter`) that consumers implement to plug the core into their
-  own infrastructure.
+- `CorrectionResult` — the run's whole deliverable (ADR-011): the
+  corrected XML per source file (`result.corrected_files`), the
+  immutable per-line `DecisionSet` (`result.decisions`), a public,
+  versioned `CorrectionReport` (v2: one staged `LineOutcome` per line —
+  source → proposal → decision → projection, with structured fallback
+  reasons), the applied `EditScript` and the run's statistics. The
+  engine never persists anything and never mutates its input — the
+  same document can be run again or concurrently; `result.write(dir)`
+  is the one-call persistence helper, or feed the bytes to your own
+  transaction.
+- `corrigenda.core.protocols` — ports (`BaseProvider`,
+  `PipelineObserver`, `FormatAdapter`) that consumers implement to plug
+  the core into their own infrastructure.
 - PEP 561 `py.typed` marker — the package type-checks under
   `mypy --strict` and so can your integration.
 
@@ -70,7 +75,8 @@ vendors or track a server job's lifecycle; they live in the consumer.
 
 - No LLM HTTP calls (you supply a `BaseProvider` implementation, or use
   an adapter like XerLLM).
-- No filesystem I/O beyond reading source ALTO files.
+- No filesystem writes, ever — reading source ALTO files is the only
+  I/O; outputs travel on `CorrectionResult` (ADR-011).
 - No FastAPI, no SSE, no job store — those live in the `alto-server`
   package.
 
@@ -83,7 +89,6 @@ from pathlib import Path
 from corrigenda import (
     BaseProvider,
     CorrectionPipeline,
-    OutputWriter,
     PipelineObserver,
     build_document_manifest,
 )
@@ -114,17 +119,6 @@ class PrintObserver:
         print(f"{event_type}: {payload}")
 
 
-class FilesystemWriter:
-    def __init__(self, out_dir: Path):
-        self.out_dir = out_dir
-
-    def write_corrected(self, *, source_stem, xml_bytes):
-        (self.out_dir / f"{source_stem}_corrected.xml").write_bytes(xml_bytes)
-
-    def write_trace(self, *, traces_payload):
-        (self.out_dir / "trace.json").write_text(traces_payload, encoding="utf-8")
-
-
 async def main():
     src = Path("page.xml")
     doc = build_document_manifest([(src, src.name)])
@@ -139,13 +133,14 @@ async def main():
         model="mock",
         provider_name="local",
         observer=PrintObserver(),
-        output_writer=FilesystemWriter(Path("./out")),
     )
     result = await pipeline.run(
         document_manifest=doc,
         source_files={src.name: src},
         run_id="local-run",  # optional — auto-generated when omitted
     )
+    # The engine never writes; the result carries the artefacts.
+    result.write(Path("./out"))  # corrected XML + report.json
     print(f"reconciled {result.total_reconciled} hyphen pairs across {result.total_chunks} chunks")
     print(f"tokens: {result.usage.total_tokens}; report lines: {result.report.total_lines}")
 
@@ -154,10 +149,11 @@ asyncio.run(main())
 ```
 
 No event loop of your own? `pipeline.run_sync(...)` takes the same
-arguments and wraps `asyncio.run` for you. Pass `apply=False` to either
-form for a dry run (nothing written; inspect `result.report`), and
+arguments and wraps `asyncio.run` for you. Every run is effectively a
+dry run until *you* persist (`result.write(dir)` or your own sink); pass
 `should_abort=callable` for cooperative cancellation (raises
-`CorrectionAborted` between pages/chunks, before any output is written).
+`CorrectionAborted` between pages/chunks — no result, nothing to
+persist).
 
 ## Releasing
 

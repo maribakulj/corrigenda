@@ -1,11 +1,11 @@
-"""ADR-011 slice D (first half) — the result carries its artefacts.
+"""ADR-011 slice D — the result carries its artefacts.
 
-The engine computes the corrected XML on every run; before this slice
-the bytes were reachable ONLY through the injected ``OutputWriter``
-(and thus not at all on a dry run). ``CorrectionResult.corrected_files``
-makes the result the output, and ``result.write(dir)`` is the
-caller-side persistence helper — the migration path for retiring the
-writer/``apply=`` from the engine surface.
+The engine computes the corrected XML on every run; slice D put the
+bytes on ``CorrectionResult.corrected_files`` and slice D-fin retired
+the injected ``OutputWriter``/``apply=`` from the engine surface, so the
+result is now the ONLY output channel: ``result.write(dir)`` is the
+caller-side persistence helper, and hosts with their own transaction
+(the demo backend's staging writer) persist the same bytes themselves.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.formats.alto.parser import build_document_manifest
 from corrigenda.producers.rules import RulesProducer, SubstitutionRule
@@ -22,59 +23,46 @@ from corrigenda.producers.rules import RulesProducer, SubstitutionRule
 _SAMPLE = Path(__file__).parent.parent.parent.parent / "examples" / "sample.xml"
 
 
-class _Capture:
-    def __init__(self) -> None:
-        self.corrected: dict[str, bytes] = {}
-        self.traces: list[str] = []
-
+class _Null:
     def on_event(self, *a, **k):
         pass
 
-    def write_corrected(self, *, source_stem, xml_bytes):
-        self.corrected[source_stem] = xml_bytes
 
-    def write_trace(self, *, traces_payload):
-        self.traces.append(traces_payload)
-
-
-def _pipeline(writer) -> CorrectionPipeline:
+def _pipeline() -> CorrectionPipeline:
     return CorrectionPipeline(
         producer=RulesProducer([SubstitutionRule("e", "3")]),
-        observer=writer,
-        output_writer=writer,
-        provider_name="rules",
-        model="v1",
+        observer=_Null(),
+        producer_metadata=ProducerMetadata(name="rules", implementation="v1"),
     )
 
 
 @pytest.mark.asyncio
-async def test_result_carries_the_same_bytes_the_writer_got() -> None:
+async def test_result_carries_the_rewritten_bytes() -> None:
+    """The result's bytes are the decided artefact: re-extracting the
+    per-line texts from them (public round-trip helper) reproduces every
+    decision's final text, in the formats' whitespace-normal form."""
+    from corrigenda import extract_output_texts
+
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    writer = _Capture()
-    result = await _pipeline(writer).run(
+    result = await _pipeline().run(
         document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
     )
     assert set(result.corrected_files) == {_SAMPLE.name}
-    assert result.corrected_files[_SAMPLE.name] == writer.corrected[_SAMPLE.stem]
-
-
-@pytest.mark.asyncio
-async def test_dry_run_carries_artifacts_without_touching_the_writer() -> None:
-    doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    writer = _Capture()
-    result = await _pipeline(writer).run(
-        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}, apply=False
-    )
-    assert writer.corrected == {}, "dry run must persist nothing"
-    assert result.corrected_files[_SAMPLE.name].startswith(b"<?xml")
+    xml_bytes = result.corrected_files[_SAMPLE.name]
+    assert xml_bytes.startswith(b"<?xml")
+    decisions = result.decisions.decisions
+    extracted = extract_output_texts(xml_bytes, {d.ref.line_id for d in decisions})
+    for d in decisions:
+        assert " ".join(extracted[d.ref.line_id].split()) == " ".join(
+            d.final_text.split()
+        )
 
 
 @pytest.mark.asyncio
 async def test_result_write_persists_artifacts_and_report(tmp_path: Path) -> None:
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    writer = _Capture()
-    result = await _pipeline(writer).run(
-        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}, apply=False
+    result = await _pipeline().run(
+        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
     )
     out = tmp_path / "outputs"
     written = result.write(out)

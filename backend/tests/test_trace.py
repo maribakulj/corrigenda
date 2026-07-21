@@ -16,7 +16,7 @@ from app.jobs.store import JobStore
 from app.schemas import (
     CorrectionReport,
     HyphenRole,
-    LineTrace,
+    LineOutcome,
     ModelInfo,
     Provider,
 )
@@ -125,7 +125,7 @@ def _run(coro):
 def _run_job_with_traces(
     source_bytes: dict[str, bytes],
     provider=None,
-) -> tuple[str, dict[str, LineTrace]]:
+) -> tuple[str, dict[str, LineOutcome]]:
     """Run a job and return (job_id, traces_dict)."""
     if provider is None:
         provider = IdentityProvider()
@@ -174,11 +174,13 @@ class TestTraceNormalLine:
 
         # Pick any line
         t = next(iter(traces.values()))
-        assert t.source_ocr_text is not None
-        assert t.model_input_text is not None
-        assert t.model_corrected_text is not None
-        assert t.projected_text is not None
-        assert t.output_alto_text is not None
+        assert t.source_text is not None
+        assert t.proposal is not None
+        assert t.proposal.input_text is not None
+        assert t.proposal.output_text is not None
+        assert t.decision.final_text is not None
+        assert t.projection is not None
+        assert t.projection.extracted_text is not None
 
     def test_unchanged_line_texts_equal(self):
         """For an unchanged line: source == projected == output."""
@@ -186,10 +188,8 @@ class TestTraceNormalLine:
             {"sample.xml": SAMPLE_XML.read_bytes()},
         )
         for t in traces.values():
-            assert t.source_ocr_text == t.projected_text, f"{t.line_id}: source_ocr != projected"
-            assert t.source_ocr_text == t.output_alto_text, (
-                f"{t.line_id}: source_ocr != output_alto"
-            )
+            assert t.source_text == t.decision.final_text, f"{t.line_id}: source != final"
+            assert t.source_text == t.projection.extracted_text, f"{t.line_id}: source != extracted"
 
     def test_rewriter_path_set(self):
         """Each line has a rewriter_path."""
@@ -197,12 +197,12 @@ class TestTraceNormalLine:
             {"sample.xml": SAMPLE_XML.read_bytes()},
         )
         for t in traces.values():
-            assert t.rewriter_path in (
+            assert t.projection.rewriter_path in (
                 "untouched",
                 "subs_only",
                 "fast_path",
                 "slow_path",
-            ), f"{t.line_id}: bad rewriter_path={t.rewriter_path}"
+            ), f"{t.line_id}: bad rewriter_path={t.projection.rewriter_path}"
 
 
 # ===========================================================================
@@ -226,10 +226,10 @@ class TestTraceCorrectionAccepted:
         )
         t = traces[first_line.line_id]
 
-        assert t.source_ocr_text == first_line.ocr_text
-        assert t.model_corrected_text == corrected_text
-        assert t.projected_text == corrected_text
-        assert t.validation_status == "corrected"
+        assert t.source_text == first_line.ocr_text
+        assert t.proposal.output_text == corrected_text
+        assert t.decision.final_text == corrected_text
+        assert t.decision.status == "corrected"
 
 
 # ===========================================================================
@@ -245,16 +245,16 @@ class TestTraceFallback:
             provider=DriftProvider(),
         )
         for t in traces.values():
-            # model_corrected should be the inflated text
-            assert "EXTRA" in (t.model_corrected_text or ""), (
-                f"{t.line_id}: model_corrected should contain drift text"
+            # the proposal stage should carry the inflated text
+            assert "EXTRA" in ((t.proposal and t.proposal.output_text) or ""), (
+                f"{t.line_id}: proposal output should contain drift text"
             )
-            # projected should be the original OCR (fallback)
-            assert t.projected_text == t.source_ocr_text, (
-                f"{t.line_id}: projected should fall back to source"
+            # the decision should be the original OCR (fallback)
+            assert t.decision.final_text == t.source_text, (
+                f"{t.line_id}: decision should fall back to source"
             )
-            assert t.validation_status == "fallback"
-            assert t.fallback_reason is not None
+            assert t.decision.status == "fallback"
+            assert t.decision.reason is not None
             # The drift can be caught by the chunk-level validator
             # (all_attempts_exhausted after downgrade) or, for non-hyphen
             # lines whose LLM call succeeds, by the per-line acceptance
@@ -269,8 +269,8 @@ class TestTraceFallback:
                 "closer_to_",
                 "absorbs_",
             )
-            assert any(r in t.fallback_reason for r in accepted_reasons), (
-                f"{t.line_id}: unexpected fallback_reason {t.fallback_reason!r}"
+            assert any(r in t.decision.reason.code for r in accepted_reasons), (
+                f"{t.line_id}: unexpected reason {t.decision.reason!r}"
             )
 
 
@@ -290,7 +290,7 @@ class TestTraceJsonFile:
         assert trace_path.exists()
 
         data = json.loads(trace_path.read_text())
-        assert data["report_version"] == "1.0"
+        assert data["report_version"] == "2.0"
         assert data["run_id"] == job_id  # runner feeds run_id=job_id
         assert data["total_lines"] > 0
         assert len(data["lines"]) == data["total_lines"]
@@ -382,13 +382,15 @@ class TestTraceHyphenLines:
         total_lines = sum(len(p.lines) for p in pages)
         assert len(traces) == total_lines
 
-        # All traces have 5 states
+        # All outcomes carry every stage
         for t in traces.values():
-            assert t.source_ocr_text is not None
-            assert t.model_input_text is not None
-            assert t.model_corrected_text is not None
-            assert t.projected_text is not None
-            assert t.output_alto_text is not None
+            assert t.source_text is not None
+            assert t.proposal is not None
+            assert t.proposal.input_text is not None
+            assert t.proposal.output_text is not None
+            assert t.decision.final_text is not None
+            assert t.projection is not None
+            assert t.projection.extracted_text is not None
 
         # PART1 and BOTH lines have correct hyphen_role
         line_by_id = {lm.line_id: lm for page in pages for lm in page.lines}
@@ -401,8 +403,8 @@ class TestTraceHyphenLines:
         nec = traces.get("PAG_00000002_TL000014")
         if nec is not None:
             assert nec.hyphen_role == "HypPart1"
-            assert "néces-" in nec.source_ocr_text
-            assert nec.projected_text == nec.source_ocr_text  # identity provider
+            assert "néces-" in nec.source_text
+            assert nec.decision.final_text == nec.source_text  # identity provider
 
         # Specific check: TL000017 is BOTH
         tl17 = traces.get("PAG_00000002_TL000017")
@@ -418,6 +420,6 @@ class TestTraceHyphenLines:
             {"X0000002.xml": X0000002_PATH.read_bytes()},
         )
         for t in traces.values():
-            assert t.source_ocr_text == t.output_alto_text, (
-                f"{t.line_id}: source={t.source_ocr_text!r} != output={t.output_alto_text!r}"
+            assert t.source_text == t.projection.extracted_text, (
+                f"{t.line_id}: source={t.source_text!r} != output={t.projection.extracted_text!r}"
             )

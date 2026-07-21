@@ -1,13 +1,13 @@
-"""Immutable decision record of a run (ADR-011, slice C).
+"""Immutable decision record of a run (ADR-011, slices C+E).
 
-The engine still expresses its decisions by mutating the manifests
-(until ADR-011 slice E); this module defines THE decision model and
-materializes it exactly once — after the global consistency pass, when
-every line's decision is final. Readers that only need "what did the
-run decide" (the projection invariant, fallback accounting, and later
-the report) consume the :class:`DecisionSet` instead of re-walking the
-mutable manifests: it is the seam slice E flips when the manifests
-become immutable and decisions stop living on them.
+The engine expresses its decisions by mutating its PRIVATE working copy
+of the manifests (since slice E the caller's document is never
+touched); this module defines THE decision model and materializes it
+exactly once — after the global consistency pass, when every line's
+decision is final. Everything downstream of the run reads the
+:class:`DecisionSet`: the projection invariant, fallback accounting,
+the final EditScript, and — via :attr:`CorrectionResult.decisions` —
+the caller itself.
 
 Materialization enforces terminality: a ``PENDING`` line at this point
 is an engine bug — a decision path that forgot its lines — never an
@@ -24,7 +24,16 @@ from dataclasses import dataclass
 from functools import cached_property
 
 from corrigenda.core.identity import LineRef, line_ref
-from corrigenda.core.schemas import DocumentManifest, LineStatus, LineTrace
+from corrigenda.core.schemas import (
+    DecisionReason,
+    DecisionStage,
+    DocumentManifest,
+    LineOutcome,
+    LineStatus,
+    LineTrace,
+    ProjectionStage,
+    ProposalStage,
+)
 
 
 @dataclass(frozen=True)
@@ -75,7 +84,7 @@ def derive_decision_set(
     document_manifest: DocumentManifest,
     traces: Mapping[LineRef, LineTrace],
 ) -> DecisionSet:
-    """Materialize the run's decisions from the (still-mutable) manifests.
+    """Materialize the run's decisions from the run's manifest copy.
 
     Called once, after the global consistency pass — the point where no
     later pass may change a decision. Refuses a ``PENDING`` line: an
@@ -120,8 +129,75 @@ def derive_decision_set(
     return DecisionSet(decisions=tuple(decisions))
 
 
+def _structured_reason(raw: str | None) -> DecisionReason | None:
+    """Split the run's ``"code: detail"`` reason convention into the
+    report's structured motif. The code half uses the SAME normalization
+    as :meth:`DecisionSet.fallback_reason_counts`, so aggregating report
+    reasons by ``code`` reproduces ``CorrectionResult.fallback_reasons``.
+    """
+    if not raw:
+        return None
+    code, _, detail = raw.partition(":")
+    return DecisionReason(code=code.strip(), detail=detail.strip() or None)
+
+
+def build_line_outcomes(
+    decisions: DecisionSet,
+    traces: Mapping[LineRef, LineTrace],
+) -> list[LineOutcome]:
+    """Project the run into the report's staged per-line outcomes (§9 v2).
+
+    The DecisionSet is the authority for the terminal stage (P3.5 — the
+    report builder reads decisions, not manifests); the working traces
+    contribute the producer stage and the projection stage, each absent
+    when the line never reached them (no producer call / no rendered
+    output file).
+    """
+    outcomes: list[LineOutcome] = []
+    for d in decisions.decisions:
+        trace = traces.get(d.ref)
+        proposal: ProposalStage | None = None
+        projection: ProjectionStage | None = None
+        hyphen_role: str | None = None
+        if trace is not None:
+            hyphen_role = trace.hyphen_role
+            if trace.model_input_text is not None or (
+                trace.model_corrected_text is not None
+            ):
+                proposal = ProposalStage(
+                    input_text=trace.model_input_text,
+                    output_text=trace.model_corrected_text,
+                )
+            if trace.output_alto_text is not None or trace.rewriter_path is not None:
+                projection = ProjectionStage(
+                    extracted_text=trace.output_alto_text,
+                    rewriter_path=trace.rewriter_path,
+                    # ADR-012 — per-decision attribution of the rewrite's
+                    # granularity losses (None when nothing was lost).
+                    losses=trace.projection_losses,
+                )
+        outcomes.append(
+            LineOutcome(
+                line_id=d.ref.line_id,
+                page_id=d.ref.page_id,
+                hyphen_role=hyphen_role,
+                source_text=d.source_text,
+                proposal=proposal,
+                decision=DecisionStage(
+                    status=d.status.value,
+                    final_text=d.final_text,
+                    reason=_structured_reason(d.fallback_reason),
+                    features=trace.proposal_features if trace else None,
+                ),
+                projection=projection,
+            )
+        )
+    return outcomes
+
+
 __all__ = [
     "DecisionSet",
     "LineDecision",
+    "build_line_outcomes",
     "derive_decision_set",
 ]

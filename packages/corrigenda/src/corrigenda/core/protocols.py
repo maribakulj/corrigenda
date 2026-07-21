@@ -2,27 +2,28 @@
 
 Structural-typing contracts decoupling the pipeline from its
 infrastructure: the LLM client (``BaseProvider``), the event sink
-(``PipelineObserver``), the persistence target (``OutputWriter``) and —
-since the §3 reorganisation — the FORMAT seam (``FormatAdapter``),
-through which the pipeline reads/writes concrete transcription XML
-without importing any format module (core stays lxml-free by
-construction; the import-contract test enforces it).
+(``PipelineObserver``) and — since the §3 reorganisation — the FORMAT
+seam (``FormatAdapter``), through which the pipeline reads/writes
+concrete transcription XML without importing any format module (core
+stays lxml-free by construction; the import-contract test enforces it).
+There is no persistence port: the engine never writes (ADR-011) — the
+corrected artefacts travel on ``CorrectionResult`` and the caller
+persists them.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from corrigenda.core.editing import EditScript
 from corrigenda.core.schemas import (
     ImageRef,
-    LLMUserPayload,
+    CorrectionRequest,
     ModelInfo,
     PageManifest,
-    RetryPolicy,
     Usage,
 )
 from corrigenda.errors import ConfigurationError, ProviderError
@@ -68,12 +69,12 @@ class ProviderPermanentError(ProviderError):
     :class:`~corrigenda.errors.CorrectionAborted` does — before any
     output is written.
 
-    A :class:`~corrigenda.errors.CorrectionError` (via ``ProviderError``)
+    A :class:`~corrigenda.errors.CorrigendaError` (via ``ProviderError``)
     so the single-root catch contract holds, but deliberately NOT a
     ``ValueError`` (the retry classifier routes ``ValueError`` to the
     malformed-output retry branch). Fatality is enforced by the pipeline's
     explicit ``except ProviderPermanentError: raise`` handlers, which sit
-    BEFORE every branch that absorbs recoverable ``CorrectionError``s —
+    BEFORE every branch that absorbs recoverable ``CorrigendaError``s —
     the hierarchy states ownership, the handler ordering states severity.
     """
 
@@ -82,8 +83,8 @@ class ProviderPermanentError(ProviderError):
 
 
 @runtime_checkable
-class BaseProvider(Protocol):
-    """LLM client contract used by the pipeline.
+class StructuredCompletionClient(Protocol):
+    """The ONLY LLM capability the core consumes (P3.7 split).
 
     Implementations call out to their provider's API (or run a local
     model) and return the JSON shape declared by ``OUTPUT_JSON_SCHEMA``.
@@ -93,8 +94,6 @@ class BaseProvider(Protocol):
     raw httpx/SDK exception is treated as a bug and FAILS the run
     instead of being retried.
     """
-
-    async def list_models(self, api_key: str) -> list[ModelInfo]: ...
 
     async def complete_structured(
         self,
@@ -115,6 +114,89 @@ class BaseProvider(Protocol):
 
 
 @runtime_checkable
+class ModelCatalog(Protocol):
+    """Model discovery — APPLICATION vocabulary (P3.7 split).
+
+    The engine never lists models: a run is handed one resolved model
+    string. Catalog lookups belong to the host (the demo backend's
+    ``/providers/{p}/models`` endpoint); the protocol lives here only so
+    the split is nameable on one seam.
+    """
+
+    async def list_models(self, api_key: str) -> list[ModelInfo]: ...
+
+
+@runtime_checkable
+class BaseProvider(StructuredCompletionClient, ModelCatalog, Protocol):
+    """A full vendor client: completions + catalog.
+
+    Convenience composition for hosts whose provider objects do both
+    (the demo backend's). The CORE only ever requires
+    :class:`StructuredCompletionClient` — ``LLMEditProducer`` and
+    ``CorrectionPipeline.for_provider`` accept a client with no
+    ``list_models`` at all.
+    """
+
+
+@dataclass(frozen=True)
+class ProducerOptions:
+    """Per-call envelope the engine hands a producer (P3.7, §5.1).
+
+    Replaces the full ``RetryPolicy`` on the ``produce()`` seam: the
+    ENGINE owns the retry/downgrade strategy — a producer only needs to
+    know about THIS call. ``temperature`` is already resolved for the
+    attempt (ramp and hyphen 0.0-pin decided engine-side);
+    ``deadline_seconds`` is an optional wall-clock budget hint;
+    ``should_abort`` is the run's cooperative cancellation probe — a
+    producer doing long I/O SHOULD poll it (or wire it to its HTTP
+    client) and abandon the call by raising
+    :class:`~corrigenda.errors.CorrectionAborted` when it trips,
+    instead of the engine only noticing between chunks.
+    """
+
+    attempt: int = 1
+    temperature: float = 0.0
+    deadline_seconds: float | None = None
+    should_abort: Callable[[], bool] | None = None
+
+    def cancelled(self) -> bool:
+        """True when the run asked to abort — poll around long I/O."""
+        return self.should_abort is not None and self.should_abort()
+
+
+@dataclass(frozen=True)
+class ProducerMetadata:
+    """Provenance identity of an :class:`EditProducer` (P3.7, §11).
+
+    Replaces the bare ``provider_name``/``model`` strings with GENERIC
+    producer vocabulary — a rules engine has no "model". ``name`` says
+    WHO produced the edits (``"openai"``, ``"rules"``, …);
+    ``implementation`` names the concrete engine behind the name when
+    one exists (an LLM's model string, a rules-set label);
+    ``configuration_fingerprint`` is the producer-side configuration
+    digest (prompt/schema hash, rules-table hash) — the counterpart of
+    the pipeline's policy :meth:`~CorrectionPipeline.config_fingerprint`.
+
+    A producer MAY declare its own identity via a ``metadata`` attribute
+    (the same optional-attribute convention as
+    ``requires_full_coverage``); an explicit ``producer_metadata`` on the
+    :class:`CorrectionPipeline` constructor wins over the declaration.
+    """
+
+    name: str = "unknown"
+    version: str | None = None
+    implementation: str | None = None
+    configuration_fingerprint: str | None = None
+
+    def provenance_labels(self) -> tuple[str, str]:
+        """The ``(provider, model)`` label pair stamped into corrected
+        XML — the format seam predates the generic vocabulary and keeps
+        its historical two-string surface, so an implementation-less
+        producer stamps ``"unknown"`` exactly as the bare strings did."""
+        return self.name, self.implementation or "unknown"
+
+
+@runtime_checkable
 class EditProducer(Protocol):
     """Producer contract of the edit protocol (§5.1).
 
@@ -130,13 +212,19 @@ class EditProducer(Protocol):
     payload. A producer with ``wants_image=True`` run without a matching
     ``page_images`` entry is a start-up error (:func:`require_page_images`),
     never a silent image-less call.
+
+    Optional declared surfaces (read via ``getattr``, absent is fine —
+    deliberately NOT protocol members so third-party producers and the
+    ``isinstance`` check stay unaffected): ``requires_full_coverage``
+    (bool, default ``True``) and ``metadata``
+    (:class:`ProducerMetadata` — the producer's provenance identity).
     """
 
     wants_geometry: bool
     wants_image: bool
 
     async def produce(
-        self, payload: LLMUserPayload, *, policy: RetryPolicy
+        self, payload: CorrectionRequest, *, options: ProducerOptions
     ) -> tuple[EditScript, Usage | None]: ...
 
 
@@ -190,20 +278,6 @@ class PipelineObserver(Protocol):
     def on_event(self, event_type: str, payload: dict[str, Any]) -> None: ...
 
 
-@runtime_checkable
-class OutputWriter(Protocol):
-    """Persists corrected ALTO XML and the job trace.
-
-    Pure I/O: the writer takes pre-computed bytes/strings and persists
-    them. Computing what to write (rewriting, trace assembly) is the
-    pipeline's responsibility.
-    """
-
-    def write_corrected(self, *, source_stem: str, xml_bytes: bytes) -> None: ...
-
-    def write_trace(self, *, traces_payload: str) -> None: ...
-
-
 class RewriteMetrics(Protocol):
     """Structural view of a format rewriter's per-path line counts."""
 
@@ -232,6 +306,10 @@ class RewriteResult:
     rewriter_paths: dict[str, str]
     texts: dict[str, str]
     losses: dict[str, int] = field(default_factory=dict)
+    #: P3.8 (ADR-012) — per-line attribution of ``losses``: line_id →
+    #: that line's own loss counters (only lines that lost something
+    #: appear). Summing the values reproduces ``losses``.
+    losses_by_line: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def __iter__(self) -> Iterator[Any]:
         """Transitional positional unpacking — the historical rewriter
@@ -273,9 +351,12 @@ class FormatAdapter(Protocol):
 __all__ = [
     "BaseProvider",
     "EditProducer",
+    "ModelCatalog",
+    "StructuredCompletionClient",
     "FormatAdapter",
-    "OutputWriter",
     "PipelineObserver",
+    "ProducerMetadata",
+    "ProducerOptions",
     "ProviderTransientError",
     "ProviderPermanentError",
     "RewriteMetrics",

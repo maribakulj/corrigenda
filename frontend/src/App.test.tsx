@@ -75,15 +75,11 @@ const TRACE: TraceData = {
     {
       line_id: 'L1',
       page_id: 'P1',
-      source_ocr_text: 'ancien texte',
-      model_input_text: 'ancien texte',
-      model_corrected_text: 'nouveau texte',
-      projected_text: 'nouveau texte',
-      output_alto_text: 'nouveau texte',
       hyphen_role: null,
-      rewriter_path: 'fast_path',
-      validation_status: 'corrected',
-      fallback_reason: null,
+      source_text: 'ancien texte',
+      proposal: { input_text: 'ancien texte', output_text: 'nouveau texte' },
+      decision: { status: 'corrected', final_text: 'nouveau texte', reason: null, features: null },
+      projection: { extracted_text: 'nouveau texte', rewriter_path: 'fast_path' },
     },
   ],
 }
@@ -209,11 +205,11 @@ describe('App — happy path', () => {
 
     // Clicking a diff row opens its trace panel.
     fireEvent.click(screen.getByText('L1'))
-    await screen.findByText(/1\. Source OCR/)
+    await screen.findByText(/1\. Source/)
 
     // Closing it returns to the hint.
     fireEvent.click(screen.getByRole('button', { name: /close trace panel/i }))
-    expect(screen.queryByText(/1\. Source OCR/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/1\. Source/)).not.toBeInTheDocument()
     await screen.findByText(/click a line above/i)
   })
 

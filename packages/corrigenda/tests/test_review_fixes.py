@@ -310,14 +310,13 @@ def test_duplicate_revert_extends_to_hyphen_partner():
     """Reverting one member of a reconciled pair used to leave a mixed
     OCR+corrected pair — the exact state reconcile_hyphen_pair forbids."""
     from corrigenda.core.pipeline import CorrectionPipeline
-    from tests._pipeline_harness import DictProvider, RecordingObserver, _NoopWriter
+    from tests._pipeline_harness import DictProvider, RecordingObserver
 
     pipeline = CorrectionPipeline.for_provider(
         DictProvider({}),
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
     )
     part1 = _line(0, "mot coupe-")
     part2 = _line(1, "suite du mot")
@@ -349,14 +348,13 @@ def test_duplicate_revert_extends_to_CROSS_PAGE_hyphen_partner():
     fix the page-local ``pid in line_by_id`` guard silently skipped it,
     leaving the reconciled cross-page pair half OCR / half corrected."""
     from corrigenda.core.pipeline import CorrectionPipeline
-    from tests._pipeline_harness import DictProvider, RecordingObserver, _NoopWriter
+    from tests._pipeline_harness import DictProvider, RecordingObserver
 
     pipeline = CorrectionPipeline.for_provider(
         DictProvider({}),
         api_key="k",
         model="m",
         observer=RecordingObserver(),
-        output_writer=_NoopWriter(),
     )
     part1 = _line(0, "mot coupe-")
     part2 = _line(1, "suite du mot")

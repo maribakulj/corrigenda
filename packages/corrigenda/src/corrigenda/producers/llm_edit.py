@@ -1,4 +1,4 @@
-"""Adapt a text ``BaseProvider`` (LLM) to the ``EditProducer`` contract.
+"""Adapt a ``StructuredCompletionClient`` (LLM) to the ``EditProducer`` contract.
 
 Since the §5.1 resorption the LLM is *an implementation* of the edit
 protocol, not the protocol itself: the pipeline only ever talks to an
@@ -24,16 +24,20 @@ from __future__ import annotations
 from typing import Any
 
 from corrigenda.core.editing import EditScript, ReplaceLine
-from corrigenda.core.protocols import BaseProvider
-from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
-from corrigenda.producers.llm import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
+from corrigenda.core.protocols import (
+    ProducerMetadata,
+    ProducerOptions,
+    StructuredCompletionClient,
+)
+from corrigenda.core.schemas import CorrectionRequest, Usage
+from corrigenda.integrations.llm import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
 
 
 class LLMEditProducer:
-    """Wrap a :class:`BaseProvider` as an :class:`EditProducer`.
+    """Wrap a :class:`StructuredCompletionClient` as an :class:`EditProducer`.
 
     ``system_prompt`` / ``output_schema`` default to the canonical LLM
-    contract (:mod:`corrigenda.producers.llm`); inject to experiment.
+    contract (:mod:`corrigenda.integrations.llm`); inject to experiment.
     """
 
     wants_geometry: bool = False
@@ -45,7 +49,7 @@ class LLMEditProducer:
 
     def __init__(
         self,
-        provider: BaseProvider,
+        provider: StructuredCompletionClient,
         api_key: str,
         model: str,
         *,
@@ -59,9 +63,14 @@ class LLMEditProducer:
         self._output_schema = (
             OUTPUT_JSON_SCHEMA if output_schema is None else output_schema
         )
+        #: Declared provenance (P3.7-4) — the adapter cannot know the
+        #: vendor's marketing name, so ``name`` stays the generic "llm";
+        #: ``for_provider(provider_name=…)`` overrides it with the
+        #: caller's label via explicit constructor metadata.
+        self.metadata = ProducerMetadata(name="llm", implementation=model)
 
     async def produce(
-        self, payload: LLMUserPayload, *, policy: RetryPolicy
+        self, payload: CorrectionRequest, *, options: ProducerOptions
     ) -> tuple[EditScript, Usage | None]:
         raw, usage = await self._provider.complete_structured(
             api_key=self._api_key,
@@ -71,9 +80,9 @@ class LLMEditProducer:
             # for byte (None hyphen/vision fields never reached providers).
             user_payload=payload.model_dump(exclude_none=True),
             json_schema=self._output_schema,
-            # The pipeline drives the retry ramp: it hands us a policy whose
-            # first temperature IS this attempt's temperature.
-            temperature=policy.temperature_for(1),
+            # The pipeline drives the retry ramp: the envelope carries
+            # this attempt's resolved temperature (P3.7).
+            temperature=options.temperature,
         )
         ops: list[ReplaceLine] = []
         lines = raw.get("lines", []) if isinstance(raw, dict) else []

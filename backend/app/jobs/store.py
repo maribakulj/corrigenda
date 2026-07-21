@@ -23,12 +23,12 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
 
+from app.jobs.events import JobEventType
 from app.schemas import (
     CorrectionReport,
     DocumentManifest,
     JobManifest,
     JobStatus,
-    PipelineEventType,
     Provider,
     SSEEvent,
 )
@@ -379,7 +379,7 @@ class JobStore:
                                 return
                         yield self._synthetic_terminal(job_id, job)
                         return
-                    yield SSEEvent(event=PipelineEventType.KEEPALIVE, data={})
+                    yield SSEEvent(event=JobEventType.KEEPALIVE, data={})
         finally:
             self.unsubscribe(job_id, queue)
 

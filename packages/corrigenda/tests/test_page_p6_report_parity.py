@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.schemas import CorrectionReport, HyphenRole
@@ -141,7 +142,7 @@ def test_metrics_as_losses_and_report_field(tmp_path: Path):
     assert "hyphen_preserved" not in losses  # zero counters omitted
 
     report = CorrectionReport(run_id="r1", total_lines=1, format_losses=losses)
-    assert report.report_version == "1.0"  # additive field, no bump
+    assert report.report_version == "2.0"  # additive field, no bump past v2
     assert report.format_losses == losses
     dumped = report.model_dump()
     assert dumped["format_losses"]["words_dropped"] == 2
@@ -195,7 +196,7 @@ class _WordSplitter:
     wants_image = False
     requires_full_coverage = False
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         ops = [
             ReplaceLine(line_id=ln.line_id, text="helo wr ld")
             for ln in payload.lines
@@ -216,13 +217,9 @@ async def test_run_report_carries_the_rewrite_losses(tmp_path: Path) -> None:
     pipeline = CorrectionPipeline(
         producer=_WordSplitter(),
         observer=_Null(),
-        output_writer=_Null(),
-        provider_name="x",
-        model="m",
+        producer_metadata=ProducerMetadata(name="x", implementation="m"),
     )
-    result = await pipeline.run(
-        document_manifest=doc, source_files={p.name: p}, apply=False
-    )
+    result = await pipeline.run(document_manifest=doc, source_files={p.name: p})
     losses = result.report.format_losses
     assert losses is not None, "the run must surface the rewrite losses"
     assert losses["words_dropped"] == 2

@@ -1,12 +1,12 @@
 """corrigenda error hierarchy (SPECS_LIB_V2 §8.4).
 
-A single root, ``CorrectionError``, sits above every error the library
-raises so consumers can ``except CorrectionError`` once::
+A single root, ``CorrigendaError``, sits above every error the library
+raises so consumers can ``except CorrigendaError`` once::
 
-    CorrectionError
+    CorrigendaError
     ├── ParseError          (also ValueError)
     │   └── DuplicateIdError       — ambiguous identities in source/manifest
-    ├── ValidationError     (also ValueError) — producer response invalid
+    ├── ProposalValidationError  (also ValueError) — producer response invalid
     │   └── HyphenIntegrityError   (defined in pipeline.validator)
     ├── ProviderError              — provider errors (core.protocols)
     │   ├── ProviderTransientError — recoverable transport failure
@@ -14,6 +14,15 @@ raises so consumers can ``except CorrectionError`` once::
     ├── ConfigurationError         — contradictory/incomplete composition
     ├── ProjectionError            — output artefact ≠ decisions
     └── CorrectionAborted
+
+Naming (P3.11): the root is ``CorrigendaError`` — named for the LIBRARY,
+like ``requests.RequestException`` — and the producer-response error is
+``ProposalValidationError`` (it validates producer *proposals*, P3.7
+vocabulary; the bare ``ValidationError`` collided with pydantic's in
+every consumer's imports). ``CorrectionError`` and ``ValidationError``
+remain as deprecation ALIASES of the same classes for the 0.9.x series —
+``except`` clauses, ``isinstance`` and subclasses behave identically
+through either name — and disappear at the P3.11 top-level reduction.
 
 The value-shaped errors additionally inherit ``ValueError`` so the bare
 ``ValueError`` raises that predate this hierarchy keep working under
@@ -37,14 +46,14 @@ from __future__ import annotations
 from typing import ClassVar
 
 
-class CorrectionError(Exception):
+class CorrigendaError(Exception):
     """Base class for every error raised by corrigenda (§8.4)."""
 
     code: ClassVar[str] = "correction_error"
     retryable: ClassVar[bool] = False
 
 
-class ParseError(CorrectionError, ValueError):
+class ParseError(CorrigendaError, ValueError):
     """A source document could not be parsed into a manifest.
 
     Inherits ``ValueError`` for backwards compatibility with call sites
@@ -65,7 +74,7 @@ class DuplicateIdError(ParseError):
     a correction to the wrong physical line. The library refuses such input
     explicitly instead of guessing.
 
-    Inherits :class:`ParseError` (hence ``CorrectionError`` and
+    Inherits :class:`ParseError` (hence ``CorrigendaError`` and
     ``ValueError``) so existing ``except ParseError`` call sites keep
     working.
     """
@@ -73,7 +82,7 @@ class DuplicateIdError(ParseError):
     code: ClassVar[str] = "duplicate_identity"
 
 
-class ValidationError(CorrectionError, ValueError):
+class ProposalValidationError(CorrigendaError, ValueError):
     """A producer (LLM / rules / VLM) response failed validation.
 
     Raised by :func:`corrigenda.core.validator.validate_llm_response`
@@ -88,12 +97,12 @@ class ValidationError(CorrectionError, ValueError):
     retryable: ClassVar[bool] = True
 
 
-class ProviderError(CorrectionError):
+class ProviderError(CorrigendaError):
     """Base for failures reported by a producer's underlying provider.
 
     The concrete classes live in :mod:`corrigenda.core.protocols` next to
     the ``BaseProvider`` contract that raises them; this base anchors them
-    under the single ``CorrectionError`` root. Carries the originating
+    under the single ``CorrigendaError`` root. Carries the originating
     HTTP status when there was one.
     """
 
@@ -104,7 +113,7 @@ class ProviderError(CorrectionError):
         self.status_code = status_code
 
 
-class ConfigurationError(CorrectionError):
+class ConfigurationError(CorrigendaError):
     """The run was assembled from contradictory or incomplete pieces.
 
     Raised before any correction work begins (or before any output is
@@ -117,7 +126,7 @@ class ConfigurationError(CorrectionError):
     code: ClassVar[str] = "configuration_error"
 
 
-class ProjectionError(CorrectionError):
+class ProjectionError(CorrigendaError):
     """The rewritten XML does not say what the run decided.
 
     Raised when the text re-extracted from the output artefact diverges
@@ -131,7 +140,7 @@ class ProjectionError(CorrectionError):
     code: ClassVar[str] = "projection_mismatch"
 
 
-class CorrectionAborted(CorrectionError):
+class CorrectionAborted(CorrigendaError):
     """Raised when ``should_abort()`` requested cancellation (F10).
 
     The pipeline probes the caller-supplied ``should_abort`` callback
@@ -145,13 +154,24 @@ class CorrectionAborted(CorrectionError):
     code: ClassVar[str] = "cancelled"
 
 
+# --- 0.9.x deprecation aliases (P3.11) --------------------------------------
+# Plain assignments: same class objects under both names, so `except`,
+# `isinstance` and subclassing behave identically whichever name a
+# consumer uses. Removed at the P3.11 top-level reduction (1.0).
+CorrectionError = CorrigendaError
+ValidationError = ProposalValidationError
+
+
 __all__ = [
-    "CorrectionError",
+    "CorrigendaError",
     "ParseError",
     "DuplicateIdError",
-    "ValidationError",
+    "ProposalValidationError",
     "ProviderError",
     "ConfigurationError",
     "ProjectionError",
     "CorrectionAborted",
+    # 0.9.x deprecation aliases (P3.11) — removed at the top-level reduction.
+    "CorrectionError",
+    "ValidationError",
 ]

@@ -17,12 +17,20 @@ import warnings
 from collections.abc import Callable
 from pathlib import Path
 
-from corrigenda import CorrectionAborted, CorrectionPipeline, CorrectionResult, sanitize_error
+from corrigenda import (
+    CorrectionAborted,
+    CorrectionPipeline,
+    CorrectionResult,
+    LineRef,
+    sanitize_error,
+)
+from corrigenda.core.events import ReconcileStats
 from corrigenda.core.protocols import ProviderPermanentError
 
+from app.jobs.events import JobEventType
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
 from app.protocols import BaseProvider, JobStore, OutputWriter
-from app.schemas import DocumentManifest, JobStatus, PipelineEventType
+from app.schemas import DocumentManifest, JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -158,20 +166,17 @@ class JobRunner:
             # Job-end reconcile_stats observability event — emitted just
             # BEFORE the terminal `completed` so subscribers that exit
             # on `completed` still receive it.
-            self.job_store.emit(
-                job_id,
-                PipelineEventType.RECONCILE_STATS,
-                {
-                    "coherent": result.reconcile_metrics.coherent,
-                    "fallback": result.reconcile_metrics.fallback,
-                    "neutralised": result.reconcile_metrics.neutralised,
-                    "total": result.reconcile_metrics.total,
-                },
+            reconcile_event = ReconcileStats(
+                coherent=result.reconcile_metrics.coherent,
+                fallback=result.reconcile_metrics.fallback,
+                neutralised=result.reconcile_metrics.neutralised,
+                total=result.reconcile_metrics.total,
             )
+            self.job_store.emit(job_id, reconcile_event.type, reconcile_event.payload())
 
             self.job_store.emit(
                 job_id,
-                PipelineEventType.COMPLETED,
+                JobEventType.COMPLETED,
                 {
                     "job_id": job_id,
                     "total_lines": document_manifest.total_lines,
@@ -200,7 +205,7 @@ class JobRunner:
                 duration_seconds=elapsed,
             )
             self.job_store.emit(
-                job_id, PipelineEventType.FAILED, {"job_id": job_id, "error": safe_error}
+                job_id, JobEventType.FAILED, {"job_id": job_id, "error": safe_error}
             )
 
         except CorrectionAborted:
@@ -215,7 +220,7 @@ class JobRunner:
                 status=JobStatus.CANCELLED,
                 duration_seconds=elapsed,
             )
-            self.job_store.emit(job_id, PipelineEventType.CANCELLED, {"job_id": job_id})
+            self.job_store.emit(job_id, JobEventType.CANCELLED, {"job_id": job_id})
 
         except asyncio.CancelledError:
             self._discard_outputs(output_writer)
@@ -237,7 +242,7 @@ class JobRunner:
                 duration_seconds=elapsed,
             )
             self.job_store.emit(
-                job_id, PipelineEventType.FAILED, {"job_id": job_id, "error": safe_error}
+                job_id, JobEventType.FAILED, {"job_id": job_id, "error": safe_error}
             )
             # Re-raise so the task scheduler sees the cancellation and
             # propagates it correctly (this is the documented asyncio
@@ -266,7 +271,7 @@ class JobRunner:
             )
             self.job_store.emit(
                 job_id,
-                PipelineEventType.FAILED,
+                JobEventType.FAILED,
                 {"job_id": job_id, "error": safe_error},
             )
 
@@ -287,7 +292,7 @@ class JobRunner:
             )
             self.job_store.emit(
                 job_id,
-                PipelineEventType.FAILED,
+                JobEventType.FAILED,
                 {
                     "job_id": job_id,
                     "error": safe_error,
@@ -309,7 +314,7 @@ class JobRunner:
     ) -> CorrectionResult:
         """Drive the pure pipeline and persist its counters back."""
         self.job_store.update_job(job_id, status=JobStatus.STARTED)
-        self.job_store.emit(job_id, PipelineEventType.STARTED, {"job_id": job_id})
+        self.job_store.emit(job_id, JobEventType.STARTED, {"job_id": job_id})
 
         self.job_store.update_job(
             job_id,
@@ -333,7 +338,6 @@ class JobRunner:
             observer=CompositeObserver(
                 [JobStoreObserver(self.job_store, job_id), LoggingObserver()]
             ),
-            output_writer=output_writer,
         )
         # `run_id` is corrigenda's generic identifier; we feed it the
         # server-side `job_id` so trace.json correlates with the API.
@@ -344,6 +348,33 @@ class JobRunner:
             # Plan V2.2 — the cancel endpoint's event, polled by the
             # pipeline between pages and chunks.
             should_abort=should_abort,
+        )
+
+        # ADR-011 slice E — the engine never mutates its input: the run's
+        # outcome lives on result.decisions. The SERVER owns its read
+        # models (/diff, /layout, lines_modified), so it projects the
+        # decided text/status onto ITS stored manifest here — the same
+        # object update_job() registered at run start.
+        for page in document_manifest.pages:
+            for lm in page.lines:
+                decision = result.decisions.by_ref[LineRef(page_id=lm.page_id, line_id=lm.line_id)]
+                lm.corrected_text = decision.final_text
+                lm.status = decision.status
+
+        # ADR-011 slice D — the engine never persists: the result carries
+        # the corrected XML and the §9 report, and the backend stages them
+        # here through ITS writer (the P0-4 commit/discard transaction in
+        # run() stays unchanged). Disk IO runs off the event loop so a
+        # large artefact set never blocks SSE keepalives or /health.
+        for source_name, xml_bytes in result.corrected_files.items():
+            await asyncio.to_thread(
+                output_writer.write_corrected,
+                source_stem=source_files[source_name].stem,
+                xml_bytes=xml_bytes,
+            )
+        await asyncio.to_thread(
+            output_writer.write_trace,
+            traces_payload=result.report.model_dump_json(indent=2),
         )
 
         self.job_store.update_job(

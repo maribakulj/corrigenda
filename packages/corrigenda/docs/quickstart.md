@@ -21,6 +21,26 @@ pip install corrigenda        # Python ≥ 3.11; pydantic v2 + lxml
 lazily on first use, so core-only consumers (guards, planner, edit
 protocol) can run where lxml isn't installed.
 
+## The three-line path (§2)
+
+```python
+import corrigenda
+from corrigenda import RulesProducer, default_french_ocr_rules
+
+document = corrigenda.load("page.xml")        # ALTO or PAGE, by namespace
+result = corrigenda.correct_sync(             # `await corrigenda.correct(...)` in async code
+    document, producer=RulesProducer(default_french_ocr_rules())
+)
+result.write("out/")                          # corrected XML + report.json
+```
+
+No observer, no adapter, no manifest plumbing: `load()` sniffs the root
+namespace and parses; `correct()`/`correct_sync()` run a default
+pipeline (no-op observer, default policies, provenance from the
+producer's declared identity). Any `EditProducer` fits — the LLM path
+below plugs in the same way. Every knob the façade hides (policies,
+observer, explicit metadata) lives on `CorrectionPipeline`.
+
 ## Parse → correct → write
 
 ```python
@@ -42,14 +62,6 @@ class MyProvider:
         ...
 
 
-class Writer:
-    def write_corrected(self, *, source_stem, xml_bytes):
-        Path(f"out/{source_stem}_corrected.xml").write_bytes(xml_bytes)
-
-    def write_trace(self, *, traces_payload):
-        Path("out/trace.json").write_text(traces_payload, encoding="utf-8")
-
-
 class Observer:
     def on_event(self, event_type, payload):
         print(event_type, payload)
@@ -69,12 +81,12 @@ async def main():
         model="my-model",
         provider_name="my-vendor",
         observer=Observer(),
-        output_writer=Writer(),
     )
     result = await pipeline.run(
         document_manifest=doc,
         source_files={src.name: src},
     )
+    result.write(Path("out"))   # corrected XML + report.json — your call
     print(result.report.total_lines, "lines;",
           result.usage.total_tokens, "tokens")
 
@@ -82,9 +94,10 @@ asyncio.run(main())
 ```
 
 No event loop of your own? `pipeline.run_sync(...)` takes the same
-arguments. `apply=False` runs everything without writing (the returned
-`CorrectionReport` + normalized `EditScript` are the deliverable);
-`should_abort=callable` gives cooperative cancellation.
+arguments. The engine itself never writes (ADR-011): the returned
+result — corrected bytes, `CorrectionReport`, normalized `EditScript` —
+is the deliverable, and `result.write(dir)` persists it when you want
+it on disk; `should_abort=callable` gives cooperative cancellation.
 
 ## Deterministic pre-pass (no LLM at all)
 
@@ -94,22 +107,31 @@ from corrigenda import CorrectionPipeline, RulesProducer, default_french_ocr_rul
 pipeline = CorrectionPipeline(
     producer=RulesProducer(default_french_ocr_rules()),   # ſ→s, ﬁ/ﬂ …
     observer=Observer(),
-    output_writer=Writer(),
-    provider_name="rules", model="fr-ocr-v1",             # provenance labels
 )
 ```
 
 The rules engine emits exact-offset `replace_span` ops — reproducible to
-the byte, zero network. See [the edit protocol](edit-protocol.md) for the
+the byte, zero network. It declares its own provenance
+(`ProducerMetadata(name="rules", configuration_fingerprint=…)` — a rules
+engine has no "model"), which the §11 `processingStep` stamp picks up
+automatically; pass `producer_metadata=ProducerMetadata(...)` to the
+constructor to override it. See [the edit protocol](edit-protocol.md) for the
 op model, and [formats](formats.md) for what each rewriter guarantees.
 
 ## Reading the results
 
-- `result.report` — the versioned **CorrectionReport** (§9): per-line
-  journey (source → model in/out → projected → re-extracted), rewriter
-  path, fallback reason. `trace.json` on disk is this exact JSON.
+- `result.corrected_files` — the corrected XML bytes per source file
+  name; `result.write(dir)` writes them (plus `report.json`).
+- `result.report` — the versioned **CorrectionReport** (§9, v2): one
+  staged `LineOutcome` per line — `source_text`, `proposal` (producer
+  in/out), `decision` (status, final text, structured reason),
+  `projection` (extracted text, rewriter path).
 - `result.edit_script` — the normalized EditScript the run applied.
 - `result.usage` — aggregated tokens (F14); `Usage(0, 0)` when the
   producer doesn't report.
-- Corrected text also lives on the manifests you passed in:
-  `line.corrected_text` / `line.status`.
+- `result.decisions` — the immutable **DecisionSet**: one terminal
+  decision per line (`by_ref[LineRef(page_id, line_id)]` →
+  `final_text` / `status` / `fallback_reason`). The manifests you
+  passed in are never modified (ADR-011): the same document can be run
+  again — or concurrently — and always starts from the original OCR
+  text.

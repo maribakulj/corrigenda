@@ -1,4 +1,4 @@
-import type { LineTrace } from '../types'
+import type { LineOutcome } from '../types'
 
 // A line_id is only unique WITHIN one page: ALTO TextLine@ID is an XML
 // NCName scoped to its own document, so two uploaded files routinely
@@ -13,8 +13,8 @@ export function lineKey(pageId: string, lineId: string): LineKey {
   return `${pageId}:${lineId}`
 }
 
-export function buildTraceMap(lines: LineTrace[]): Map<LineKey, LineTrace> {
-  const map = new Map<LineKey, LineTrace>()
+export function buildTraceMap(lines: LineOutcome[]): Map<LineKey, LineOutcome> {
+  const map = new Map<LineKey, LineOutcome>()
   for (const lt of lines) {
     map.set(lineKey(lt.page_id, lt.line_id), lt)
   }

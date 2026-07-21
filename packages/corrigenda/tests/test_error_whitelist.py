@@ -24,6 +24,9 @@ from pathlib import Path
 
 import pytest
 
+from tests._pipeline_harness import apply_decisions
+
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.core.protocols import ProviderTransientError
 from corrigenda.core.schemas import LineStatus, RetryPolicy
@@ -51,7 +54,7 @@ class _Raising:
     def __init__(self, exc: BaseException) -> None:
         self._exc = exc
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         raise self._exc
 
 
@@ -63,22 +66,20 @@ def _pipeline(producer) -> CorrectionPipeline:
     return CorrectionPipeline(
         producer=producer,
         observer=_Null(),
-        output_writer=_Null(),
         # Zero backoff: these tests exercise CLASSIFICATION, not pacing —
         # real backoffs would make the degradation paths sleep for tens
         # of seconds through retries and granularity descent.
         retry_policy=RetryPolicy(transient_backoff_base=0.0, output_backoff_base=0.0),
-        provider_name="x",
-        model="m",
+        producer_metadata=ProducerMetadata(name="x", implementation="m"),
     )
 
 
 async def _run(producer):
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
     result = await _pipeline(producer).run(
-        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}, apply=False
+        document_manifest=doc, source_files={_SAMPLE.name: _SAMPLE}
     )
-    return doc, result
+    return apply_decisions(doc, result), result
 
 
 @pytest.mark.asyncio

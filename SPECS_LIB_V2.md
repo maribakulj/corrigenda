@@ -105,7 +105,7 @@ lib/
 │   ├── planner.py           # chunk planner (PAGE→BLOCK→WINDOW→LINE, césure-conscient)
 │   ├── editing.py           # EditScript : validation, normalisation match→range, application
 │   ├── pipeline.py          # orchestration (retry, descente de granularité, traces)
-│   └── protocols.py         # EditProducer, PipelineObserver, OutputWriter
+│   └── protocols.py         # EditProducer, PipelineObserver, FormatAdapter
 ├── formats/
 │   ├── alto/                # parser + rewriter ALTO (lxml, durci)
 │   └── page/                # parser + rewriter PAGE XML (lxml, durci)
@@ -477,6 +477,16 @@ await pipeline.run(
 
 pipeline.run_sync(...)                            # façade asyncio.run, documentée
 
+# Note (ADR-011, 2026-07) : la persistance a quitté la surface moteur —
+# plus de `output_writer` au constructeur ni de `apply=` sur run() ; le
+# résultat porte les artefacts (`result.corrected_files`, `result.report`,
+# `result.decisions`) et `result.write(dir)` est l'aide côté appelant.
+# run() ne mute plus jamais son entrée (copie interne, tranche E) : le
+# garde « one run per instance » (ADR-005) est retiré, le moteur est
+# réentrant. (La résorption §5.1 a déjà retiré api_key/model/provider_name
+# de run() — voir ADR ; le bloc ci-dessus reste la photographie v2.0
+# d'origine.)
+
 # bas niveau (déjà publics, maintenus)
 rewrite_alto_file(...), extract_output_texts(...),
 reconcile_hyphen_pair(...), check_line(...), plan_page(...)
@@ -525,9 +535,11 @@ alias d'import dépréciés pendant une version mineure.
   raison de repli) devient un artefact de sortie **documenté, schéma JSON
   stable versionné** — plus seulement un fichier interne du backend. C'est
   la matière d'un diff/aperçu côté consommateur.
-- **Dry-run** : `run(..., apply=False)` exécute tout (production, gardes,
-  réconciliation) mais n'appelle pas le writer XML ; renvoie rapport +
-  EditScript normalisé (v2.0). Usage : prévisualisation, ou mesure sans
+- **Dry-run** : depuis ADR-011 (2026-07), TOUT run est un dry-run côté
+  moteur — il n'écrit jamais rien ; il renvoie rapport + EditScript
+  normalisé + XML corrigé (`result.corrected_files`). La « vraie »
+  écriture est le choix de l'appelant (`result.write(dir)`, ou la
+  transaction du backend). Usage : prévisualisation, ou mesure sans
   écriture par un consommateur qui benche.
 - Les événements (`PipelineEventType`) restent la seule interface de
   progression ; `chunk_downgraded` (F1) s'ajoute au contrat SSE.

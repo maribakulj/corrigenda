@@ -11,10 +11,14 @@ from pathlib import Path
 
 import pytest
 
+from tests._pipeline_harness import apply_decisions
+
+from corrigenda.core.protocols import ProducerMetadata
 from corrigenda import CorrectionPipeline
 from corrigenda.errors import ConfigurationError
 from corrigenda.core.editing import EditScript, ReplaceSpan, apply_edit_script
-from corrigenda.core.schemas import LLMUserPayload, RetryPolicy, Usage
+from corrigenda.core.protocols import ProducerOptions
+from corrigenda.core.schemas import CorrectionRequest, RetryPolicy, Usage
 from corrigenda.formats.alto.parser import build_document_manifest
 from corrigenda.producers.rules import RulesProducer, SubstitutionRule
 
@@ -43,20 +47,18 @@ async def test_rules_producer_drives_full_pipeline_without_credentials():
     pipeline = CorrectionPipeline(
         producer=producer,
         observer=_Null(),
-        output_writer=_Null(),
-        provider_name="rules",
-        model="fr-ocr-v1",
+        producer_metadata=ProducerMetadata(name="rules", implementation="fr-ocr-v1"),
     )
     result = await pipeline.run(
         document_manifest=doc,
         source_files={_SAMPLE.name: _SAMPLE},
-        apply=False,
     )
 
     # Every line with an 'e' got its first occurrences substituted; lines
     # without a rule match kept their OCR text (no fallback, no retry).
     assert result.retry_count == 0
     assert result.fallback_chunks == 0
+    apply_decisions(doc, result)
     changed = [
         lm
         for page in doc.pages
@@ -95,7 +97,7 @@ class _VisionProducer:
     requires_full_coverage = False
 
     async def produce(
-        self, payload: LLMUserPayload, *, policy: RetryPolicy
+        self, payload: CorrectionRequest, *, options: ProducerOptions
     ) -> tuple[EditScript, Usage | None]:
         # Record what the compiler put in the payload, edit nothing.
         self.seen_payload = payload
@@ -110,7 +112,7 @@ class _BuggyProducer:
     wants_image = False
     requires_full_coverage = False
 
-    async def produce(self, payload, *, policy):
+    async def produce(self, payload, *, options):
         raise KeyError("bug in _script_to_raw")
 
 
@@ -125,29 +127,23 @@ async def test_programming_error_propagates_not_masked_as_ocr_fallback():
     pipeline = CorrectionPipeline(
         producer=_BuggyProducer(),
         observer=_Null(),
-        output_writer=_Null(),
-        provider_name="buggy",
-        model="m",
+        producer_metadata=ProducerMetadata(name="buggy", implementation="m"),
     )
     with pytest.raises(KeyError):
         await pipeline.run(
             document_manifest=doc,
             source_files={_SAMPLE.name: _SAMPLE},
-            apply=False,
         )
 
 
 @pytest.mark.asyncio
 async def test_vision_producer_without_images_fails_at_startup():
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
-    pipeline = CorrectionPipeline(
-        producer=_VisionProducer(), observer=_Null(), output_writer=_Null()
-    )
+    pipeline = CorrectionPipeline(producer=_VisionProducer(), observer=_Null())
     with pytest.raises(ConfigurationError, match="page_images"):
         await pipeline.run(
             document_manifest=doc,
             source_files={_SAMPLE.name: _SAMPLE},
-            apply=False,
         )
 
 
@@ -157,14 +153,11 @@ async def test_vision_envelope_reaches_the_producer():
     and per-line geometry — copied, never opened (I4)."""
     doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
     producer = _VisionProducer()
-    pipeline = CorrectionPipeline(
-        producer=producer, observer=_Null(), output_writer=_Null()
-    )
+    pipeline = CorrectionPipeline(producer=producer, observer=_Null())
     await pipeline.run(
         document_manifest=doc,
         source_files={_SAMPLE.name: _SAMPLE},
         page_images={page.page_id: f"opaque://{page.page_id}" for page in doc.pages},
-        apply=False,
     )
     payload = producer.seen_payload
     assert payload.image_ref is not None
@@ -202,7 +195,7 @@ class _RecordingVisionProducer:
         self.image_refs: list[str | None] = []
         self.line_ids: list[list[str]] = []
 
-    async def produce(self, payload: LLMUserPayload, *, policy: RetryPolicy):
+    async def produce(self, payload: CorrectionRequest, *, options: RetryPolicy):
         self.image_refs.append(payload.image_ref)
         self.line_ids.append([ln.line_id for ln in payload.lines])
         return EditScript(ops=[]), None
@@ -219,14 +212,11 @@ async def test_multipage_file_carries_one_image_per_page(tmp_path):
     assert [p.page_id for p in doc.pages] == ["P1", "P2"]
 
     producer = _RecordingVisionProducer()
-    pipeline = CorrectionPipeline(
-        producer=producer, observer=_Null(), output_writer=_Null()
-    )
+    pipeline = CorrectionPipeline(producer=producer, observer=_Null())
     await pipeline.run(
         document_manifest=doc,
         source_files={src.name: src},
         page_images={"P1": "opaque://scan-1", "P2": "opaque://scan-2"},
-        apply=False,
     )
 
     ref_by_line = {
@@ -248,13 +238,10 @@ async def test_legacy_file_name_keys_are_refused_explicitly(tmp_path):
     src = tmp_path / "multi.xml"
     src.write_text(_MULTIPAGE_ALTO, encoding="utf-8")
     doc = build_document_manifest([(src, src.name)])
-    pipeline = CorrectionPipeline(
-        producer=_RecordingVisionProducer(), observer=_Null(), output_writer=_Null()
-    )
+    pipeline = CorrectionPipeline(producer=_RecordingVisionProducer(), observer=_Null())
     with pytest.raises(ConfigurationError, match="page_id"):
         await pipeline.run(
             document_manifest=doc,
             source_files={src.name: src},
             page_images={src.name: "opaque://whole-file"},
-            apply=False,
         )

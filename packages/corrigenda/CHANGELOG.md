@@ -9,13 +9,253 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Versioned correction benchmark + ground-truth corpus seed (P4.2).**
+  ``scripts/benchmark.py`` (repo tooling, not part of the package)
+  measures a producer against ``tests/corpus_gt/`` — micro-averaged
+  CER/WER before/after, improved/degraded line counts, false positives
+  (already-correct lines a run changed), fallbacks, reconcile outcomes,
+  structural losses, latency/page and peak memory — and emits a JSON
+  report a release can cite: ``benchmark_version``, ``lib_version``,
+  ``corpus_version``, the §11 ``config_fingerprint`` and the producer's
+  ``ProducerMetadata`` identity. Three deterministic, offline
+  producers: ``rules``, ``oracle`` (cassette derived from the
+  reference — the upper bound the guards still arbitrate) and
+  ``cassette:<path>`` (recorded ``{line_id: text}`` replay, the P4.2
+  LLM-cassette seam). The corpus ships one clearly-marked SYNTHETIC
+  seed case (documented scripted degradations: long s, ﬁ ligature, one
+  ``rn`` confusion the default rules deliberately cannot fix; one
+  heuristic hyphen pair) — real human-reviewed Gallica pages remain
+  P4.1's human work, and the corpus README pins the provenance rules.
+  House rule now in force: no guard/ramp default changes without a
+  measured improvement here. Smoke-tested in CI (report contract,
+  rules improvement with residual, oracle at CER 0, cassette ≡ oracle).
+
+- **The error root gets its final name (P3.11, first slice).**
+  ``CorrigendaError`` — named for the LIBRARY, like
+  ``requests.RequestException`` — replaces ``CorrectionError`` as the
+  §8.4 root, and ``ProposalValidationError`` replaces the bare
+  ``ValidationError`` (which collided with pydantic's in every
+  consumer's imports; the P3.7 vocabulary already calls what it
+  validates a *proposal*). The old names remain 0.9.x deprecation
+  ALIASES of the very same classes — ``except``, ``isinstance`` and
+  subclassing behave identically through either name; machine ``code``
+  attributes are unchanged — and disappear at the P3.11 top-level
+  reduction. Library internals speak the new names; both spellings are
+  top-level exports for now.
+
+- **The three-line happy path (P3.12, §2).**
+  ``corrigenda.load(*paths)`` sniffs each file's root namespace (ALTO
+  or PAGE — one format per document, unique basenames) and returns a
+  ``LoadedDocument`` (manifest + the name → path map a run needs);
+  ``corrigenda.correct(document, producer=…)`` /
+  ``corrigenda.correct_sync(…)`` run a default pipeline around any
+  ``EditProducer`` — no observer, no adapter, no manifest plumbing
+  required for the simple case (no-op observer, default policies,
+  provenance from the producer's declared identity). Purely ADDITIVE:
+  ``CorrectionPipeline`` keeps every knob; the P3.11 top-level API
+  reduction remains a separate, deliberate decision. All four symbols
+  are lazy top-level exports (``import corrigenda`` still never loads
+  lxml); the quickstart now leads with the three-line path.
+
+- **EditScript preconditions — a script only applies to the document
+  it was computed against (P3.10, §4).** ``EditScript`` records its
+  ``protocol_version`` (``EDIT_PROTOCOL_VERSION``, currently ``"1"``;
+  ``apply_edit_script`` raises ``ValidationError`` on a version it
+  does not speak), the run's ``source_digests`` (same values as
+  ``RunProvenance`` — one shared computation), and one
+  ``LinePrecondition`` per op-carrying line: the :func:`line_digest`
+  of the SOURCE text the ops were computed against, page-qualified
+  like the ops' stamps. Applying a script to a document that carries
+  the same line_id over DIFFERENT content rejects the line's ops
+  (``precondition_source_digest``) — an op never lands on a lookalike.
+  All fields optional/additive: hand-written scripts keep their
+  historical behaviour. The run's final ``edit_script`` is fully
+  stamped. ``EDIT_PROTOCOL_VERSION``, ``LinePrecondition`` and
+  ``line_digest`` join the public surface.
+
+- **`RunProvenance` — the report says exactly what produced it (P3.9,
+  §11).** ``CorrectionReport.provenance`` (optional, additive — no
+  ``report_version`` bump) records the library version, the §8.2
+  composite ``config_fingerprint`` (the same value stamped into the
+  XML), the GENERIC producer identity (``ProducerProvenance``, the
+  report-side mirror of ``ProducerMetadata`` — a rules run records its
+  name + configuration digest, never an artificial vendor/model pair),
+  a ``sha256:`` digest of every INPUT file's bytes (empty on dry
+  runs), the manifest's source format, and the installed versions of
+  the critical dependencies (lxml, pydantic — resolved from package
+  metadata, never by importing them: the pure core stays lxml-free).
+  Generation parameters are not duplicated: the retry/temperature
+  strategy is already covered by the policy fingerprint.
+  ``RunProvenance`` and ``ProducerProvenance`` join the public surface.
+
+- **`LossPolicy` — REPORT or STRICT on format-granularity loss
+  (ADR-012, P3.8).** The PAGE rewriter cannot keep ``Word`` geometry
+  when a correction changes a line's word count (6.2 P4 slow path).
+  ``LossPolicy(strict=False)`` (the default) makes the historical
+  stance explicit: the correction projects, the loss is counted
+  run-wide (``CorrectionReport.format_losses``) and now ATTRIBUTED per
+  decision — ``ProjectionStage.losses`` carries each line's own share
+  (``RewriteResult.losses_by_line`` → ``LineTrace.projection_losses``
+  under the hood). ``LossPolicy(strict=True)`` rejects instead: a
+  correction that cannot project without loss makes its WHOLE hyphen
+  unit fall back to source text (reason code ``format_loss``,
+  ADR-010 atomicity) BEFORE any output exists, so the source markup
+  keeps its word geometry. The check runs in the pure core off the new
+  ``LineManifest.word_count`` (stamped by the PAGE parser; ``None`` on
+  word-less lines and on ALTO, whose per-token geometry redistributes
+  at any count). Stale-annotation drops (``conf``, alternative
+  ``TextEquiv``, offset ``custom`` groups) describe the old reading and
+  stay report-only in both modes; no third mode until a real need
+  shows up. ``LossPolicy`` joins the §8.2 policy surface, the public
+  API, ``for_provider``, and the §11 ``config_fingerprint`` (composite
+  pin ``216aa712f1e99b79`` → ``55dc80679dd71f94`` — a fifth ``loss``
+  key in the payload).
+
+### Changed
+
+- **BREAKING — `ProducerMetadata` replaces the bare
+  `provider_name`/`model` strings (P3.7, fourth slice).** The
+  ``CorrectionPipeline`` constructor takes one
+  ``producer_metadata: ProducerMetadata | None`` (frozen dataclass:
+  ``name``, ``version``, ``implementation``,
+  ``configuration_fingerprint``) instead of the two label kwargs — a
+  rules producer has no "model", so the generic identity names WHO
+  produced the edits and, when one exists, the concrete engine behind
+  the name. Producers may DECLARE their identity via an optional
+  ``metadata`` attribute (the ``requires_full_coverage`` convention;
+  explicit constructor metadata wins): ``LLMEditProducer`` declares
+  ``name="llm"`` + its model, ``RulesProducer`` declares
+  ``name="rules"`` plus a deterministic 16-hex
+  ``configuration_fingerprint`` over its rules table and lexicon.
+  ``for_provider`` keeps its pinned vendor vocabulary
+  (``provider_name``/``model``) and builds the envelope itself, and the
+  §11 labels stamped into corrected XML derive via
+  ``provenance_labels()`` (an implementation-less producer stamps
+  ``"unknown"``) — the format seam and the stamped bytes are unchanged.
+  ``ProducerMetadata`` joins the public surface.
+
+- **BREAKING — the producer seam takes `ProducerOptions`, not the
+  RetryPolicy (P3.7, first slice).** ``EditProducer.produce(payload, *,
+  options)`` receives a per-call envelope — ``attempt``, the RESOLVED
+  ``temperature`` (ramp and hyphen 0.0-pin decided engine-side, ending
+  the "policy whose first temperature is this attempt's" contortion),
+  an optional ``deadline_seconds`` hint, and ``should_abort``: the
+  run's cancellation probe, so a producer can abandon long I/O
+  mid-flight (or wire the probe into its HTTP client) instead of the
+  engine only noticing between chunks. The engine keeps the full
+  ``RetryPolicy`` to itself.
+
+- **Client/catalog split (P3.7, second slice).** ``BaseProvider`` is
+  now the composition of two protocols: ``StructuredCompletionClient``
+  (``complete_structured`` — the ONLY LLM capability the core consumes;
+  ``LLMEditProducer`` and ``for_provider`` type against it, so a client
+  with no ``list_models`` at all drives a full run) and
+  ``ModelCatalog`` (``list_models`` — application vocabulary; the demo
+  backend's ``/providers/{p}/models`` concern). Both join the public
+  surface; ``BaseProvider`` keeps working unchanged for full vendor
+  clients.
+
+- **BREAKING — generic vocabulary replaces the LLM-branded names
+  (P3.7, third slice).** ``LLMUserPayload`` → ``CorrectionRequest``,
+  ``LLMLineInput`` → ``LineContext``, ``LLMLineOutput`` →
+  ``LineProposal``, ``LLMResponse`` → ``ProposalBatch`` — a rules or
+  vision producer receives no "LLM payload"; the edit protocol's
+  request/proposal shapes are producer-agnostic. The purely-LLM
+  contract (``SYSTEM_PROMPT``, ``OUTPUT_JSON_SCHEMA``) moves from
+  ``corrigenda.producers.llm`` to ``corrigenda.integrations.llm`` —
+  ``corrigenda.producers`` keeps only producer implementations. No
+  wire/JSON shape changes anywhere: these are Python-surface renames.
+  Remaining P3.7 work: ``ProducerMetadata`` replacing bare
+  ``provider_name``/``model`` (a rules producer has no "model") — the
+  provenance-stamping surface, a later slice.
+
+- **BREAKING — `PipelineEventType` names only engine events (P3.6,
+  first slice).** The server-side values — job lifecycle ``started`` /
+  ``completed`` / ``failed`` / ``cancelled``, the frontend-only
+  ``queued``, and the SSE transport ``keepalive`` / ``error`` — left
+  the engine's enum for the demo backend's own
+  ``app.jobs.events.JobEventType``: the library no longer enumerates
+  what a HOST says about a job. The wire strings are unchanged on both
+  sides (the SSE contract test still pins the union against the
+  frontend's list); only the Python spelling of the server values
+  moved.
+
+- **Typed engine events (P3.6, second slice).**
+  ``corrigenda.core.events`` defines one frozen ``EngineEvent``
+  dataclass per ``PipelineEventType`` (``DocumentParsed``,
+  ``ChunkStarted``, ``ChunkDowngraded``, ``RewriterStats``, …): the
+  emit sites construct these instead of ad-hoc dict literals, so every
+  payload's shape lives in exactly one importable place and the
+  type↔class bijection is pinned by test. The observer port keeps its
+  wire shape (``on_event(event_type, payload)``) — the pipeline renders
+  ``event.type`` + ``event.payload()`` at the boundary, so observers
+  and the SSE wire format are untouched. The demo backend's job-end
+  ``reconcile_stats`` now goes through the typed ``ReconcileStats``
+  too.
+
+- **BREAKING — report v2: staged `LineOutcome` entries (P3.5,
+  `report_version` 1.0 → 2.0).** `CorrectionReport.lines` now carries
+  one `LineOutcome` per line — ``source_text`` plus three explicit
+  stages: ``proposal`` (producer input/output, absent when the line
+  never reached a producer), ``decision`` (terminal ``status``,
+  ``final_text``, and a STRUCTURED ``reason`` ``{code, detail}`` whose
+  code aggregates exactly like ``CorrectionResult.fallback_reasons``),
+  and ``projection`` (``extracted_text`` — renamed from
+  ``output_alto_text``, wrong in an ALTO+PAGE library — and
+  ``rewriter_path``; absent when no output file was rendered). The
+  builder reads the ADR-011 `DecisionSet` (the terminal stage's
+  authority), completing slice C's reader migration. The decision stage
+  additionally carries ``features`` (`ProposalFeatures`) — the
+  similarity/length metrics the acceptance guard computed ONCE while
+  deciding (recorded on ``AcceptanceResult.features``), so no consumer
+  re-derives them; absent on lines that never reached per-line
+  acceptance. `LineOutcome`, `ProposalStage`, `ProposalFeatures`,
+  `DecisionStage`, `DecisionReason` and
+  `ProjectionStage` join the public surface; `LineTrace` remains the
+  Python-side working trace on ``CorrectionResult.traces`` — the two
+  surfaces version independently (``docs/versioning.md``).
+
+- **BREAKING — `run()` never mutates its input (ADR-011, slice E).**
+  The engine works on its own deep copy of the document manifest: the
+  caller's manifest keeps its parse-time state (`corrected_text` stays
+  `None`, `status` stays `PENDING`), re-running the same document
+  always starts from the original OCR text, and the run's outcome is
+  read off the result — `CorrectionResult.decisions`, an immutable
+  `DecisionSet` with one terminal `LineDecision` per line in reading
+  order (`DecisionSet`, `LineDecision` and `LineRef` join the public
+  surface). Consumers that displayed corrected text from the manifest
+  project the decisions onto their own state (as the demo backend now
+  does for its /diff and /layout read models).
+
+### Removed
+
+- **The one-run-per-instance guard (ADR-005, superseded).** With
+  per-run state fully contained (fresh `RunContext` + private manifest
+  copy) and no writer on the engine, concurrent `run()` calls on one
+  instance are safe and supported; the `RuntimeError` guard is gone.
+  The P0 run-independence property is now pinned in its final form:
+  two runs on the SAME document object yield identical decisions.
+
+- **BREAKING — persistence left the engine surface (ADR-011, slice
+  D-fin).** `CorrectionPipeline(output_writer=…)` /
+  `for_provider(output_writer=…)` and `run(apply=…)` are gone, and the
+  `OutputWriter` protocol is no longer part of `corrigenda` (the demo
+  backend now owns its own port in `app.protocols`). The engine never
+  writes: every run computes `result.corrected_files` + `result.report`
+  and the caller persists — `result.write(dir)` for the simple case
+  (corrected XML under the source names + `report.json`), or a
+  host-owned transaction. What `apply=False` used to buy is now every
+  run's behaviour. The ADR-005 one-run-per-instance guard remains (its
+  surviving rationale: shared observer + in-place manifest mutation
+  until slice E).
+
+### Added
+
 - **The result carries its artefacts (ADR-011, slice D).**
   `CorrectionResult.corrected_files` maps each source file name to its
   corrected XML bytes on EVERY run — dry runs included, where the bytes
   were previously unreachable — and `result.write(dir)` persists the
-  artefacts plus the §9 report (`report.json`) caller-side. The
-  injected `OutputWriter` keeps working unchanged; this is the
-  migration path for retiring it from the engine surface.
+  artefacts plus the §9 report (`report.json`) caller-side.
 
 - **Terminal-decision invariant — no line ends a run undecided.** The
   page loop's ADR-008 absorb branch (recoverable `CorrectionError` →

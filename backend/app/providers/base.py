@@ -27,7 +27,7 @@ from corrigenda.core.protocols import (  # noqa: F401  re-exported
     ProviderPermanentError,
     ProviderTransientError,
 )
-from corrigenda.producers.llm import (  # noqa: F401  re-exported
+from corrigenda.integrations.llm import (  # noqa: F401  re-exported
     OUTPUT_JSON_SCHEMA,
     SYSTEM_PROMPT,
 )
