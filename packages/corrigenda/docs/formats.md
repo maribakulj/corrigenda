@@ -68,7 +68,10 @@ Every corrected file records the pass: provider/model labels, the library
 version and the run's `config_fingerprint()` — a stable hash over the
 four frozen policies (RetryPolicy, GuardConfig, ChunkPlannerConfig,
 PairingPolicy). A consumer holding the same policy objects can recompute
-and verify it. ALTO writes a `processingStep`; PAGE uses the P7 slots.
+and verify it. ALTO records the pass in whichever container the source
+carries: a `postProcessingStep` inside an existing `<OCRProcessing>` (what
+real ABBYY/Tesseract/Gallica exports use), or a `processingStep` under the
+ALTO 4.0 generic `<Processing>`. PAGE uses the P7 slots.
 
 ## Corpus
 

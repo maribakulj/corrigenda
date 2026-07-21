@@ -12,12 +12,41 @@ from corrigenda.formats.alto.rewriter import rewrite_alto_file
 
 _NS = "http://www.loc.gov/standards/alto/ns-v4#"
 
-# ALTO with a <Description><Processing> so the rewriter appends a
-# processingStep (the sample corpus uses <OCRProcessing>, which the
-# rewriter intentionally leaves alone).
+# ALTO with a <Description><Processing> (the ALTO 4.0 generic slot) so the
+# rewriter appends a processingStep.
 _ALTO = f"""<?xml version="1.0"?>
 <alto xmlns="{_NS}">
   <Description><Processing ID="P0"/></Description>
+  <Layout>
+    <Page ID="P1" WIDTH="600" HEIGHT="800">
+      <PrintSpace>
+        <TextBlock ID="B1" HPOS="0" VPOS="0" WIDTH="500" HEIGHT="30">
+          <TextLine ID="L1" HPOS="0" VPOS="0" WIDTH="500" HEIGHT="30">
+            <String ID="S1" CONTENT="bonjour" HPOS="0" VPOS="0" WIDTH="100" HEIGHT="30"/>
+          </TextLine>
+        </TextBlock>
+      </PrintSpace>
+    </Page>
+  </Layout>
+</alto>"""
+
+# Real-world ALTO (ABBYY, Tesseract, Gallica exports) records OCR under
+# <OCRProcessing>/<ocrProcessingStep>, NOT the generic <Processing>. The
+# post-OCR correction pass must be recorded there too — as a
+# <postProcessingStep> — or §11's "every corrected file records the pass" is
+# silently false for exactly the files real users bring.
+_ALTO_OCRPROCESSING = f"""<?xml version="1.0"?>
+<alto xmlns="{_NS}">
+  <Description>
+    <MeasurementUnit>pixel</MeasurementUnit>
+    <OCRProcessing ID="OCR_1">
+      <ocrProcessingStep>
+        <processingSoftware>
+          <softwareName>Tesseract</softwareName>
+        </processingSoftware>
+      </ocrProcessingStep>
+    </OCRProcessing>
+  </Description>
   <Layout>
     <Page ID="P1" WIDTH="600" HEIGHT="800">
       <PrintSpace>
@@ -43,6 +72,20 @@ def _processing_step_descriptions(xml_bytes: bytes) -> list[str]:
     ns = _detect_namespace(root)
     tag = f"{{{ns}}}processingStep" if ns else "processingStep"
     return [el.get("description", "") for el in root.iter(tag)]
+
+
+def _post_processing_descriptions(xml_bytes: bytes) -> list[str]:
+    """Provenance text from <postProcessingStep>/<processingStepDescription>
+    (the slot used inside an OCRProcessing container)."""
+    root = etree.fromstring(xml_bytes)
+    ns = _detect_namespace(root)
+    step_tag = f"{{{ns}}}postProcessingStep" if ns else "postProcessingStep"
+    desc_tag = f"{{{ns}}}processingStepDescription" if ns else "processingStepDescription"
+    return [
+        d.text or ""
+        for step in root.iter(step_tag)
+        for d in step.iter(desc_tag)
+    ]
 
 
 def test_processing_step_carries_version_and_fingerprint(tmp_path: Path):
@@ -72,3 +115,37 @@ def test_processing_step_backwards_compatible_without_provenance(tmp_path: Path)
     )
     descs = _processing_step_descriptions(xml_bytes)
     assert any(d == "Post-OCR correction via openai/gpt-x (corrigenda)" for d in descs)
+
+
+def _write_ocr(tmp_path: Path) -> Path:
+    p = tmp_path / "ocr.xml"
+    p.write_text(_ALTO_OCRPROCESSING, encoding="utf-8")
+    return p
+
+
+def test_ocrprocessing_file_records_the_pass(tmp_path: Path):
+    """A real ALTO whose Description carries <OCRProcessing> (not the generic
+    <Processing>) must still record the correction pass — as a
+    <postProcessingStep> inside the OCRProcessing container (spec §11)."""
+    xml_path = _write_ocr(tmp_path)
+    doc = build_document_manifest([(xml_path, xml_path.name)])
+    xml_bytes, _m, _p = rewrite_alto_file(
+        xml_path,
+        doc.pages,
+        provider="openai",
+        model="gpt-x",
+        lib_version="9.9.9",
+        config_fingerprint="deadbeefcafe0000",
+    )
+    descs = _post_processing_descriptions(xml_bytes)
+    assert descs, "no postProcessingStep written into <OCRProcessing>"
+    assert any("openai/gpt-x" in d for d in descs)
+    assert any("corrigenda 9.9.9" in d for d in descs)
+    assert any("config deadbeefcafe0000" in d for d in descs)
+    # corrigenda names itself as the processing software, not just in prose.
+    root = etree.fromstring(xml_bytes)
+    ns = _detect_namespace(root)
+    name_tag = f"{{{ns}}}softwareName" if ns else "softwareName"
+    assert any((el.text or "") == "corrigenda" for el in root.iter(name_tag))
+    # The original OCR step is preserved, not replaced.
+    assert any((el.text or "") == "Tesseract" for el in root.iter(name_tag))

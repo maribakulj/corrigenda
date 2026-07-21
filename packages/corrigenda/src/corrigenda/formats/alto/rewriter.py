@@ -816,25 +816,88 @@ def _add_processing_entry(
     corrected XML says by what and under which policy it was produced. Both
     are optional for backward compatibility; when omitted the historical
     description is emitted verbatim.
+
+    Placement follows the ALTO container actually present:
+
+    - ``<Processing>`` (the ALTO 4.0 generic slot) → append a
+      ``<processingStep>`` (historical corrigenda behaviour, unchanged).
+    - ``<OCRProcessing>`` (what real ABBYY / Tesseract / Gallica exports
+      use) → append a ``<postProcessingStep>`` there. Without this branch
+      §11's "every corrected file records the pass" silently failed for
+      exactly the files real users bring — none of them carry ``<Processing>``.
+    - neither, but a ``<Description>`` exists → create a ``<Processing>`` so
+      the pass is still recorded rather than dropped.
     """
     desc = root.find(_tag("Description", ns))
     if desc is None:
         return
-    processing = desc.find(_tag("Processing", ns))
-    if processing is None:
-        return
-    step = etree.SubElement(processing, _tag("processingStep", ns))
-    step.set("type", "contentModification")
+    description = _provenance_description(
+        provider, model, lib_version, config_fingerprint
+    )
 
+    processing = desc.find(_tag("Processing", ns))
+    if processing is not None:
+        _append_processing_step(processing, ns, description)
+        return
+
+    ocr_processings = desc.findall(_tag("OCRProcessing", ns))
+    if ocr_processings:
+        _append_post_processing_step(
+            ocr_processings[-1], ns, description, lib_version
+        )
+        return
+
+    _append_processing_step(
+        etree.SubElement(desc, _tag("Processing", ns)), ns, description
+    )
+
+
+def _provenance_description(
+    provider: str,
+    model: str,
+    lib_version: str | None,
+    config_fingerprint: str | None,
+) -> str:
+    """The human-readable provenance line shared by every ALTO container."""
     provenance = "corrigenda"
     if lib_version:
         provenance += f" {lib_version}"
     if config_fingerprint:
         provenance += f"; config {config_fingerprint}"
-    step.set(
-        "description",
-        f"Post-OCR correction via {provider}/{model} ({provenance})",
-    )
+    return f"Post-OCR correction via {provider}/{model} ({provenance})"
+
+
+def _append_processing_step(
+    processing: etree._Element, ns: str, description: str
+) -> None:
+    """Record the pass as a ``<processingStep>`` (ALTO 4.0 ``<Processing>``)."""
+    step = etree.SubElement(processing, _tag("processingStep", ns))
+    step.set("type", "contentModification")
+    step.set("description", description)
+
+
+def _append_post_processing_step(
+    ocr_processing: etree._Element,
+    ns: str,
+    description: str,
+    lib_version: str | None,
+) -> None:
+    """Record the pass as a ``<postProcessingStep>`` inside ``<OCRProcessing>``.
+
+    ``postProcessingStep`` is the ALTO-standard slot for work done after OCR
+    (LoC ``OCRProcessingType``); it is appended after any existing
+    pre/ocr/post steps, keeping the source OCR record intact. Child order
+    follows ``ProcessingStepType``: description before software.
+    """
+    step = etree.SubElement(ocr_processing, _tag("postProcessingStep", ns))
+    desc_el = etree.SubElement(step, _tag("processingStepDescription", ns))
+    desc_el.text = description
+    software = etree.SubElement(step, _tag("processingSoftware", ns))
+    name_el = etree.SubElement(software, _tag("softwareName", ns))
+    name_el.text = "corrigenda"
+    if lib_version:
+        version_el = etree.SubElement(software, _tag("softwareVersion", ns))
+        version_el.text = lib_version
 
 
 # --- public surface ---
