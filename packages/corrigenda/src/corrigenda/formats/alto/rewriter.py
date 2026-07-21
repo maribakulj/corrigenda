@@ -10,6 +10,7 @@ from lxml import etree
 from corrigenda.core._norm import clean_content, nfc
 from corrigenda.core._parse import parse_int_tolerant
 from corrigenda.core.identity import ensure_unique_identities
+from corrigenda.core.pairing import HYPHEN_CHARS
 from corrigenda.errors import DuplicateIdError
 from corrigenda.formats.alto._ns import (
     _detect_namespace,
@@ -345,6 +346,22 @@ def _apply_subs(
 # ---------------------------------------------------------------------------
 # Fast path: in-place CONTENT update (word count unchanged)
 # ---------------------------------------------------------------------------
+
+
+def _drop_structural_break_hyphen(text: str) -> str:
+    """Remove ONE trailing break hyphen from an explicit PART1 line's text.
+
+    The hyphen is represented structurally by the line's ``<HYP>`` element,
+    so it must not also live in the last ``String``'s CONTENT. Accepts the
+    full ALTO/PAGE hyphen repertoire (``-`` ``¬`` ``⸗`` soft-hyphen), mirroring
+    ``reconcile_hyphen_pair``'s trailing-hyphen gate. A line with no trailing
+    hyphen is returned unchanged (defensive — the reconciler guarantees an
+    explicit PART1 correction ends in one, but the rewriter never assumes it).
+    """
+    stripped = text.rstrip()
+    if stripped.endswith(HYPHEN_CHARS):
+        return stripped[:-1]
+    return text
 
 
 def _update_content_in_place(
@@ -730,15 +747,31 @@ def rewrite_alto_file(
             line_paths[line_id] = "subs_only"
             continue
 
+        # An EXPLICIT PART1 line carries its end-of-line hyphen structurally,
+        # in the <HYP> element (the rewrite paths re-emit it). If the LLM
+        # returned the fragment WITH a trailing hyphen ("préve-", natural at a
+        # word break), storing it in the String CONTENT too would double the
+        # hyphen. Drop it here for the write text only — AFTER the change
+        # detection above, which must compare the full reconstructed line
+        # (String + HYP) so an identity correction still classifies UNTOUCHED.
+        # A HEURISTIC PART1 (no HYP/SUBS markup) has no structural hyphen and
+        # keeps its trailing dash in CONTENT — untouched by this branch.
+        write_text = corrected
+        if (
+            lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
+            and lm.hyphen_source_explicit
+        ):
+            write_text = _drop_structural_break_hyphen(corrected)
+
         # --- Path 3: FAST PATH (word count same) ---
-        if _update_content_in_place(tl_el, corrected, ns):
+        if _update_content_in_place(tl_el, write_text, ns):
             _apply_subs(tl_el, lm, ns)
             metrics.fast_path += 1
             line_paths[line_id] = "fast_path"
             continue
 
         # --- Path 4: SLOW PATH (word count changed) ---
-        _rebuild_line(tl_el, corrected, lm, ns)
+        _rebuild_line(tl_el, write_text, lm, ns)
         _apply_subs(tl_el, lm, ns)
         metrics.slow_path += 1
         line_paths[line_id] = "slow_path"
@@ -842,9 +875,7 @@ def _add_processing_entry(
 
     ocr_processings = desc.findall(_tag("OCRProcessing", ns))
     if ocr_processings:
-        _append_post_processing_step(
-            ocr_processings[-1], ns, description, lib_version
-        )
+        _append_post_processing_step(ocr_processings[-1], ns, description, lib_version)
         return
 
     _append_processing_step(

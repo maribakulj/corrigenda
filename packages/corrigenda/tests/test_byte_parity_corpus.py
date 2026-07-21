@@ -25,6 +25,16 @@ corpus files, pinned by sha256:
     identical; the identity hashes are unchanged (the rebuild path never
     fires without a word-count change).
 
+    Double-hyphen fix (2026-07-21) — the two SCRIPTED hashes moved again
+    (identity hashes unchanged: identity takes the UNTOUCHED path, which the
+    fix never touches). An explicit PART1 line carries its break hyphen in
+    the <HYP> element; when the LLM returns the fragment WITH a trailing
+    hyphen ("préve-"), the rewriter stored it in the last String CONTENT too,
+    doubling it. The fix drops that trailing hyphen from the write text on
+    explicit PART1 lines only. Classified: after the fix, ZERO explicit PART1
+    lines in either corpus carry a doubled hyphen; heuristic PART1 (no
+    HYP/SUBS markup) keeps its trailing dash in CONTENT, unchanged.
+
     Provenance fix (2026-07-21) — all four hashes moved by exactly one
     localized, deterministic change: the rewriter now records the correction
     pass as a ``<postProcessingStep>`` inside the file's existing
@@ -62,13 +72,13 @@ _GOLDEN = {
         "b0bd7f1ce94a3aae4d353c63466f2141b31480c7e1b02a98e8c039b27a4aebb1"
     ),
     ("sample.xml", "scripted"): (
-        "27f73417133cec91bae571986b062239839c1eebd6d5426a13780c31aef4b748"
+        "20fc24c2f67e9e8b83421ddcfcb412c3b230a510b5459be49eff5c77e3c9979b"
     ),
     ("X0000002.xml", "identity"): (
         "58b7f7d4f230d202494e5698da34e57aeffae7774b4517de86f233c85b744b3b"
     ),
     ("X0000002.xml", "scripted"): (
-        "ed12cc639c8ac78fa17701518a15dc76338c1cf9c8b2b53dc7fda7f7b3210158"
+        "acaa511607c561fbf717fbcc3b2befe58f4257501db2383c34cf961c7f45fdcc"
     ),
 }
 
