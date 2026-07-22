@@ -53,6 +53,14 @@ def test_usage_add_and_total():
     assert c.total_tokens == 12
 
 
+def test_usage_add_concatenates_response_ids_in_call_order():
+    a = Usage(input_tokens=1, response_ids=["resp-1"])
+    b = Usage(output_tokens=1, response_ids=["resp-2", "resp-3"])
+    assert (a + b).response_ids == ["resp-1", "resp-2", "resp-3"]
+    # A provider that reports tokens without an id contributes nothing.
+    assert (a + Usage(input_tokens=9)).response_ids == ["resp-1"]
+
+
 @pytest.mark.asyncio
 async def test_pipeline_aggregates_usage_into_result():
     provider = _UsageProvider()
@@ -116,6 +124,54 @@ async def test_chunk_completed_reports_chunk_total_across_retries():
     assert first["output_tokens"] == 6
     # Global aggregate counts every call too.
     assert result.usage.input_tokens == 10 * provider.calls
+
+
+@pytest.mark.asyncio
+async def test_report_persists_the_aggregated_usage():
+    """Phase 0 (ROADMAP V3) — usage lived only on the TRANSIENT
+    CorrectionResult while the report is the persisted artefact, so
+    cost (and response ids) never reached trace.json. Failed before:
+    CorrectionReport had no usage field."""
+
+    class _WithIds(_UsageProvider):
+        async def complete_structured(
+            self, **kw: Any
+        ) -> tuple[dict[str, Any], Usage | None]:
+            out, usage = await super().complete_structured(**kw)
+            assert usage is not None
+            return out, usage + Usage(response_ids=[f"resp-{self.calls}"])
+
+    provider = _WithIds()
+    doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
+    pipeline = CorrectionPipeline.for_provider(
+        provider, api_key="k", model="m", observer=_Null()
+    )
+    result = await pipeline.run(document_manifest=doc, source_files={})
+
+    assert result.report.usage == result.usage
+    assert result.report.usage is not None
+    assert result.report.usage.input_tokens == 10 * provider.calls
+    assert result.report.usage.response_ids == [
+        f"resp-{n}" for n in range(1, provider.calls + 1)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_report_usage_is_none_when_nothing_was_reported():
+    """A zero Usage on the report would be indistinguishable from 'the
+    provider reported zero tokens' — silence stays None."""
+
+    class _NoUsage(_UsageProvider):
+        async def complete_structured(self, **kw):
+            out, _ = await super().complete_structured(**kw)
+            return out, None
+
+    doc = build_document_manifest([(_SAMPLE, _SAMPLE.name)])
+    pipeline = CorrectionPipeline.for_provider(
+        _NoUsage(), api_key="k", model="m", observer=_Null()
+    )
+    result = await pipeline.run(document_manifest=doc, source_files={})
+    assert result.report.usage is None
 
 
 @pytest.mark.asyncio

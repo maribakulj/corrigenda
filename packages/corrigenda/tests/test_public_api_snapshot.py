@@ -189,6 +189,7 @@ def test_correction_report_json_keys_are_pinned():
         "lines",
         "format_losses",
         "provenance",  # P3.9 — optional, additive (no version bump)
+        "usage",  # ROADMAP V3 Phase 0 — optional, additive (no version bump)
     }, (
         "CorrectionReport JSON shape moved — a key removal/rename requires "
         "bumping CORRECTION_REPORT_VERSION (§9); an addition must stay "

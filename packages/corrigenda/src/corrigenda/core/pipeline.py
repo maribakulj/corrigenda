@@ -1134,6 +1134,15 @@ class CorrectionPipeline:
             provenance=self._build_provenance(
                 document_manifest=document_manifest, source_digests=source_digests
             ),
+            # F14/§11 — the aggregated usage is part of the persisted
+            # artefact, not just the transient result. None when nothing
+            # was reported: a zero Usage would be indistinguishable from
+            # "the provider reported zero tokens".
+            usage=(
+                ctx.usage
+                if ctx.usage.total_tokens or ctx.usage.response_ids
+                else None
+            ),
         )
 
         # Line-level fallback accounting, read from the DecisionSet

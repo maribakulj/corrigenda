@@ -779,6 +779,12 @@ class Usage(BaseModel):
 
     input_tokens: int = 0
     output_tokens: int = 0
+    #: §11 — vendor response identifiers, when the provider surfaces one
+    #: (OpenAI/Mistral/Anthropic ``id``, Gemini ``responseId``). They ride
+    #: the same producer→pipeline→report path as the token counts and
+    #: aggregate by concatenation (call order), so a report names every
+    #: provider response that contributed to the run.
+    response_ids: list[str] = Field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:
@@ -788,6 +794,7 @@ class Usage(BaseModel):
         return Usage(
             input_tokens=self.input_tokens + other.input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
+            response_ids=[*self.response_ids, *other.response_ids],
         )
 
 
@@ -1013,6 +1020,13 @@ class CorrectionReport(BaseModel):
     #: ignores unknown keys keeps working, one that reads it gains the
     #: source digests, producer identity and dependency versions.
     provenance: RunProvenance | None = None
+    #: F14/§11 — provider usage aggregated over the run (tokens +
+    #: response ids). Historically it lived only on the TRANSIENT
+    #: ``CorrectionResult`` while the report was the persisted artefact,
+    #: so cost never reached trace.json. ``None`` when no producer call
+    #: reported usage (rules producer, dry runs). Additive and optional —
+    #: no ``report_version`` bump (same contract as ``format_losses``).
+    usage: Usage | None = None
 
     @property
     def fallback_lines(self) -> list[LineOutcome]:
