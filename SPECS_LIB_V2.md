@@ -152,7 +152,7 @@ d'ancrage physique — présents uniquement quand un producteur les demande
 `geometry` (les `coords` du manifest, déjà disponibles — bbox/polygone +
 dimensions de page, de quoi calculer une bbox relative sans connaître
 l'unité) et `image_ref` de page (chaîne opaque, jamais ouverte par la lib,
-issue du mapping `source_images` passé à `run()`). Le compilateur ne fait
+issue du mapping `page_images` passé à `run()`). Le compilateur ne fait
 que **recopier** ces champs depuis le manifest et le mapping ; il ne touche
 aucun pixel.
 
@@ -263,11 +263,13 @@ contrat, pas le contrat lui-même. `Usage` (tokens in/out) remonte au rapport
 et au consommateur (qui le mappe sur sa propre comptabilité de ressources) ;
 en v1.0 il est déjà remonté par `complete_structured` (F14).
 
-`run()` accepte un mapping optionnel `source_images: dict[str, ImageRef]`
-(clé = même identité de source que `source_files`), que la lib **forwarde**
-comme référence opaque et **n'ouvre jamais**. Un producteur à
-`wants_image=True` sans `source_images` correspondant → `ValidationError`
-au démarrage (jamais un appel vision muet sans image).
+`run()` accepte un mapping optionnel `page_images: dict[str, ImageRef]`
+(clé = `page_id`, unique au document — **une image par page physique**, pas
+par fichier source : un fichier multipage a plusieurs pages et donc
+plusieurs images), que la lib **forwarde** comme référence opaque et
+**n'ouvre jamais**. Un producteur à `wants_image=True` sans `page_images`
+couvrant chaque page → `ConfigurationError` au démarrage
+(`require_page_images` — jamais un appel vision muet sans image).
 
 ### 5.2 Producteur LLM (existant, généralisé)
 
@@ -290,7 +292,7 @@ d'ALTO/PAGE **ligne par ligne** guidée par l'image (write-back par `line_id`).
 
 Ce qui appartient à la **lib** (enveloppe, minimal) :
 - Le contrat `EditProducer` vision-aware (§5.1 : `wants_geometry`/`wants_image`
-  + `source_images`).
+  + `page_images`).
 - Le compilateur qui **recopie** `geometry` (déjà dans le manifest) et
   `image_ref` de page (opaque) dans le `ModelPayload` (§4.1).
 - **Rien d'autre.** La lib ne charge pas l'image, ne crope pas, n'encode pas.
@@ -306,7 +308,7 @@ Ce qui appartient au **consommateur** (le producteur concret, hors lib) :
 **Prototypage sans changement de lib** : un producteur *stateful par document*
 qui se construit avec le `DocumentManifest` + l'image, résout `coords[line_id]`
 et crope, fonctionne avec la lib **inchangée** (il n'a besoin que des `line_id`
-que le payload transporte déjà). L'enveloppe `source_images`/`wants_*` n'est
+que le payload transporte déjà). L'enveloppe `page_images`/`wants_*` n'est
 requise que pour un producteur **stateless et générique** (réutilisable par
 n'importe quel consommateur, non reconstruit par document) — c'est la cible
 v2.0 ; le producteur stateful est le raccourci de prototypage.
@@ -601,7 +603,7 @@ Chaque tranche laisse la lib **publiable et verte** ; pas de branche longue.
 |---|---|---|
 | **v1.0** | Corrections F1–F14 ; rapatriement des tests (F11) ; API §8 (politiques, erreurs, usage, dry-run sans EditScript) ; `CorrectionReport` public ; publication PyPI sous le nom retenu (§14) | Suite verte dans le paquet ; `mypy --strict` ; byte-parity sur corpus de non-régression (mêmes entrées + `RetryPolicy.default()` → mêmes sorties qu'avant, hors fixes F2/F4/F6 documentés) ; CHANGELOG |
 | **v1.1** | Backend **PAGE XML** (§6.2) : parser, rewriter 4 chemins, césure heuristique, tests de parité §6.3 | Round-trip byte-stable PAGE ; conventions **P5** (caractères de césure) et **P7** (provenance/XSD) confirmées sur exports réels Transkribus **et** eScriptorium ; mêmes gardes vertes sur ces corpus |
-| **v2.0** | Protocole d'édition (§4) : `EditScript`, normalisation `match→range`, ré-expression `replace_line` (zéro changement de comportement, prouvé par les snapshots v1) ; **producteur règles** (§5.3) ; **enveloppe vision** (§5.2 bis : `EditProducer.wants_*`, `source_images`, géométrie + `image_ref` dans le payload — la lib forwarde, ne crope pas) ; ré-organisation §3 avec alias dépréciés | Snapshots v1 inchangés via le chemin protocole ; moteur de règles testé à l'octet ; producteur vision *mocké* prouvant que géométrie + `image_ref` transitent sans que la lib ouvre l'image ; doc du protocole |
+| **v2.0** | Protocole d'édition (§4) : `EditScript`, normalisation `match→range`, ré-expression `replace_line` (zéro changement de comportement, prouvé par les snapshots v1) ; **producteur règles** (§5.3) ; **enveloppe vision** (§5.2 bis : `EditProducer.wants_*`, `page_images`, géométrie + `image_ref` dans le payload — la lib forwarde, ne crope pas) ; ré-organisation §3 avec alias dépréciés | Snapshots v1 inchangés via le chemin protocole ; moteur de règles testé à l'octet ; producteur vision *mocké* prouvant que géométrie + `image_ref` transitent sans que la lib ouvre l'image ; doc du protocole |
 | **v2.1** | Producteur LLM en mode `replace_span`/`MatchAnchor` (opt-in), benché contre `replace_line` avant d'être recommandé | Comparatif CER/coût publié ; le mode span n'est défaut nulle part sans preuve |
 | **v2.x** | Profil `GuardConfig.vision()` (§7 F13) calibré au banc ; sérialisation texte pour modèle spécialisé (§5.4) — chacun uniquement quand son consommateur existe et se benche | — |
 
@@ -638,7 +640,7 @@ une contrainte de conception, se réduit à ces règles :
 - **Toute variabilité passe par l'injection**, pas par un cas particulier
   câblé : le producteur (`EditProducer`/`BaseProvider`), l'observateur, le
   writer, et les politiques (`RetryPolicy`, `GuardConfig`, `ChunkPlannerConfig`,
-  `PairingPolicy`, `source_images`) sont les *seuls* points par lesquels un
+  `PairingPolicy`, `page_images`) sont les *seuls* points par lesquels un
   consommateur adapte la lib. Un besoin qui n'y rentrerait pas est soit un
   manque d'enveloppe à corriger dans la lib, soit un concern hors-périmètre
   (§12) — jamais un `if consommateur == …`.
