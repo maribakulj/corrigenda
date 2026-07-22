@@ -255,15 +255,16 @@ def link_alto_to_images(
     saved_images: dict[str, Path],
 ) -> dict[str, str]:
     """
-    Match ALTO source files to images.
+    Match ALTO/PAGE source files to images.
 
     pages: list of (page_id, source_file) pairs from the document manifest.
     saved_alto: {filename → Path} mapping from save_uploaded_files.
     saved_images: {lowercase_stem → Path} mapping from save_uploaded_files.
 
     Strategy per source file:
-    1. Parse sourceImageInformation/fileName from the ALTO XML.
-    2. Fall back to matching by lowercase stem of the ALTO source filename.
+    1. Parse the declared image name from the XML itself —
+       sourceImageInformation/fileName (ALTO) or Page/@imageFilename (PAGE).
+    2. Fall back to matching by lowercase stem of the XML source filename.
 
     Returns {source_file: image_filename}.
 
@@ -286,7 +287,9 @@ def link_alto_to_images(
         if alto_path is None:
             continue
 
-        # Strategy 1: read sourceImageInformation/fileName from ALTO XML
+        # Strategy 1: read the image name the XML itself declares —
+        # ALTO: sourceImageInformation/fileName (element text);
+        # PAGE: Page/@imageFilename (attribute).
         image_key: str | None = None
         try:
             # Single source of truth for the hardened parser: shared
@@ -300,6 +303,12 @@ def link_alto_to_images(
                 if fname:
                     image_key = Path(fname).stem.lower()
                     break
+            if image_key is None:
+                for el in tree.findall(".//{*}Page[@imageFilename]"):
+                    fname = (el.get("imageFilename") or "").strip()
+                    if fname:
+                        image_key = Path(fname).stem.lower()
+                        break
         except Exception:
             # Falls back to the ALTO stem below. Logging the parse
             # failure helps diagnose why an image link is missing for
