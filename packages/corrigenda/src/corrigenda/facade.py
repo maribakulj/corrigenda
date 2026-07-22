@@ -26,20 +26,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from lxml import etree
-
 from corrigenda.core.pipeline import CorrectionPipeline, CorrectionResult
 from corrigenda.core.protocols import EditProducer
 from corrigenda.core.schemas import DocumentManifest, ImageRef
 from corrigenda.errors import ParseError
-from corrigenda.formats._xml import (
-    classified_parse_errors,
-    detect_namespace,
-    make_safe_parser,
-)
-
-_ALTO_MARKER = "loc.gov/standards/alto"
-_PAGE_MARKER = "primaresearch.org/PAGE"
+from corrigenda.formats.loader import build_document_manifest
 
 
 class _NullObserver:
@@ -56,23 +47,6 @@ class LoadedDocument:
 
     manifest: DocumentManifest
     source_paths: dict[str, Path]
-
-
-def _sniff_format(path: Path) -> str:
-    """ "alto" / "page" from the file's root namespace (§3 — the document
-    says what it is; nobody passes a format flag on the happy path)."""
-    with classified_parse_errors(path.name):
-        root = etree.parse(str(path), make_safe_parser()).getroot()
-    ns = detect_namespace(root)
-    if _ALTO_MARKER in ns:
-        return "alto"
-    if _PAGE_MARKER in ns:
-        return "page"
-    raise ParseError(
-        f"{path.name!r}: root namespace {ns!r} is neither ALTO nor PAGE — "
-        "corrigenda.load() only speaks those two; parse other formats "
-        "through their own adapter."
-    )
 
 
 def load(*paths: str | Path) -> LoadedDocument:
@@ -97,20 +71,9 @@ def load(*paths: str | Path) -> LoadedDocument:
             )
         by_name[path.name] = path
 
-    formats = {path: _sniff_format(path) for path in resolved}
-    distinct = set(formats.values())
-    if len(distinct) > 1:
-        detail = ", ".join(f"{p.name}: {f}" for p, f in formats.items())
-        raise ParseError(
-            f"one document, one format — got a mix ({detail}). "
-            "Load ALTO and PAGE files as separate documents."
-        )
-
-    if distinct == {"page"}:
-        from corrigenda.formats.page.parser import build_document_manifest
-    else:
-        from corrigenda.formats.alto.parser import build_document_manifest
-
+    # Format sniffing, the one-format-per-document check and the parser
+    # dispatch all live in formats.loader (shared with any host that
+    # ingests user files with its own (path, name) pairs).
     manifest = build_document_manifest([(p, p.name) for p in resolved])
     return LoadedDocument(manifest=manifest, source_paths=by_name)
 
