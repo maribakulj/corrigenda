@@ -80,12 +80,10 @@ def _post_processing_descriptions(xml_bytes: bytes) -> list[str]:
     root = etree.fromstring(xml_bytes)
     ns = _detect_namespace(root)
     step_tag = f"{{{ns}}}postProcessingStep" if ns else "postProcessingStep"
-    desc_tag = f"{{{ns}}}processingStepDescription" if ns else "processingStepDescription"
-    return [
-        d.text or ""
-        for step in root.iter(step_tag)
-        for d in step.iter(desc_tag)
-    ]
+    desc_tag = (
+        f"{{{ns}}}processingStepDescription" if ns else "processingStepDescription"
+    )
+    return [d.text or "" for step in root.iter(step_tag) for d in step.iter(desc_tag)]
 
 
 def test_processing_step_carries_version_and_fingerprint(tmp_path: Path):
