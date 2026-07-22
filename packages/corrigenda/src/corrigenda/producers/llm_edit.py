@@ -21,6 +21,8 @@ response, not a "no edit".
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from corrigenda.core.editing import EditScript, ReplaceLine
@@ -66,8 +68,30 @@ class LLMEditProducer:
         #: Declared provenance (P3.7-4) — the adapter cannot know the
         #: vendor's marketing name, so ``name`` stays the generic "llm";
         #: ``for_provider(provider_name=…)`` overrides it with the
-        #: caller's label via explicit constructor metadata.
-        self.metadata = ProducerMetadata(name="llm", implementation=model)
+        #: caller's label via explicit constructor metadata (carrying
+        #: this fingerprint along). The fingerprint covers the producer
+        #: CONFIGURATION — system prompt + output schema, the two knobs
+        #: that change what the model is asked; the model itself is the
+        #: ``implementation`` field, same split as RulesProducer.
+        self.metadata = ProducerMetadata(
+            name="llm",
+            implementation=model,
+            configuration_fingerprint=self._config_fingerprint(),
+        )
+
+    def _config_fingerprint(self) -> str:
+        """Stable 16-hex sha256 over prompt + schema (same shape as the
+        rules producer's and the pipeline's §11 policy fingerprint)."""
+        payload = json.dumps(
+            {
+                "system_prompt": self._system_prompt,
+                "output_schema": self._output_schema,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
     async def produce(
         self, payload: CorrectionRequest, *, options: ProducerOptions

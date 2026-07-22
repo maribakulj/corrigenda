@@ -106,9 +106,26 @@ def test_for_provider_maps_vendor_strings_into_the_envelope():
         provider_name="openai",
         observer=_Null(),
     )
-    assert pipeline.producer_metadata == ProducerMetadata(
-        name="openai", implementation="gpt-x"
+    assert pipeline.producer_metadata.name == "openai"
+    assert pipeline.producer_metadata.implementation == "gpt-x"
+
+
+def test_for_provider_carries_the_producer_configuration_fingerprint():
+    """The explicit vendor envelope overrides IDENTITY (name/model); it
+    must not erase the producer's configuration provenance (§11)."""
+    pipeline = CorrectionPipeline.for_provider(
+        DictProvider({}),
+        api_key="k",
+        model="gpt-x",
+        provider_name="openai",
+        observer=_Null(),
     )
+    direct = LLMEditProducer(DictProvider({}), "k", "gpt-x")
+    assert (
+        pipeline.producer_metadata.configuration_fingerprint
+        == direct.metadata.configuration_fingerprint
+    )
+    assert pipeline.producer_metadata.configuration_fingerprint is not None
 
 
 def test_for_provider_default_name_stays_unknown():
@@ -128,7 +145,35 @@ def test_for_provider_default_name_stays_unknown():
 
 def test_llm_edit_producer_declares_generic_llm_identity():
     producer = LLMEditProducer(DictProvider({}), "k", "gpt-x")
-    assert producer.metadata == ProducerMetadata(name="llm", implementation="gpt-x")
+    assert producer.metadata.name == "llm"
+    assert producer.metadata.implementation == "gpt-x"
+
+
+def test_llm_edit_producer_declares_configuration_fingerprint():
+    """Phase 0 (ROADMAP V3) — an LLM run's provenance must say WHICH
+    prompt/schema contract produced the edits, not just which model.
+    Failed before: metadata carried no configuration_fingerprint."""
+    md = LLMEditProducer(DictProvider({}), "k", "gpt-x").metadata
+    assert md.configuration_fingerprint is not None
+    assert len(md.configuration_fingerprint) == 16
+
+
+def test_llm_fingerprint_is_deterministic_and_contract_sensitive():
+    a = LLMEditProducer(DictProvider({}), "k", "gpt-x").metadata
+    b = LLMEditProducer(DictProvider({}), "other-key", "gpt-y").metadata
+    # Credentials and model are NOT configuration: same contract, same digest
+    # (the model already lives in `implementation`).
+    assert a.configuration_fingerprint == b.configuration_fingerprint
+
+    with_prompt = LLMEditProducer(
+        DictProvider({}), "k", "gpt-x", system_prompt="autre prompt"
+    ).metadata
+    assert with_prompt.configuration_fingerprint != a.configuration_fingerprint
+
+    with_schema = LLMEditProducer(
+        DictProvider({}), "k", "gpt-x", output_schema={"type": "object"}
+    ).metadata
+    assert with_schema.configuration_fingerprint != a.configuration_fingerprint
 
 
 def test_rules_producer_declares_configuration_fingerprint():

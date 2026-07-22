@@ -808,9 +808,14 @@ class CorrectionPipeline:
             format_adapter=format_adapter,
             loss_policy=loss_policy,
             # Vendor vocabulary is native HERE (the LLM convenience):
-            # the two strings become the generic identity envelope.
+            # the two strings become the generic identity envelope. The
+            # producer's configuration fingerprint (prompt + schema)
+            # rides along — the explicit envelope overrides IDENTITY,
+            # it must not erase configuration provenance (§11).
             producer_metadata=ProducerMetadata(
-                name=provider_name, implementation=model
+                name=provider_name,
+                implementation=model,
+                configuration_fingerprint=producer.metadata.configuration_fingerprint,
             ),
         )
 
