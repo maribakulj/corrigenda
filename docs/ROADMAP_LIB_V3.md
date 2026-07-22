@@ -85,14 +85,19 @@ specs ne contredisent plus l'API ; chaque run est reproductible en principe
 
 Le composant partagé d'abord.
 
-- [ ] **Aligneur token-à-token** (alignement caractère type Levenshtein
-      projeté sur les mots) : ancien token → nouveau token, score, détection
-      de réordonnancement. Sert trois causes : scoring, projection fidèle,
-      `token_realign`.
-- [ ] **Chemin lent ALTO aligné** : recyclage de `ID`/`STYLEREFS`/`STYLE`
-      par alignement (plus jamais positionnel) ; correspondance ambiguë =
-      perte comptée. Politique `token_realign` à côté du `report`/`strict`
-      de `LossPolicy`. Sortie **sidecar** quand la projection est refusée.
+- [x] **Aligneur token-à-token** (`core/alignment.py`) : Levenshtein
+      caractère → DP monotone sur les mots ; une correspondance exige de
+      l'évidence caractère (jamais de match à similarité nulle) ;
+      réordonnancement suspecté **signalé** (`move_suspected`), jamais
+      appliqué. Pur, déterministe, zéro dépendance.
+- [ ] **Chemin lent ALTO aligné** :
+  - [x] recyclage de `ID`/`STYLEREFS`/`STYLE` par alignement (plus jamais
+        positionnel) ; source stylée non appariée = perte comptée
+        (`style_dropped`) ; réordonnancement suspecté surfacé
+        (`word_order_suspected` dans le rapport de pertes) ; IDs générés
+        dédupliqués contre les IDs recyclés ;
+  - [ ] politique `token_realign` à côté du `report`/`strict` de
+        `LossPolicy` ; sortie **sidecar** quand la projection est refusée.
 - [ ] **Canal d'incertitude LLM** : `status: certain|uncertain` par ligne
       dans le schéma de sortie ; en opt-in, codes de raison par token modifié
       (`confusion_connue`, `mot_du_lexique`, `inféré_du_contexte`,
