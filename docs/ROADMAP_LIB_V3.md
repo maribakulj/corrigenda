@@ -46,22 +46,22 @@ qui échoue avant lui.
 
 Objectif : plus aucune affirmation du projet n'est contredite par le code.
 
-- [ ] **Docs normatives ↔ code** : `SPECS_LIB_V2.md` et
+- [x] **Docs normatives ↔ code** : `SPECS_LIB_V2.md` et
       `packages/corrigenda/docs/edit-protocol.md` passent à
       `page_images` / `require_page_images` (le code porte le contrat corrigé
       — une image par *page*, keyée par `page_id` unique au document ; ce sont
       les docs qui sont en retard). Balayage des autres dérives.
-- [ ] **Chemin PAGE du backend** : remplacer l'import direct du parseur ALTO
-      (`backend/app/api/jobs.py`) par un dispatch par namespace (le sniff
-      existe dans `facade.py`). Ajouter à la bibliothèque une entrée générique
-      acceptant les paires `(path, name)` + `pairing_policy`. Refuser
-      explicitement les uploads mixtes ALTO+PAGE (aujourd'hui : perte
-      silencieuse des lignes PAGE). Corriger les messages d'erreur
-      (« uploaded ALTO files »).
-- [ ] **Provenance — victoires rapides** : `configuration_fingerprint` sur
-      `LLMEditProducer` (hash prompt système + schéma de sortie) ; persistance
-      de `Usage` (tokens, tentatives) dans le rapport ; identifiant de réponse
-      fournisseur quand disponible.
+- [x] **Chemin PAGE du backend** : `corrigenda.formats.loader` (entrée
+      générique `(path, name)` + `pairing_policy`, sniff par namespace,
+      refus des lots mixtes) remplace l'import direct du parseur ALTO dans
+      `backend/app/api/jobs.py` ; la façade `load()` délègue au même module ;
+      l'association image lit aussi `Page/@imageFilename` ; messages d'erreur
+      corrigés ; tests upload PAGE + mixte (échouaient avant le fix).
+- [ ] **Provenance — victoires rapides** :
+  - [x] `configuration_fingerprint` sur `LLMEditProducer` (hash prompt
+        système + schéma de sortie), propagé par `for_provider` ;
+  - [ ] persistance de `Usage` (tokens, tentatives) dans le rapport ;
+  - [ ] identifiant de réponse fournisseur quand disponible.
 - [ ] **Validation XSD** en entrée (diagnostic) et en sortie (garde bloquante
       en test) + matrice publique des versions ALTO/PAGE supportées.
 - [ ] **Tests e2e upload→download** pour ALTO **et** PAGE dans la démo.
