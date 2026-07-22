@@ -35,7 +35,7 @@ export interface paths {
     put?: never
     /**
      * Create Job
-     * @description Upload ALTO files and start a correction job.
+     * @description Upload ALTO/PAGE XML files and start a correction job.
      *
      *     Upload concurrency is reserved by ``UploadAdmissionMiddleware``
      *     BEFORE the multipart body is read: by the time this handler runs,
