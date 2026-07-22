@@ -348,6 +348,35 @@ def _apply_subs(
 # ---------------------------------------------------------------------------
 
 
+# Attributes the slow-path rebuild either RECYCLES (ID/STYLEREFS/STYLE, §6.1
+# whitelist) or drops for a justified reason: WC/CC describe the old glyph
+# string (F2) and HPOS/VPOS/WIDTH/HEIGHT are recomputed/inherited. Anything
+# ELSE on a source String (TAGREFS links to structural tags, ``language``,
+# vendor attributes) is NOT invalidated by a spelling fix — the rebuild still
+# cannot re-attach it to a re-segmented word without guessing, so it is
+# dropped, but it must be REPORTED, not lost silently ("lossless" was a lie).
+_SLOW_PATH_RETAINED_OR_JUSTIFIED = frozenset(
+    {"ID", "STYLEREFS", "STYLE", "WC", "CC", "HPOS", "VPOS", "WIDTH", "HEIGHT"}
+)
+
+
+def _semantic_attr_losses(orig_string_attribs: list[dict[str, str]]) -> dict[str, int]:
+    """Count semantic String attributes a slow-path rebuild will drop.
+
+    Keyed ``<attr>_dropped`` (namespace stripped, lower-cased) to match the
+    PAGE rewriter's loss vocabulary, e.g. ``TAGREFS`` → ``tagrefs_dropped``.
+    """
+    losses: dict[str, int] = {}
+    for attribs in orig_string_attribs:
+        for key in attribs:
+            local = key.rsplit("}", 1)[-1]
+            if local in _SLOW_PATH_RETAINED_OR_JUSTIFIED:
+                continue
+            loss_key = f"{local.lower()}_dropped"
+            losses[loss_key] = losses.get(loss_key, 0) + 1
+    return losses
+
+
 def _drop_structural_break_hyphen(text: str) -> str:
     """Remove ONE trailing break hyphen from an explicit PART1 line's text.
 
@@ -532,7 +561,7 @@ def _rebuild_line(
     corrected: str,
     manifest: LineManifest,
     ns: str,
-) -> None:
+) -> dict[str, int]:
     """Slow-path rebuild for any TextLine (normal, PART1, BOTH, PART2).
 
     Behaviour by ``manifest.hyphen_role``:
@@ -543,6 +572,10 @@ def _rebuild_line(
       - NONE: full text width; any stray HYPs on the source element are
         deep-copied and restored verbatim after the rebuild (defensive —
         production ALTO rarely has HYPs on non-hyphenated lines).
+
+    Returns the ``<attr>_dropped`` loss counts for the semantic String
+    attributes this rebuild could not carry over (empty when none) — the
+    caller aggregates them into the run's loss report.
     """
     # Trim leading/trailing whitespace before tokenizing: the validator
     # accepts corrected text with edge whitespace, and an edge SP token
@@ -572,6 +605,10 @@ def _rebuild_line(
 
     orig_string_attribs = [_attrib_dict(s) for s in _get_string_children(el, ns)]
     orig_sp_attribs = [_attrib_dict(s) for s in _get_sp_children(el, ns)]
+    # Semantic attributes (TAGREFS, language, vendor) the rebuild will drop:
+    # reported, never silently lost. Computed from the source Strings before
+    # they are cleared; the emitted Strings only carry the §6.1 whitelist.
+    losses = _semantic_attr_losses(orig_string_attribs)
 
     if is_part1_like:
         orig_hyps = _get_hyp_children(el, ns)
@@ -627,7 +664,7 @@ def _rebuild_line(
         else:
             for h in saved_hyp:
                 el.append(h)
-        return
+        return losses
 
     geo = _compute_geometry(hpos, text_width, tokens)
     str_n = sp_n = 0
@@ -669,6 +706,8 @@ def _rebuild_line(
         for h in saved_hyp:
             el.append(h)
 
+    return losses
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -704,6 +743,8 @@ def rewrite_alto_file(
     ns = _detect_namespace(root)
     metrics = RewriterMetrics()
     line_paths: dict[str, str] = {}
+    losses: dict[str, int] = {}
+    losses_by_line: dict[str, dict[str, int]] = {}
 
     # ADR-007 — a bare line_id keys every correction-to-element
     # association below. A duplicate (in the manifests OR on the XML
@@ -771,10 +812,14 @@ def rewrite_alto_file(
             continue
 
         # --- Path 4: SLOW PATH (word count changed) ---
-        _rebuild_line(tl_el, write_text, lm, ns)
+        line_losses = _rebuild_line(tl_el, write_text, lm, ns)
         _apply_subs(tl_el, lm, ns)
         metrics.slow_path += 1
         line_paths[line_id] = "slow_path"
+        if line_losses:
+            losses_by_line[line_id] = line_losses
+            for k, v in line_losses.items():
+                losses[k] = losses.get(k, 0) + v
 
     _add_processing_entry(root, ns, provider, model, lib_version, config_fingerprint)
     # pretty_print=False: avoid gratuitously reformatting the entire XML
@@ -786,13 +831,18 @@ def rewrite_alto_file(
     )
     # ADR-011 — the output texts are read off the very tree the bytes
     # were just serialized from: the projection invariant verifies them
-    # without a second full parse of the output. ALTO rewrites are
-    # lossless (no granularity counters to report).
+    # without a second full parse of the output. A slow-path rebuild drops
+    # semantic String attributes it cannot re-attach to re-segmented words
+    # (TAGREFS, language, vendor); those are COUNTED in ``losses`` rather
+    # than lost silently — the fast/untouched paths preserve them and report
+    # nothing.
     return RewriteResult(
         xml_bytes=xml_bytes,
         metrics=metrics,
         rewriter_paths=line_paths,
         texts=_extract_texts_from_root(root, ns, set(line_by_id)),
+        losses=losses,
+        losses_by_line=losses_by_line,
     )
 
 
