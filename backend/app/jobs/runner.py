@@ -26,6 +26,7 @@ from corrigenda import (
 )
 from corrigenda.core.events import ReconcileStats
 from corrigenda.core.protocols import ProviderPermanentError
+from corrigenda.core.schemas import PairingPolicy
 
 from app.jobs.events import JobEventType
 from app.jobs.observers import CompositeObserver, JobStoreObserver, LoggingObserver
@@ -89,6 +90,7 @@ class JobRunner:
         output_writer: OutputWriter,
         source_files: dict[str, Path],
         provider: BaseProvider | None = None,
+        pairing_policy: PairingPolicy | None = None,
         timeout_seconds: int = 1800,
         should_abort: Callable[[], bool] | None = None,
     ) -> None:
@@ -101,6 +103,10 @@ class JobRunner:
         `provider`: injected provider (for testing); if None, resolved
         from the global registry via `app.providers.get_provider`.
         `timeout_seconds`: 0 disables the timeout.
+        `pairing_policy`: the SAME policy the document was parsed with
+        (`geometric_pairing` opt-out). Hyphen pairing happens at parse time,
+        so this is provenance-only: it feeds `config_fingerprint()` so the
+        stamped fingerprint names the policy actually used, not the default.
         `should_abort`: Plan V2.2 — cooperative cancellation probe,
         forwarded to the pipeline (polled between pages and chunks).
         When it trips, the job lands in CANCELLED with no output promoted.
@@ -125,6 +131,7 @@ class JobRunner:
                     provider_name=provider_name,
                     output_writer=output_writer,
                     source_files=source_files,
+                    pairing_policy=pairing_policy,
                     should_abort=should_abort,
                 ),
                 timeout=timeout,
@@ -310,6 +317,7 @@ class JobRunner:
         provider_name: str,
         output_writer: OutputWriter,
         source_files: dict[str, Path],
+        pairing_policy: PairingPolicy | None = None,
         should_abort: Callable[[], bool] | None = None,
     ) -> CorrectionResult:
         """Drive the pure pipeline and persist its counters back."""
@@ -338,6 +346,11 @@ class JobRunner:
             observer=CompositeObserver(
                 [JobStoreObserver(self.job_store, job_id), LoggingObserver()]
             ),
+            # Provenance parity — the pipeline hashes this into the §11
+            # config fingerprint. Passing the job's actual policy (default
+            # or geometric_pairing opt-out) keeps the stamped fingerprint
+            # honest; omitting it silently reverted to DEFAULT_PAIRING_POLICY.
+            pairing_policy=pairing_policy,
         )
         # `run_id` is corrigenda's generic identifier; we feed it the
         # server-side `job_id` so trace.json correlates with the API.

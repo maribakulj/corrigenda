@@ -427,6 +427,10 @@ async def _create_job_reserved(
                     output_writer=output_writer_instance,
                     source_files={name: path for name, path in saved.items()},
                     provider=provider_instance,
+                    # Same policy the manifest was parsed with, so the §11
+                    # config fingerprint stamped into the output names the
+                    # policy actually used (geometric_pairing opt-out honoured).
+                    pairing_policy=pairing_policy,
                     # Lookup is dynamic (not a snapshot) so tests that
                     # `monkeypatch.setattr("app.jobs.runner.DEFAULT_JOB_TIMEOUT_SECONDS", N)`
                     # actually see the override at spawn time.

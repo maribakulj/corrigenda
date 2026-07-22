@@ -10,6 +10,7 @@ from lxml import etree
 from corrigenda.core._norm import clean_content, nfc
 from corrigenda.core._parse import parse_int_tolerant
 from corrigenda.core.identity import ensure_unique_identities
+from corrigenda.core.pairing import HYPHEN_CHARS
 from corrigenda.errors import DuplicateIdError
 from corrigenda.formats.alto._ns import (
     _detect_namespace,
@@ -347,6 +348,51 @@ def _apply_subs(
 # ---------------------------------------------------------------------------
 
 
+# Attributes the slow-path rebuild either RECYCLES (ID/STYLEREFS/STYLE, §6.1
+# whitelist) or drops for a justified reason: WC/CC describe the old glyph
+# string (F2) and HPOS/VPOS/WIDTH/HEIGHT are recomputed/inherited. Anything
+# ELSE on a source String (TAGREFS links to structural tags, ``language``,
+# vendor attributes) is NOT invalidated by a spelling fix — the rebuild still
+# cannot re-attach it to a re-segmented word without guessing, so it is
+# dropped, but it must be REPORTED, not lost silently ("lossless" was a lie).
+_SLOW_PATH_RETAINED_OR_JUSTIFIED = frozenset(
+    {"ID", "STYLEREFS", "STYLE", "WC", "CC", "HPOS", "VPOS", "WIDTH", "HEIGHT"}
+)
+
+
+def _semantic_attr_losses(orig_string_attribs: list[dict[str, str]]) -> dict[str, int]:
+    """Count semantic String attributes a slow-path rebuild will drop.
+
+    Keyed ``<attr>_dropped`` (namespace stripped, lower-cased) to match the
+    PAGE rewriter's loss vocabulary, e.g. ``TAGREFS`` → ``tagrefs_dropped``.
+    """
+    losses: dict[str, int] = {}
+    for attribs in orig_string_attribs:
+        for key in attribs:
+            local = key.rsplit("}", 1)[-1]
+            if local in _SLOW_PATH_RETAINED_OR_JUSTIFIED:
+                continue
+            loss_key = f"{local.lower()}_dropped"
+            losses[loss_key] = losses.get(loss_key, 0) + 1
+    return losses
+
+
+def _drop_structural_break_hyphen(text: str) -> str:
+    """Remove ONE trailing break hyphen from an explicit PART1 line's text.
+
+    The hyphen is represented structurally by the line's ``<HYP>`` element,
+    so it must not also live in the last ``String``'s CONTENT. Accepts the
+    full ALTO/PAGE hyphen repertoire (``-`` ``¬`` ``⸗`` soft-hyphen), mirroring
+    ``reconcile_hyphen_pair``'s trailing-hyphen gate. A line with no trailing
+    hyphen is returned unchanged (defensive — the reconciler guarantees an
+    explicit PART1 correction ends in one, but the rewriter never assumes it).
+    """
+    stripped = text.rstrip()
+    if stripped.endswith(HYPHEN_CHARS):
+        return stripped[:-1]
+    return text
+
+
 def _update_content_in_place(
     el: etree._Element,
     corrected: str,
@@ -515,7 +561,7 @@ def _rebuild_line(
     corrected: str,
     manifest: LineManifest,
     ns: str,
-) -> None:
+) -> dict[str, int]:
     """Slow-path rebuild for any TextLine (normal, PART1, BOTH, PART2).
 
     Behaviour by ``manifest.hyphen_role``:
@@ -526,6 +572,10 @@ def _rebuild_line(
       - NONE: full text width; any stray HYPs on the source element are
         deep-copied and restored verbatim after the rebuild (defensive —
         production ALTO rarely has HYPs on non-hyphenated lines).
+
+    Returns the ``<attr>_dropped`` loss counts for the semantic String
+    attributes this rebuild could not carry over (empty when none) — the
+    caller aggregates them into the run's loss report.
     """
     # Trim leading/trailing whitespace before tokenizing: the validator
     # accepts corrected text with edge whitespace, and an edge SP token
@@ -555,6 +605,10 @@ def _rebuild_line(
 
     orig_string_attribs = [_attrib_dict(s) for s in _get_string_children(el, ns)]
     orig_sp_attribs = [_attrib_dict(s) for s in _get_sp_children(el, ns)]
+    # Semantic attributes (TAGREFS, language, vendor) the rebuild will drop:
+    # reported, never silently lost. Computed from the source Strings before
+    # they are cleared; the emitted Strings only carry the §6.1 whitelist.
+    losses = _semantic_attr_losses(orig_string_attribs)
 
     if is_part1_like:
         orig_hyps = _get_hyp_children(el, ns)
@@ -610,7 +664,7 @@ def _rebuild_line(
         else:
             for h in saved_hyp:
                 el.append(h)
-        return
+        return losses
 
     geo = _compute_geometry(hpos, text_width, tokens)
     str_n = sp_n = 0
@@ -652,6 +706,8 @@ def _rebuild_line(
         for h in saved_hyp:
             el.append(h)
 
+    return losses
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -687,6 +743,8 @@ def rewrite_alto_file(
     ns = _detect_namespace(root)
     metrics = RewriterMetrics()
     line_paths: dict[str, str] = {}
+    losses: dict[str, int] = {}
+    losses_by_line: dict[str, dict[str, int]] = {}
 
     # ADR-007 — a bare line_id keys every correction-to-element
     # association below. A duplicate (in the manifests OR on the XML
@@ -730,18 +788,38 @@ def rewrite_alto_file(
             line_paths[line_id] = "subs_only"
             continue
 
+        # An EXPLICIT PART1 line carries its end-of-line hyphen structurally,
+        # in the <HYP> element (the rewrite paths re-emit it). If the LLM
+        # returned the fragment WITH a trailing hyphen ("préve-", natural at a
+        # word break), storing it in the String CONTENT too would double the
+        # hyphen. Drop it here for the write text only — AFTER the change
+        # detection above, which must compare the full reconstructed line
+        # (String + HYP) so an identity correction still classifies UNTOUCHED.
+        # A HEURISTIC PART1 (no HYP/SUBS markup) has no structural hyphen and
+        # keeps its trailing dash in CONTENT — untouched by this branch.
+        write_text = corrected
+        if (
+            lm.hyphen_role in (HyphenRole.PART1, HyphenRole.BOTH)
+            and lm.hyphen_source_explicit
+        ):
+            write_text = _drop_structural_break_hyphen(corrected)
+
         # --- Path 3: FAST PATH (word count same) ---
-        if _update_content_in_place(tl_el, corrected, ns):
+        if _update_content_in_place(tl_el, write_text, ns):
             _apply_subs(tl_el, lm, ns)
             metrics.fast_path += 1
             line_paths[line_id] = "fast_path"
             continue
 
         # --- Path 4: SLOW PATH (word count changed) ---
-        _rebuild_line(tl_el, corrected, lm, ns)
+        line_losses = _rebuild_line(tl_el, write_text, lm, ns)
         _apply_subs(tl_el, lm, ns)
         metrics.slow_path += 1
         line_paths[line_id] = "slow_path"
+        if line_losses:
+            losses_by_line[line_id] = line_losses
+            for k, v in line_losses.items():
+                losses[k] = losses.get(k, 0) + v
 
     _add_processing_entry(root, ns, provider, model, lib_version, config_fingerprint)
     # pretty_print=False: avoid gratuitously reformatting the entire XML
@@ -753,13 +831,18 @@ def rewrite_alto_file(
     )
     # ADR-011 — the output texts are read off the very tree the bytes
     # were just serialized from: the projection invariant verifies them
-    # without a second full parse of the output. ALTO rewrites are
-    # lossless (no granularity counters to report).
+    # without a second full parse of the output. A slow-path rebuild drops
+    # semantic String attributes it cannot re-attach to re-segmented words
+    # (TAGREFS, language, vendor); those are COUNTED in ``losses`` rather
+    # than lost silently — the fast/untouched paths preserve them and report
+    # nothing.
     return RewriteResult(
         xml_bytes=xml_bytes,
         metrics=metrics,
         rewriter_paths=line_paths,
         texts=_extract_texts_from_root(root, ns, set(line_by_id)),
+        losses=losses,
+        losses_by_line=losses_by_line,
     )
 
 
@@ -816,25 +899,86 @@ def _add_processing_entry(
     corrected XML says by what and under which policy it was produced. Both
     are optional for backward compatibility; when omitted the historical
     description is emitted verbatim.
+
+    Placement follows the ALTO container actually present:
+
+    - ``<Processing>`` (the ALTO 4.0 generic slot) → append a
+      ``<processingStep>`` (historical corrigenda behaviour, unchanged).
+    - ``<OCRProcessing>`` (what real ABBYY / Tesseract / Gallica exports
+      use) → append a ``<postProcessingStep>`` there. Without this branch
+      §11's "every corrected file records the pass" silently failed for
+      exactly the files real users bring — none of them carry ``<Processing>``.
+    - neither, but a ``<Description>`` exists → create a ``<Processing>`` so
+      the pass is still recorded rather than dropped.
     """
     desc = root.find(_tag("Description", ns))
     if desc is None:
         return
-    processing = desc.find(_tag("Processing", ns))
-    if processing is None:
-        return
-    step = etree.SubElement(processing, _tag("processingStep", ns))
-    step.set("type", "contentModification")
+    description = _provenance_description(
+        provider, model, lib_version, config_fingerprint
+    )
 
+    processing = desc.find(_tag("Processing", ns))
+    if processing is not None:
+        _append_processing_step(processing, ns, description)
+        return
+
+    ocr_processings = desc.findall(_tag("OCRProcessing", ns))
+    if ocr_processings:
+        _append_post_processing_step(ocr_processings[-1], ns, description, lib_version)
+        return
+
+    _append_processing_step(
+        etree.SubElement(desc, _tag("Processing", ns)), ns, description
+    )
+
+
+def _provenance_description(
+    provider: str,
+    model: str,
+    lib_version: str | None,
+    config_fingerprint: str | None,
+) -> str:
+    """The human-readable provenance line shared by every ALTO container."""
     provenance = "corrigenda"
     if lib_version:
         provenance += f" {lib_version}"
     if config_fingerprint:
         provenance += f"; config {config_fingerprint}"
-    step.set(
-        "description",
-        f"Post-OCR correction via {provider}/{model} ({provenance})",
-    )
+    return f"Post-OCR correction via {provider}/{model} ({provenance})"
+
+
+def _append_processing_step(
+    processing: etree._Element, ns: str, description: str
+) -> None:
+    """Record the pass as a ``<processingStep>`` (ALTO 4.0 ``<Processing>``)."""
+    step = etree.SubElement(processing, _tag("processingStep", ns))
+    step.set("type", "contentModification")
+    step.set("description", description)
+
+
+def _append_post_processing_step(
+    ocr_processing: etree._Element,
+    ns: str,
+    description: str,
+    lib_version: str | None,
+) -> None:
+    """Record the pass as a ``<postProcessingStep>`` inside ``<OCRProcessing>``.
+
+    ``postProcessingStep`` is the ALTO-standard slot for work done after OCR
+    (LoC ``OCRProcessingType``); it is appended after any existing
+    pre/ocr/post steps, keeping the source OCR record intact. Child order
+    follows ``ProcessingStepType``: description before software.
+    """
+    step = etree.SubElement(ocr_processing, _tag("postProcessingStep", ns))
+    desc_el = etree.SubElement(step, _tag("processingStepDescription", ns))
+    desc_el.text = description
+    software = etree.SubElement(step, _tag("processingSoftware", ns))
+    name_el = etree.SubElement(software, _tag("softwareName", ns))
+    name_el.text = "corrigenda"
+    if lib_version:
+        version_el = etree.SubElement(software, _tag("softwareVersion", ns))
+        version_el.text = lib_version
 
 
 # --- public surface ---

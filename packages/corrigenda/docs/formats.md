@@ -30,6 +30,16 @@ The rewriter is 4-path, most-conservative-first:
 The TextLine's own geometry is **never** modified. Word-level geometry
 after a slow-path rebuild is a documented approximation.
 
+A slow-path rebuild cannot re-attach a `String`'s non-whitelisted semantic
+attributes (`TAGREFS` links to structural tags, `language`, vendor
+attributes) to re-segmented words without guessing, so it drops them — but,
+like PAGE's word granularity, the loss is **counted, not hidden**: each
+dropped attribute surfaces on `CorrectionReport.format_losses` as
+`<attr>_dropped` (e.g. `tagrefs_dropped`), per line and aggregate. `WC`/`CC`
+(genuinely invalidated by the text change) and recomputed geometry are not
+losses. The fast/untouched paths edit in place and preserve these
+attributes.
+
 ## PAGE (`corrigenda.formats.page`)
 
 PRImA PAGE — the native format of Transkribus and eScriptorium; dated
@@ -68,7 +78,10 @@ Every corrected file records the pass: provider/model labels, the library
 version and the run's `config_fingerprint()` — a stable hash over the
 four frozen policies (RetryPolicy, GuardConfig, ChunkPlannerConfig,
 PairingPolicy). A consumer holding the same policy objects can recompute
-and verify it. ALTO writes a `processingStep`; PAGE uses the P7 slots.
+and verify it. ALTO records the pass in whichever container the source
+carries: a `postProcessingStep` inside an existing `<OCRProcessing>` (what
+real ABBYY/Tesseract/Gallica exports use), or a `processingStep` under the
+ALTO 4.0 generic `<Processing>`. PAGE uses the P7 slots.
 
 ## Corpus
 

@@ -255,9 +255,104 @@ def check_adjacent_duplicates(
     return revert
 
 
+def _word_migrated_across_seam(
+    cor_word: str,
+    own_src: str,
+    neighbour: str,
+    *,
+    neighbour_first: bool,
+    config: GuardConfig,
+) -> bool:
+    """True if *cor_word* is better explained by its own source joined with
+    the *neighbour* boundary word than by *own_src* alone — i.e. the word
+    absorbed material across the seam.
+
+    ``neighbour_first`` places the neighbour on the correct side in reading
+    order: for a line's LAST word the neighbour (next line's head) comes
+    AFTER; for a line's FIRST word the neighbour (previous line's tail) comes
+    BEFORE. Keys on the boundary tokens only, so the mangled break glyph the
+    neighbour carries (``re«``, ``absolu*``) is irrelevant: ``SequenceMatcher``
+    scores ``"re" + "tentlssent,"`` against ``"retentissent,"`` on shared
+    characters and the junk washes out. Reuses the Stage-C absorption knobs —
+    the same phenomenon the line-level Guard 3 models, at word granularity —
+    so no new threshold is introduced.
+    """
+    if not cor_word or not own_src or not neighbour:
+        return False
+    if cor_word == own_src:
+        return False  # word untouched → nothing crossed the seam
+    joined = (neighbour + own_src) if neighbour_first else (own_src + neighbour)
+    sim_joined = _similarity(cor_word, joined)
+    if sim_joined <= config.absorption_concat_similarity:
+        return False
+    return sim_joined > _similarity(cor_word, own_src) + config.neighbour_margin
+
+
+def check_boundary_migration(
+    lines: list[tuple[K, str, str]],
+    *,
+    config: GuardConfig = DEFAULT_GUARD_CONFIG,
+) -> dict[K, str]:
+    """Detect a word migrating across a physical line seam.
+
+    The pair-level guards (Stage A/B) only fire on lines the parser paired
+    as a hyphen unit. When the OCR mangles the end-of-line hyphen into a
+    non-``-`` glyph, the line is never paired and the LLM can complete the
+    broken word by pulling its continuation up from the next line (or push a
+    fragment down). The invariant — *no text migrates between physical
+    lines* — must hold regardless of hyphen role, so this Stage-C pass keys
+    on the boundary tokens, not on detection.
+
+    Parameters
+    ----------
+    lines : list of (line_key, source_ocr, corrected_text)
+        Ordered adjacent lines, already individually accepted. Same shape
+        and ordering contract as :func:`check_adjacent_duplicates`: the
+        caller breaks the list at source-file transitions so no seam
+        straddles two documents.
+
+    Returns
+    -------
+    dict mapping line_key → fallback_reason. Both lines of a migrating seam
+    are reverted, mirroring Stage B's "if either side migrated, BOTH sides
+    fall back" rule — reverting only the absorbing side would turn the
+    duplication into a hole on the other side.
+    """
+    revert: dict[K, str] = {}
+    for i in range(len(lines) - 1):
+        id_a, src_a, cor_a = lines[i]
+        id_b, src_b, cor_b = lines[i + 1]
+
+        wa_src, wa_cor = src_a.split(), cor_a.split()
+        wb_src, wb_cor = src_b.split(), cor_b.split()
+        if not wa_src or not wb_src:
+            continue
+
+        # Forward: A's last word pulled B's first word up (neighbour after).
+        forward = bool(wa_cor) and _word_migrated_across_seam(
+            wa_cor[-1], wa_src[-1], wb_src[0], neighbour_first=False, config=config
+        )
+        # Backward: B's first word pulled A's last word down (neighbour before).
+        backward = bool(wb_cor) and _word_migrated_across_seam(
+            wb_cor[0], wb_src[0], wa_src[-1], neighbour_first=True, config=config
+        )
+
+        if forward or backward:
+            reason = (
+                "boundary_migration_forward"
+                if forward
+                else "boundary_migration_backward"
+            )
+            revert[id_a] = reason
+            revert[id_b] = reason
+
+    return revert
+
+
 # --- __all__ ---
 __all__ = [
     "AcceptanceResult",
     "check_line",
     "check_adjacent_duplicates",
+    "check_boundary_migration",
 ]

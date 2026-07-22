@@ -25,6 +25,28 @@ corpus files, pinned by sha256:
     identical; the identity hashes are unchanged (the rebuild path never
     fires without a word-count change).
 
+    Double-hyphen fix (2026-07-21) — the two SCRIPTED hashes moved again
+    (identity hashes unchanged: identity takes the UNTOUCHED path, which the
+    fix never touches). An explicit PART1 line carries its break hyphen in
+    the <HYP> element; when the LLM returns the fragment WITH a trailing
+    hyphen ("préve-"), the rewriter stored it in the last String CONTENT too,
+    doubling it. The fix drops that trailing hyphen from the write text on
+    explicit PART1 lines only. Classified: after the fix, ZERO explicit PART1
+    lines in either corpus carry a doubled hyphen; heuristic PART1 (no
+    HYP/SUBS markup) keeps its trailing dash in CONTENT, unchanged.
+
+    Provenance fix (2026-07-21) — all four hashes moved by exactly one
+    localized, deterministic change: the rewriter now records the correction
+    pass as a ``<postProcessingStep>`` inside the file's existing
+    ``<OCRProcessing>`` container. Previously ``_add_processing_entry`` only
+    handled the ALTO 4.0 generic ``<Processing>`` element and silently wrote
+    NOTHING for real OCR files (both corpus fixtures use ``<OCRProcessing>``),
+    breaking §11's "every corrected file records the pass". Classified per
+    subtree: the original ``<ocrProcessingStep>`` (Tesseract / ABBYY) is
+    preserved untouched; the ONLY addition is the appended
+    ``<postProcessingStep>``. No TextLine, String, SP, HYP, text or geometry
+    drift — the identity path still never rebuilds a line.
+
 If a hash moves, do NOT regenerate blindly: re-run the classifier
 (scratch parity_classify.py pattern — parse both outputs, diff per
 TextLine, bucket into text/structure/confidence/geometry) and update the
@@ -47,16 +69,16 @@ _EXAMPLES = Path(__file__).parent.parent.parent.parent / "examples"
 
 _GOLDEN = {
     ("sample.xml", "identity"): (
-        "10eda74a8afbc2eb3a1c3cf5dd488091f05388e887d17a4f86343e5a54855ec7"
+        "b0bd7f1ce94a3aae4d353c63466f2141b31480c7e1b02a98e8c039b27a4aebb1"
     ),
     ("sample.xml", "scripted"): (
-        "cb57188d510352d8525041b669ecd9430556ddaeef97a45ee5132408ab2fa914"
+        "20fc24c2f67e9e8b83421ddcfcb412c3b230a510b5459be49eff5c77e3c9979b"
     ),
     ("X0000002.xml", "identity"): (
-        "18387a3d4dfdd2a117a0bf4593d9533da3f5aeef35edd6c8a5b5e3d875c759b6"
+        "58b7f7d4f230d202494e5698da34e57aeffae7774b4517de86f233c85b744b3b"
     ),
     ("X0000002.xml", "scripted"): (
-        "c9b67c9d82f9ec8efb73665a7682f1f09f2178b2acc1d29b225868c8871f003c"
+        "acaa511607c561fbf717fbcc3b2befe58f4257501db2383c34cf961c7f45fdcc"
     ),
 }
 
