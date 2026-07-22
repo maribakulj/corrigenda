@@ -57,14 +57,25 @@ Objectif : plus aucune affirmation du projet n'est contredite par le code.
       `backend/app/api/jobs.py` ; la façade `load()` délègue au même module ;
       l'association image lit aussi `Page/@imageFilename` ; messages d'erreur
       corrigés ; tests upload PAGE + mixte (échouaient avant le fix).
-- [ ] **Provenance — victoires rapides** :
+- [x] **Provenance — victoires rapides** :
   - [x] `configuration_fingerprint` sur `LLMEditProducer` (hash prompt
         système + schéma de sortie), propagé par `for_provider` ;
-  - [ ] persistance de `Usage` (tokens, tentatives) dans le rapport ;
-  - [ ] identifiant de réponse fournisseur quand disponible.
-- [ ] **Validation XSD** en entrée (diagnostic) et en sortie (garde bloquante
-      en test) + matrice publique des versions ALTO/PAGE supportées.
-- [ ] **Tests e2e upload→download** pour ALTO **et** PAGE dans la démo.
+  - [x] persistance de `Usage` dans le `CorrectionReport` (additif,
+        `None` quand rien n'a été rapporté) ;
+  - [x] identifiant de réponse fournisseur (`Usage.response_ids`,
+        capté par `extract_usage` : `id` OpenAI/Mistral/Anthropic,
+        `responseId` Gemini).
+- [x] **Validation XSD** : `corrigenda.formats.validation`, schémas
+      officiels embarqués (ALTO v2/v3/v4, PAGE 2013/2019/2024), résolution
+      xlink hors-ligne ; diagnostic en entrée (dialecte Transkribus
+      documenté), gate en sortie (« aucune violation nouvelle ») ; matrice
+      publiée dans `packages/corrigenda/docs/format-support.md`.
+- [x] **Tests e2e upload→download** pour ALTO **et** PAGE dans la démo
+      (uvicorn réel + fournisseur mocké, sortie PcGts vérifiée).
+
+**Phase 0 : terminée** (2026-07-22). Le câblage applicatif du diagnostic
+XSD à l'upload (surfacer les violations dans l'UI) est noté pour la
+Phase 5 — la bibliothèque expose déjà tout le nécessaire.
 
 **Critère de sortie** : un fichier PAGE traverse la démo de bout en bout ; les
 specs ne contredisent plus l'API ; chaque run est reproductible en principe
