@@ -87,6 +87,13 @@ from corrigenda.core.protocols import (
 )
 from corrigenda.core.alignment import align_tokens
 from corrigenda.core.pairing import preserve_break_char
+from corrigenda.core.quality import (
+    DEFAULT_ROUTING_POLICY,
+    QEScorer,
+    RoutingDecision,
+    RoutingPolicy,
+    route_line,
+)
 from corrigenda.core.confidence import (
     ConfidenceScorer,
     HeuristicScorer,
@@ -629,6 +636,10 @@ class CorrectionResult:
     #: it is the caller's choice (:meth:`write`, or a host-owned
     #: transaction like the demo backend's staging writer).
     corrected_files: dict[str, bytes] = field(default_factory=dict)
+    #: Phase 3 — lines the QE router judged already clean and SKIPPED
+    #: (confirmed as-is, no producer call). 0 when routing is off. The
+    #: economics signal: each skip is one LLM call not spent.
+    lines_skipped: int = 0
 
     def write(self, directory: str | Path) -> list[Path]:
         """Persist the run's artefacts into ``directory`` (created if
@@ -686,6 +697,9 @@ class RunContext:
     retry_count: int = 0
     #: Chunks (or descent sub-chunks) that fell back to OCR source text.
     fallback_chunks: int = 0
+    #: Phase 3 — lines the QE router SKIPPED (confirmed clean, no producer
+    #: call). 0 when routing is off.
+    lines_skipped: int = 0
     #: Per-pair reconciliation outcomes (coherent / fallback / neutralised).
     reconcile_metrics: ReconcileMetrics = field(default_factory=ReconcileMetrics)
     #: Aggregate token consumption across every producer call of the run.
@@ -739,6 +753,8 @@ class CorrectionPipeline:
         producer_metadata: ProducerMetadata | None = None,
         confidence_policy: ConfidencePolicy | None = None,
         confidence_scorers: tuple[ConfidenceScorer, ...] | None = None,
+        qe_scorer: QEScorer | None = None,
+        routing_policy: RoutingPolicy | None = None,
     ) -> None:
         self.producer = producer
         self.observer = observer
@@ -770,6 +786,16 @@ class CorrectionPipeline:
             if confidence_scorers is not None
             else (HeuristicScorer(),)
         )
+        # Phase 3 (ROADMAP V3) — hybrid-selective routing. A line the QE
+        # scorer + RoutingPolicy send to SKIP is confirmed clean and
+        # never reaches the producer (no LLM call — the economics). Both
+        # OFF by default: no scorer, and DEFAULT_ROUTING_POLICY routes
+        # every line to LLM, so a default run is byte-identical. A hyphen
+        # unit is NEVER skipped (atomicity) — its members always route to
+        # the producer. Outside the §8.2 fingerprint until a run actually
+        # skips (same rule that held ConfidencePolicy out until write_wc).
+        self.qe_scorer = qe_scorer
+        self.routing_policy = routing_policy or DEFAULT_ROUTING_POLICY
         # §3 format seam — None derives the adapter from the MANIFEST's
         # stamped source_format at write time (_adapter_for_format); an
         # injected adapter that contradicts that format is refused at
@@ -813,6 +839,8 @@ class CorrectionPipeline:
         loss_policy: LossPolicy | None = None,
         confidence_policy: ConfidencePolicy | None = None,
         confidence_scorers: tuple[ConfidenceScorer, ...] | None = None,
+        qe_scorer: QEScorer | None = None,
+        routing_policy: RoutingPolicy | None = None,
         system_prompt: str | None = None,
         output_schema: dict[str, Any] | None = None,
         uncertainty_channel: bool = False,
@@ -853,6 +881,8 @@ class CorrectionPipeline:
             loss_policy=loss_policy,
             confidence_policy=confidence_policy,
             confidence_scorers=confidence_scorers,
+            qe_scorer=qe_scorer,
+            routing_policy=routing_policy,
             # Vendor vocabulary is native HERE (the LLM convenience):
             # the two strings become the generic identity envelope. The
             # producer's configuration fingerprint (prompt + schema)
@@ -1258,6 +1288,8 @@ class CorrectionPipeline:
             ),
             decisions=decisions,
             corrected_files=corrected_files,
+            # Phase 3 — lines the QE router skipped (no producer call).
+            lines_skipped=ctx.lines_skipped,
         )
 
     def _build_provenance(
@@ -1396,6 +1428,77 @@ class CorrectionPipeline:
     # Per-page orchestration
     # ------------------------------------------------------------------
 
+    def _routing_enabled(self) -> bool:
+        """Routing runs only when a QE scorer is present AND the policy
+        has at least one active bound. Otherwise a no-op (default)."""
+        return self.qe_scorer is not None and (
+            self.routing_policy.skip_at_or_below is not None
+            or self.routing_policy.escalate_at_or_above is not None
+        )
+
+    def _route_and_filter_chunks(
+        self,
+        *,
+        page: PageManifest,
+        chunks: list[ChunkRequest],
+        line_by_id: dict[str, LineManifest],
+        ctx: RunContext,
+        traces: dict[LineRef, LineTrace],
+    ) -> list[ChunkRequest]:
+        """Pre-decide SKIP lines and drop them from chunk targets.
+
+        A line the QE scorer + RoutingPolicy route to SKIP is confirmed
+        clean: its final text is its OCR text, its status is CORRECTED,
+        and — the auditable signature of a skip vs an LLM identity pass —
+        it never reaches the producer, so its trace's ``model_input_text``
+        stays ``None``. It remains in each chunk's ``line_ids`` (context
+        for its neighbours) but leaves ``target_line_ids``; a chunk with
+        no targets left is dropped entirely (no producer call). A hyphen
+        unit is NEVER skipped (atomicity — a half-skipped pair could not
+        reconcile), so its members always route to the producer.
+
+        Returns the chunk list unchanged when routing is off.
+        """
+        if not self._routing_enabled():
+            return chunks
+        assert self.qe_scorer is not None  # _routing_enabled guarantees it
+
+        skip: set[str] = set()
+        for lm in page.lines:
+            if lm.hyphen_role is not HyphenRole.NONE:
+                continue  # atomicity — never skip a hyphen-unit member
+            score = self.qe_scorer.needs_correction(lm.ocr_text)
+            if route_line(score, self.routing_policy) is RoutingDecision.SKIP:
+                skip.add(lm.line_id)
+
+        if not skip:
+            return chunks
+
+        for line_id in skip:
+            lm = line_by_id[line_id]
+            lm.corrected_text = lm.ocr_text
+            lm.status = LineStatus.CORRECTED
+            _set_trace(
+                traces,
+                lm,
+                projected_text=lm.ocr_text,
+                validation_status=LineStatus.CORRECTED.value,
+            )
+        ctx.lines_skipped += len(skip)
+
+        filtered: list[ChunkRequest] = []
+        for chunk in chunks:
+            new_targets = [t for t in chunk.targets() if t not in skip]
+            if not new_targets:
+                continue  # every target skipped — no producer call at all
+            if new_targets == chunk.targets():
+                filtered.append(chunk)  # nothing skipped here
+            else:
+                filtered.append(
+                    chunk.model_copy(update={"target_line_ids": new_targets})
+                )
+        return filtered
+
     async def _process_page(
         self,
         *,
@@ -1424,10 +1527,18 @@ class CorrectionPipeline:
 
         plan = plan_page(page, document_id, self.config)
 
+        # Phase 3 — hybrid-selective routing: pre-decide SKIP lines
+        # (confirmed clean, no producer call) and drop them from chunk
+        # targets. A no-op when routing is off (default), so the chunk
+        # list is untouched and every existing run is byte-identical.
+        chunks = self._route_and_filter_chunks(
+            page=page, chunks=plan.chunks, line_by_id=line_by_id, ctx=ctx, traces=traces
+        )
+
         self._emit(
             ev.ChunkPlanned(
                 page_id=page.page_id,
-                chunk_count=len(plan.chunks),
+                chunk_count=len(chunks),
                 granularity=plan.granularity.value,
             )
         )
@@ -1435,7 +1546,7 @@ class CorrectionPipeline:
         page_reconciled = 0
         page_chunks = 0
 
-        for chunk in plan.chunks:
+        for chunk in chunks:
             # F10 — cooperative cancellation between chunks. Checked before
             # the per-chunk try/except so CorrectionAborted propagates out
             # instead of being swallowed as a chunk error.

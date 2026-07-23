@@ -180,7 +180,14 @@ La phase qui rend l'ensemble économiquement positif.
       historique ou un modèle → justifie D'AlemBERT).
 - [x] **`RoutingPolicy` + `route_line`** (brain pur) : décision par ligne
       `skip` (pas d'appel LLM) / `llm` / `escalate` ; défaut = tout au LLM
-      (opt-in). *Reste* : câblage pipeline (passe skip réelle), tier `rules`.
+      (opt-in).
+- [x] **Câblage pipeline** : `CorrectionPipeline(qe_scorer=…,
+      routing_policy=…)` — une ligne SKIP est retirée des cibles du chunk
+      (reste en contexte, sortie ignorée) ; un chunk entièrement skippé est
+      supprimé (aucun appel producteur) ; unité de césure jamais skippée ;
+      `CorrectionResult.lines_skipped` mesure l'économie. Défaut off →
+      run byte-identique. *Reste* : tier `rules`, comptabilité de coût
+      complète (tokens économisés vs escalade).
 - [ ] **Extra `corrigenda[qe]`** : `QEScorer` sur discriminateur type ELECTRA
       exporté ONNX (onnxruntime, pas torch), affiné sur les données Phase 2,
       derrière le protocole `QEScorer` ci-dessus. Pour le français ancien :

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Hybrid-selective routing wired into the pipeline (ROADMAP V3
+  Phase 3).** ``CorrectionPipeline(qe_scorer=…, routing_policy=…)`` (and
+  ``for_provider``): a line the QE scorer + policy route to SKIP is
+  confirmed clean and dropped from its chunk's targets — it stays as
+  context for neighbours but its output is discarded, and a chunk whose
+  targets are ALL skipped is dropped entirely (no producer call, the
+  token savings). A hyphen unit is never skipped (atomicity). SKIP
+  lines end ``CORRECTED`` with unchanged text; the auditable skip
+  signature is a corrected line whose trace ``model_input_text`` is
+  ``None`` (never sent to the model). ``CorrectionResult.lines_skipped``
+  exposes the count (the economics signal). OFF by default — no scorer
+  and ``RoutingPolicy()`` routes every line to the LLM, so a default run
+  is byte-identical (byte-parity corpus unchanged); routing is not in
+  the §8.2 composite fingerprint.
 - **QE scoring + routing brain (ROADMAP V3 Phase 3, core).** New
   ``corrigenda.core.quality``: the ``QEScorer`` protocol (score a
   SOURCE line's need for correction in [0,1], pre-LLM), a
