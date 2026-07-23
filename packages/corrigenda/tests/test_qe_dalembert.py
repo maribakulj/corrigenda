@@ -29,14 +29,13 @@ from corrigenda.core.quality import (  # noqa: E402
 from corrigenda.integrations.qe import (  # noqa: E402
     DEFAULT_MODEL_DIR,
     MaskedLMQEScorer,
-    _deglyph,
 )
 
 pytestmark = pytest.mark.skipif(
     not (DEFAULT_MODEL_DIR / "model.onnx").exists(),
     reason=(
         "D'AlemBERT ONNX bundle absent; build it with "
-        "scripts/export_dalembert_onnx.py --out ~/.cache/corrigenda/dalembert-onnx"
+        "scripts/export_masked_lm_onnx.py --out ~/.cache/corrigenda/dalembert-onnx"
     ),
 )
 
@@ -95,13 +94,6 @@ def test_scoring_reports_original_archaic_words_not_deglyphed(
     assert text == "qu'il eſt bon"
 
 
-def test_deglyph_preserves_word_count_and_order() -> None:
-    # The word→subword mapping relies on glyph substitution never adding or
-    # removing a whitespace boundary.
-    for text in (REF, "des richeſſes & œufs", "ﬁn ﬂeur æques"):
-        assert len(_deglyph(text).split()) == len(text.split())
-
-
 def test_qe_score_drives_router_skip_vs_send(scorer: MaskedLMQEScorer) -> None:
     # End-to-end doctrine: the scorer INFORMS, the Router decides. With a
     # skip bound between the two scores, the clean line is SKIP-ped (no LLM
@@ -117,3 +109,18 @@ def test_qe_score_drives_router_skip_vs_send(scorer: MaskedLMQEScorer) -> None:
 def test_invalid_scale_rejected() -> None:
     with pytest.raises(ValueError):
         MaskedLMQEScorer(surprisal_scale=0.0)
+
+
+def test_line_reducer_switches_aggregation() -> None:
+    # The line aggregation is a per-bundle calibration choice (max vs mean).
+    # Both read the same per-word probabilities; only the reduction differs,
+    # and mean never exceeds max on the same line.
+    from statistics import fmean
+
+    line = "qu'il eſt bon de les auoir mais lorſqu'on eſt trop curieux"
+    by_max = MaskedLMQEScorer(line_reducer="max")
+    by_mean = MaskedLMQEScorer(line_reducer="mean")
+    probs = [p for _, p in by_max.score_words(line)]
+    assert by_max.needs_correction(line) == pytest.approx(max(probs))
+    assert by_mean.needs_correction(line) == pytest.approx(fmean(probs))
+    assert by_mean.needs_correction(line) <= by_max.needs_correction(line)

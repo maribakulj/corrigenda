@@ -26,7 +26,7 @@ OCR17+ corpus, 2026-07-24):
 Heavy deps are LAZY and confined to this module — the pixel-light core
 never imports it (import-contract test). Runtime needs only
 ``onnxruntime`` + ``tokenizers`` (no torch, no transformers); the ONNX
-bundle is produced offline by ``scripts/export_dalembert_onnx.py``.
+bundle is produced offline by ``scripts/export_masked_lm_onnx.py``.
 """
 
 from __future__ import annotations
@@ -38,9 +38,9 @@ from typing import Any, Literal
 
 #: GLYPH-only normalization: typography, NOT language. Applied to a
 #: throwaway copy before scoring so the surprisal is glyph-neutral (see
-#: module docstring). Kept in lockstep with the same table in
-#: ``scripts/export_dalembert_onnx.py``. No substitution introduces
-#: whitespace, so word count and order are preserved 1:1 with the source.
+#: module docstring). No substitution introduces whitespace, so word
+#: count and order are preserved 1:1 with the source. A no-op for a model
+#: on already-modern orthography (e.g. a 19th-c. press model).
 _DEGLYPH: dict[str, str] = {
     "ſ": "s",
     "ﬁ": "fi",
@@ -55,7 +55,7 @@ _DEGLYPH: dict[str, str] = {
 }
 
 #: Default location of the ONNX bundle (``model.onnx`` + ``tokenizer.json``
-#: + ``qe_model.json``) that ``scripts/export_dalembert_onnx.py`` writes.
+#: + ``qe_model.json``) that ``scripts/export_masked_lm_onnx.py`` writes.
 DEFAULT_MODEL_DIR = Path.home() / ".cache" / "corrigenda" / "dalembert-onnx"
 
 #: Platt scaling of a word's masked surprisal (nats) into P(needs
@@ -72,13 +72,25 @@ DEFAULT_SURPRISAL_SCALE = 6.72
 _BATCH_ROWS = 16
 
 
+def _deglyph_with_map(text: str) -> tuple[str, list[int]]:
+    """Glyph-neutralize ``text`` AND return, per deglyphed char, the index
+    of the original char it came from — so a scored word span can be
+    mapped back to its ORIGINAL (archaic) form for reporting, even when a
+    substitution changes length (``ﬁ→fi``)."""
+    out: list[str] = []
+    origin: list[int] = []
+    for i, ch in enumerate(text):
+        replacement = _DEGLYPH.get(ch, ch)
+        out.append(replacement)
+        origin.extend([i] * len(replacement))
+    return "".join(out), origin
+
+
 def _deglyph(text: str) -> str:
     """Return ``text`` with archaic GLYPHS mapped to their modern
     typographic equivalent — for SCORING only. The document is never
     rewritten; historical orthography is preserved (ROADMAP rule 3)."""
-    for archaic, modern in _DEGLYPH.items():
-        text = text.replace(archaic, modern)
-    return text
+    return _deglyph_with_map(text)[0]
 
 
 def _sigmoid(x: float) -> float:
@@ -101,7 +113,7 @@ class MaskedLMQEScorer:
     The model bundle is loaded LAZILY on first score, so constructing the
     scorer is cheap and importing this module never requires the extra to
     be installed. ``model_dir`` defaults to :data:`DEFAULT_MODEL_DIR`
-    (produced by ``scripts/export_dalembert_onnx.py``); a clear error
+    (produced by ``scripts/export_masked_lm_onnx.py``); a clear error
     names the missing bundle or the missing ``corrigenda[qe]`` deps.
     """
 
@@ -110,19 +122,28 @@ class MaskedLMQEScorer:
         model_dir: str | Path | None = None,
         *,
         name: str = "dalembert-qe",
-        surprisal_midpoint: float = DEFAULT_SURPRISAL_MIDPOINT,
-        surprisal_scale: float = DEFAULT_SURPRISAL_SCALE,
-        word_reducer: Literal["mean", "max"] = "max",
+        surprisal_midpoint: float | None = None,
+        surprisal_scale: float | None = None,
+        word_reducer: Literal["mean", "max"] | None = None,
+        line_reducer: Literal["mean", "max"] | None = None,
     ) -> None:
-        if surprisal_scale <= 0.0:
+        if surprisal_scale is not None and surprisal_scale <= 0.0:
             raise ValueError("surprisal_scale must be > 0")
         self.name = name
         self._model_dir = (
             Path(model_dir) if model_dir is not None else DEFAULT_MODEL_DIR
         )
-        self._midpoint = surprisal_midpoint
-        self._scale = surprisal_scale
-        self._reducer = word_reducer
+        # Explicit args override the bundle's own calibration (read from the
+        # manifest at load), which overrides the module defaults. ``None``
+        # means "defer to the manifest / default".
+        self._arg_midpoint = surprisal_midpoint
+        self._arg_scale = surprisal_scale
+        self._arg_reducer = word_reducer
+        self._arg_line_reducer = line_reducer
+        self._midpoint = DEFAULT_SURPRISAL_MIDPOINT
+        self._scale = DEFAULT_SURPRISAL_SCALE
+        self._reducer: Literal["mean", "max"] = "max"
+        self._line_reducer: Literal["mean", "max"] = "max"
         self._session: Any = None
         self._tokenizer: Any = None
         self._mask_id: int = -1
@@ -145,16 +166,37 @@ class MaskedLMQEScorer:
         tok_path = self._model_dir / "tokenizer.json"
         if not (manifest_path.exists() and onnx_path.exists() and tok_path.exists()):
             raise FileNotFoundError(
-                f"D'AlemBERT ONNX bundle not found under {self._model_dir}. "
-                "Build it with: python scripts/export_dalembert_onnx.py "
-                f"--out {self._model_dir}"
+                f"QE ONNX bundle not found under {self._model_dir}. Build it "
+                "with: python scripts/export_masked_lm_onnx.py --model-id "
+                f"<hf-model> --out {self._model_dir}"
             )
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self._mask_id = int(manifest["mask_token_id"])
+        self._resolve_calibration(manifest.get("calibration", {}))
         self._tokenizer = Tokenizer.from_file(str(tok_path))
         self._session = ort.InferenceSession(
             str(onnx_path), providers=["CPUExecutionProvider"]
         )
+
+    def _resolve_calibration(self, cal: dict[str, Any]) -> None:
+        """Pick the Platt constants + reducer: explicit constructor arg >
+        the bundle manifest's own ``calibration`` block > module default.
+        Each bundle is thus self-describing (a 19th-c. press model ships
+        its own constants, distinct from D'AlemBERT's 17th-c. ones)."""
+        midpoint = self._arg_midpoint
+        if midpoint is None:
+            midpoint = float(cal.get("surprisal_midpoint", DEFAULT_SURPRISAL_MIDPOINT))
+        scale = self._arg_scale
+        if scale is None:
+            scale = float(cal.get("surprisal_scale", DEFAULT_SURPRISAL_SCALE))
+        if scale <= 0.0:
+            raise ValueError(f"surprisal_scale must be > 0, got {scale}")
+        reducer = self._arg_reducer or cal.get("word_reducer", "max")
+        line_reducer = self._arg_line_reducer or cal.get("line_reducer", "max")
+        self._midpoint = midpoint
+        self._scale = scale
+        self._reducer = "mean" if reducer == "mean" else "max"
+        self._line_reducer = "mean" if line_reducer == "mean" else "max"
 
     # -- scoring ------------------------------------------------------------
 
@@ -192,15 +234,20 @@ class MaskedLMQEScorer:
     def _word_surprisals(self, text: str) -> list[tuple[str, float]]:
         """Per-word surprisal (nats) for every alnum-bearing source word.
 
-        Scores a glyph-neutralized copy; word ``w`` maps back to the
-        original ``text.split()[w]`` (glyph substitution preserves word
-        boundaries). Punctuation-only words are dropped, exactly like the
-        heuristic baseline's token filter."""
+        Scores a glyph-neutralized copy. Words come from the TOKENIZER's
+        own word grouping (``word_ids``) and each word's char span
+        (``offsets``) is mapped back through the deglyph index to report
+        the ORIGINAL (archaic) form. Using the tokenizer's grouping rather
+        than ``str.split()`` keeps the mapping correct for any tokenizer —
+        WordPiece and SentencePiece split apostrophes and hyphens into
+        their own words, byte-level BPE does not. Punctuation-only words
+        are dropped, exactly like the heuristic baseline's token filter."""
         self._ensure_loaded()
-        original_words = text.split()
-        encoding = self._tokenizer.encode(_deglyph(text))
+        deglyphed, origin = _deglyph_with_map(text)
+        encoding = self._tokenizer.encode(deglyphed)
         ids: list[int] = list(encoding.ids)
         word_ids: list[int | None] = list(encoding.word_ids)
+        offsets: list[tuple[int, int]] = list(encoding.offsets)
 
         positions_by_word: dict[int, list[int]] = {}
         for pos, wid in enumerate(word_ids):
@@ -214,13 +261,15 @@ class MaskedLMQEScorer:
 
         out: list[tuple[str, float]] = []
         for wid in sorted(positions_by_word):
-            # Fall back to the tokenizer's own word if the 1:1 mapping to
-            # ``text.split()`` ever breaks (defensive; deglyph keeps them
-            # aligned in practice).
-            word = original_words[wid] if wid < len(original_words) else ""
+            positions = positions_by_word[wid]
+            start = offsets[positions[0]][0]
+            end = offsets[positions[-1]][1]
+            # Map the deglyphed span back to the original text so the
+            # report carries the archaic spelling, not the deglyphed twin.
+            word = text[origin[start] : origin[end - 1] + 1] if end > start else ""
             if not any(c.isalnum() for c in word):
                 continue
-            subword_nlls = [nll[pos] for pos in positions_by_word[wid]]
+            subword_nlls = [nll[pos] for pos in positions]
             surprisal = (
                 max(subword_nlls)
                 if self._reducer == "max"
@@ -240,17 +289,27 @@ class MaskedLMQEScorer:
 
     def needs_correction(self, text: str) -> float:
         """QEScorer contract: the line's need for correction in ``[0, 1]``,
-        taken as the MOST-suspicious word's calibrated error probability
-        (``max`` over words). Max, not mean: routing asks "does ANY word
-        likely need fixing?", and a mean dilutes one real error across a
-        line of clean archaic words — measured line AUC 0.77 (real) / 0.88
-        (synthetic) for max vs 0.47 / 0.62 for the mean, and max carries no
-        length bias so a long clean line still SKIPs. ``0.0`` for an empty
-        or punctuation-only line — the conservative answer the heuristic
-        baseline also gives."""
+        aggregated from the per-word error probabilities by the bundle's
+        ``line_reducer``. ``0.0`` for an empty or punctuation-only line.
+
+        The right aggregation is register-dependent, so it is a per-bundle
+        calibration choice (``line_reducer`` in the manifest, ``max`` by
+        default):
+
+        - ``max`` — "does ANY word likely need fixing?" Best where clean
+          lines are word-sparse and errors dense (D'AlemBERT / 16-18th c.:
+          measured line AUC 0.77 vs 0.47 for the mean).
+        - ``mean`` — "what fraction of words look wrong?" Best where clean
+          lines carry a heavy tail of legitimately surprising words the
+          model rarely saw (a contemporary model on 19th-c. press flags
+          proper nouns; ``max`` false-positives on them, the mean averages
+          them out — measured clean/OCR line score 0.14/0.51 vs 0.90/1.00
+          for max)."""
         probs = [p for _, p in self.score_words(text)]
         if not probs:
             return 0.0
+        if self._line_reducer == "mean":
+            return sum(probs) / len(probs)
         return max(probs)
 
 

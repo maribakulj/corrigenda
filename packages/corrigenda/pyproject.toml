@@ -33,7 +33,7 @@ dependencies = [
 # QE scorer (ROADMAP V3 Phase 3): the zero-shot D'AlemBERT pseudo-perplexity
 # scorer behind core.quality.QEScorer. RUNTIME is onnxruntime + tokenizers
 # only — NO torch, NO transformers (the heavy conversion lives in the
-# dev-time scripts/export_dalembert_onnx.py, never on the install path).
+# dev-time scripts/export_masked_lm_onnx.py, never on the install path).
 qe = [
     "onnxruntime>=1.17,<2.0",
     "tokenizers>=0.15,<1.0",
