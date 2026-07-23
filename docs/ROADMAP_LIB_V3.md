@@ -106,11 +106,18 @@ Le composant partagé d'abord.
         passe la similarité source). Fingerprint composite §11 : 
         `55dc80679dd71f94` → `15dc07cba9122106` (champ ajouté, défauts
         inchangés).
-- [ ] **Canal d'incertitude LLM** : `status: certain|uncertain` par ligne
-      dans le schéma de sortie ; en opt-in, codes de raison par token modifié
-      (`confusion_connue`, `mot_du_lexique`, `inféré_du_contexte`,
-      `conjecture`), **vérifiés côté app** contre la table de confusions et le
-      lexique (le LLM produit des preuves auditables, pas des scores).
+- [x] **Canal d'incertitude LLM** (`uncertainty_channel=True`, opt-in) :
+      `status: certain|uncertain` obligatoire par ligne + codes de raison
+      par token modifié (`confusion_connue`, `mot_du_lexique`,
+      `infere_du_contexte`, `conjecture`), **vérifiés côté app**
+      (`score_producer_claims` : table de confusions, lexique, existence
+      des tokens revendiqués) — une justification fabriquée (0.2) vaut
+      MOINS qu'une conjecture avouée (0.3). Le score vérifié voyage sur
+      `ReplaceLine.producer_confidence` et alimente la composante
+      `producer` du bloc `LineConfidence`. Contrat de base inchangé à
+      l'octet quand le canal est off (épinglé).
+
+**Phase 1 : terminée** (2026-07-22).
 - [x] **`ConfidencePolicy(drop | report_only | write_wc)`** — défaut
       `drop` (= comportement historique, règle transversale n°4 ; le
       `report_only` de l'idée initiale devient le réglage recommandé des
