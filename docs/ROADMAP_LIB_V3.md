@@ -171,15 +171,21 @@ release. *(Atteint sur l'amorce ; à étendre avec plus de corpus réel.)*
 
 La phase qui rend l'ensemble économiquement positif.
 
+- [x] **Seam QE + baseline** (`core/quality.py`, pur, zéro dépendance) :
+      protocole `QEScorer` (score pré-LLM du besoin de correction),
+      `HeuristicQEScorer` (signaux **orthographe-neutres** uniquement —
+      la découverte mesurée : les glyphes archaïques NE sont PAS un signal
+      de « à corriger » puisque la vérité terrain les préserve ; distinguer
+      un vrai non-mot OCR d'une forme historique valide exige un lexique
+      historique ou un modèle → justifie D'AlemBERT).
+- [x] **`RoutingPolicy` + `route_line`** (brain pur) : décision par ligne
+      `skip` (pas d'appel LLM) / `llm` / `escalate` ; défaut = tout au LLM
+      (opt-in). *Reste* : câblage pipeline (passe skip réelle), tier `rules`.
 - [ ] **Extra `corrigenda[qe]`** : `QEScorer` sur discriminateur type ELECTRA
-      exporté ONNX (onnxruntime, pas torch), affiné sur les données Phase 2.
-      Pour le français ancien : partir de D'AlemBERT, pas d'un modèle
-      contemporain (la graphie historique n'est pas une erreur).
-- [ ] **`Router` + `RoutingPolicy`** : décision par ligne — `skip` (ligne
-      propre : pas d'appel LLM), `rules`, `llm`, `escalate` (passage
-      adversarial sur la queue incertaine). Les « modes » (règles seules /
-      texte / hybride / audit / revue stricte) sont des configurations du
-      router, pas des modes codés en dur.
+      exporté ONNX (onnxruntime, pas torch), affiné sur les données Phase 2,
+      derrière le protocole `QEScorer` ci-dessus. Pour le français ancien :
+      D'AlemBERT, pas un modèle contemporain. *(Nécessite un modèle
+      entraîné — non livrable dans cet environnement ; le seam est prêt.)*
 - [ ] **Comptabilité de coût** dans le rapport : tokens économisés par le
       gate vs dépensés par l'escalade — l'hybride doit *prouver* qu'il est
       moins cher.
