@@ -111,15 +111,22 @@ Le composant partagé d'abord.
       (`confusion_connue`, `mot_du_lexique`, `inféré_du_contexte`,
       `conjecture`), **vérifiés côté app** contre la table de confusions et le
       lexique (le LLM produit des preuves auditables, pas des scores).
-- [ ] **`ConfidencePolicy(drop | report_only | write_wc)`** — défaut
-      `report_only` (rien dans l'XML) ; `write_wc` verrouillé jusqu'à la
-      calibration (Phase 3).
-- [ ] **Bloc `confidence` multi-composantes sur `LineOutcome`** : `ocr`
-      (WC/CC source conservés dans l'audit), `producer`, `alignment`,
-      décision agrégée avec formule identifiée. Jamais de score magique
-      unique.
-- [ ] **Protocole `ConfidenceScorer` + `HeuristicScorer`** dans le cœur
-      (distance d'édition, lexique, patterns de confusion — zéro dépendance).
+- [x] **`ConfidencePolicy(drop | report_only | write_wc)`** — défaut
+      `drop` (= comportement historique, règle transversale n°4 ; le
+      `report_only` de l'idée initiale devient le réglage recommandé des
+      hôtes, pas le défaut bibliothèque) ; `write_wc` déclaré mais
+      **verrouillé** (lève à la construction) jusqu'à la calibration ;
+      hors du fingerprint composite §8.2 tant que `write_wc` n'affecte
+      pas les sorties (épinglé par test).
+- [x] **Bloc `confidence` multi-composantes sur `LineOutcome`** : `ocr`
+      (WC ALTO / conf PAGE désormais préservés par les parseurs dans
+      `LineManifest.ocr_confidence`), `producer` (réservé au canal
+      d'incertitude LLM), `alignment`, `scorers` nommés, décision agrégée
+      avec formule identifiée (`min` des composantes présentes). Jamais de
+      score magique unique.
+- [x] **Protocole `ConfidenceScorer` + `HeuristicScorer`** dans le cœur
+      (`core/confidence.py` : évidence caractère, table de confusions
+      classiques, lexique optionnel — zéro dépendance).
 
 **Critère de sortie** : chaque run produit une file de lignes triée par risque
 dans le rapport, sans un token de plus dans le cas nominal ; le chemin lent
