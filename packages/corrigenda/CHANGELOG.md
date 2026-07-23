@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **QE scoring + routing brain (ROADMAP V3 Phase 3, core).** New
+  ``corrigenda.core.quality``: the ``QEScorer`` protocol (score a
+  SOURCE line's need for correction in [0,1], pre-LLM), a
+  zero-dependency ``HeuristicQEScorer`` baseline, and the routing brain
+  (``RoutingPolicy`` frozen thresholds, ``RoutingDecision`` enum,
+  ``route_line`` — SKIP a clean line for no LLM call / LLM / ESCALATE).
+  Routing is opt-in: ``RoutingPolicy()`` defaults both bounds to
+  ``None`` (every line → LLM, historical behaviour). The heuristic uses
+  ONLY orthography-neutral signals (a digit stranded in a word;
+  out-of-lexicon against a supplied lexicon) — NOT archaic glyphs:
+  measured on the OCR17+ corpus, an archaic-glyph heuristic scored the
+  human-corrected reference (full of preserved long-s / u-for-v)
+  HIGHER than raw OCR, the exact "flag historical spelling as
+  improbable" trap. Without a lexicon the baseline abstains by design;
+  distinguishing a real OCR non-word (``cukiuent``) from a valid
+  historical form (``cultiuent``) needs a historical lexicon or model —
+  the measured justification for the Phase 3 ONNX/D'AlemBERT scorer,
+  which will sit behind the same ``QEScorer`` protocol in
+  ``corrigenda[qe]``. Additive public API; not yet in the pipeline or
+  the §8.2 composite fingerprint (wiring is the next Phase 3 step).
+
 - **LLM uncertainty channel (ROADMAP V3 Phase 1).** Opt-in contract
   variant for ``LLMEditProducer`` (``uncertainty_channel=True``, also
   on ``CorrectionPipeline.for_provider``): the model must return a

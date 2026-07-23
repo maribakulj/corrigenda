@@ -23,6 +23,13 @@ from corrigenda.core.confidence import (
     ConfidenceScorer,
     HeuristicScorer,
 )
+from corrigenda.core.quality import (
+    HeuristicQEScorer,
+    QEScorer,
+    RoutingDecision,
+    RoutingPolicy,
+    route_line,
+)
 from corrigenda.core.decisions import (
     DecisionSet,
     LineDecision,
@@ -266,6 +273,11 @@ __all__ = [
     "ConfidencePolicy",
     "ConfidenceScorer",
     "HeuristicScorer",
+    "HeuristicQEScorer",
+    "QEScorer",
+    "RoutingDecision",
+    "RoutingPolicy",
+    "route_line",
     "LineConfidence",
     "LossPolicy",
     "ModelInfo",

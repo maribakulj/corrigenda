@@ -127,6 +127,12 @@ PUBLIC_API_1_0 = sorted(
         "ConfidenceScorer",
         "HeuristicScorer",
         "LineConfidence",
+        # QE + routing (ROADMAP V3 Phase 3) — additive
+        "HeuristicQEScorer",
+        "QEScorer",
+        "RoutingDecision",
+        "RoutingPolicy",
+        "route_line",
     ]
 )
 
