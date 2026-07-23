@@ -95,16 +95,12 @@ def test_empty_sequences():
 
 
 def test_swapped_words_raise_the_move_flag():
-    al = align_tokens(
-        ["grande", "porte", "ouverte"], ["porte", "grande", "ouverte"]
-    )
+    al = align_tokens(["grande", "porte", "ouverte"], ["porte", "grande", "ouverte"])
     assert al.move_suspected
 
 
 def test_far_move_raises_the_flag():
-    al = align_tokens(
-        ["premier", "mot", "dernier"], ["mot", "dernier", "premier"]
-    )
+    al = align_tokens(["premier", "mot", "dernier"], ["mot", "dernier", "premier"])
     assert al.move_suspected
 
 

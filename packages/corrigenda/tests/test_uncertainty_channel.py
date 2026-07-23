@@ -22,7 +22,6 @@ from corrigenda.integrations.llm import (
     OUTPUT_JSON_SCHEMA,
     SYSTEM_PROMPT,
     UNCERTAINTY_REASONS,
-    uncertainty_output_schema,
     uncertainty_system_prompt,
 )
 from corrigenda.producers.llm_edit import LLMEditProducer
@@ -57,7 +56,9 @@ def test_uncertain_status_caps_low_whatever_the_claims():
         source_text="la rnaison",
         corrected_text="la maison",
         status="uncertain",
-        claims=[{"source": "rnaison", "corrected": "maison", "reason": "confusion_connue"}],
+        claims=[
+            {"source": "rnaison", "corrected": "maison", "reason": "confusion_connue"}
+        ],
     )
     assert score == pytest.approx(0.3)
 
@@ -67,7 +68,9 @@ def test_verified_confusion_claim_scores_high():
         source_text="la rnaison",
         corrected_text="la maison",
         status="certain",
-        claims=[{"source": "rnaison", "corrected": "maison", "reason": "confusion_connue"}],
+        claims=[
+            {"source": "rnaison", "corrected": "maison", "reason": "confusion_connue"}
+        ],
     )
     assert score == pytest.approx(0.95)
 
@@ -79,7 +82,9 @@ def test_false_confusion_claim_scores_below_an_honest_guess():
         source_text="la bleue",
         corrected_text="la rouge",
         status="certain",
-        claims=[{"source": "bleue", "corrected": "rouge", "reason": "confusion_connue"}],
+        claims=[
+            {"source": "bleue", "corrected": "rouge", "reason": "confusion_connue"}
+        ],
     )
     honest = score_producer_claims(
         source_text="la bleue",
@@ -97,7 +102,9 @@ def test_lexicon_claim_is_verified_against_the_lexicon():
         source_text="la vieifle",
         corrected_text="la vieille",
         status="certain",
-        claims=[{"source": "vieifle", "corrected": "vieille", "reason": "mot_du_lexique"}],
+        claims=[
+            {"source": "vieifle", "corrected": "vieille", "reason": "mot_du_lexique"}
+        ],
     )
     assert score_producer_claims(**kwargs, lexicon={"vieille"}) == pytest.approx(0.9)
     # No lexicon configured → the claim is unverifiable → failed.
@@ -109,7 +116,9 @@ def test_claim_with_fabricated_tokens_fails():
         source_text="la rnaison",
         corrected_text="la maison",
         status="certain",
-        claims=[{"source": "jamais", "corrected": "présent", "reason": "confusion_connue"}],
+        claims=[
+            {"source": "jamais", "corrected": "présent", "reason": "confusion_connue"}
+        ],
     )
     assert score == pytest.approx(0.2)
 
@@ -180,7 +189,9 @@ class _ClaimingProvider:
     async def list_models(self, api_key: str) -> list[Any]:  # pragma: no cover
         return []
 
-    async def complete_structured(self, **kw: Any) -> tuple[dict[str, Any], Usage | None]:
+    async def complete_structured(
+        self, **kw: Any
+    ) -> tuple[dict[str, Any], Usage | None]:
         out = []
         for ln in kw["user_payload"].get("lines", []):
             if ln["line_id"] == "L1":

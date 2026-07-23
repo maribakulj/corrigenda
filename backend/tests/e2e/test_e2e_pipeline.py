@@ -144,11 +144,7 @@ def test_honest_page_job_end_to_end(backend_server, use_honest_vendor):
     src_root = etree.fromstring(PAGE_SAMPLE_XML.read_bytes())
 
     def _text_line_ids(root: etree._Element) -> list[str]:
-        return [
-            el.get("id")
-            for el in root.iter()
-            if etree.QName(el).localname == "TextLine"
-        ]
+        return [el.get("id") for el in root.iter() if etree.QName(el).localname == "TextLine"]
 
     assert _text_line_ids(out_root) == _text_line_ids(src_root)
     assert len(_text_line_ids(out_root)) > 0

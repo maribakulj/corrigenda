@@ -17,9 +17,10 @@ import fails loudly instead of fetching).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from lxml import etree
 
@@ -52,21 +53,26 @@ SCHEMA_BY_NAMESPACE: dict[str, str] = {
 }
 
 
-# lxml ships no type stubs (see the pyproject mypy override), so the
-# Resolver base is Any under --strict; the subclass itself is fully typed.
-class _BundledImports(etree.Resolver):  # type: ignore[misc]
+class _BundledImports(etree.Resolver):
     """Remap the xlink ``xs:import`` URL to the bundled ``xlink.xsd``.
 
     Anything else returns ``None``: combined with the ``no_network``
     schema parser, an unknown import can only fail compilation — never
     trigger a fetch.
+
+    The two targeted ignores paper over lxml-stubs gaps, not real
+    issues: the stubs' ``Resolver.resolve`` omits the ``context``
+    argument lxml actually passes at runtime, and they omit the
+    inherited ``resolve_filename`` helper entirely.
     """
 
-    def resolve(
+    def resolve(  # type: ignore[override]
         self, system_url: str | None, public_id: str | None, context: Any
     ) -> Any:
         if system_url and system_url.rsplit("/", 1)[-1] == "xlink.xsd":
-            return self.resolve_filename(str(_XSD_DIR / "xlink.xsd"), context)
+            return self.resolve_filename(  # type: ignore[attr-defined]
+                str(_XSD_DIR / "xlink.xsd"), context
+            )
         return None
 
 
@@ -104,7 +110,9 @@ def validate_bytes(xml_bytes: bytes, *, source_name: str = "<bytes>") -> list[st
     schema = _schema_for(detect_namespace(root))
     if schema.validate(root):
         return []
-    return [f"{source_name}:{e.line}: {e.message}" for e in schema.error_log]
+    # lxml-stubs' _ErrorLog misses __iter__ — the runtime log iterates.
+    errors = cast("Iterable[Any]", schema.error_log)
+    return [f"{source_name}:{e.line}: {e.message}" for e in errors]
 
 
 def validate_file(path: Path) -> list[str]:

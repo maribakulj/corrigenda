@@ -22,9 +22,7 @@ from tests.test_api import MockProvider  # reuse the provider mock
 _EXAMPLES = Path(__file__).parent.parent.parent / "examples"
 ALTO_SAMPLE = _EXAMPLES / "sample.xml"
 PAGE_SAMPLE = (
-    _EXAMPLES
-    / "page"
-    / "Descartes1637_Discours_btv1b86069594_corrected_0014_page_raw.xml"
+    _EXAMPLES / "page" / "Descartes1637_Discours_btv1b86069594_corrected_0014_page_raw.xml"
 )
 
 

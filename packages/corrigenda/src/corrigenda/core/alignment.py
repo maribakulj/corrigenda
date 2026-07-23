@@ -140,7 +140,9 @@ def align_tokens(source: list[str], target: list[str]) -> TokenAlignment:
         j -= 1
     pairs.reverse()
 
-    matched = [p for p in pairs if p.source_index is not None and p.target_index is not None]
+    matched = [
+        p for p in pairs if p.source_index is not None and p.target_index is not None
+    ]
     denominator = max(n, m, 1)
     score = sum(p.similarity for p in matched) / denominator
 

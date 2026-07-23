@@ -86,9 +86,7 @@ class LLMEditProducer:
             uncertainty_output_schema() if uncertainty_channel else OUTPUT_JSON_SCHEMA
         )
         self._system_prompt = default_prompt if system_prompt is None else system_prompt
-        self._output_schema = (
-            default_schema if output_schema is None else output_schema
-        )
+        self._output_schema = default_schema if output_schema is None else output_schema
         #: Declared provenance (P3.7-4) — the adapter cannot know the
         #: vendor's marketing name, so ``name`` stays the generic "llm";
         #: ``for_provider(provider_name=…)`` overrides it with the

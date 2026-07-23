@@ -765,7 +765,9 @@ class CorrectionPipeline:
         # never affects the corrected XML).
         self.confidence_policy = confidence_policy or DEFAULT_CONFIDENCE_POLICY
         self.confidence_scorers: tuple[ConfidenceScorer, ...] = (
-            confidence_scorers if confidence_scorers is not None else (HeuristicScorer(),)
+            confidence_scorers
+            if confidence_scorers is not None
+            else (HeuristicScorer(),)
         )
         # §3 format seam — None derives the adapter from the MANIFEST's
         # stamped source_format at write time (_adapter_for_format); an
@@ -1182,9 +1184,7 @@ class CorrectionPipeline:
             # was reported: a zero Usage would be indistinguishable from
             # "the provider reported zero tokens".
             usage=(
-                ctx.usage
-                if ctx.usage.total_tokens or ctx.usage.response_ids
-                else None
+                ctx.usage if ctx.usage.total_tokens or ctx.usage.response_ids else None
             ),
             # Phase 1 — corrections the token_realign gate refused to
             # project, preserved for review instead of lost.
@@ -2369,10 +2369,7 @@ class CorrectionPipeline:
                         "token_realign: suspected word reorder — "
                         "correction preserved in sidecar"
                     )
-                elif (
-                    len(target_tokens) != len(source_tokens)
-                    and al.score < threshold
-                ):
+                elif len(target_tokens) != len(source_tokens) and al.score < threshold:
                     evidence[ref] = (al.score, False)
                     gate_reverts[ref] = (
                         f"token_realign: alignment score {al.score:.2f} < "
