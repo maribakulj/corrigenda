@@ -86,6 +86,7 @@ from corrigenda.core.protocols import (
     require_page_images,
 )
 from corrigenda.core.alignment import align_tokens
+from corrigenda.core.pairing import preserve_break_char
 from corrigenda.core.confidence import (
     ConfidenceScorer,
     HeuristicScorer,
@@ -1142,6 +1143,22 @@ class CorrectionPipeline:
         # decisions materialize and before any output exists — the unit
         # falls back to source text and the source markup keeps its
         # Word geometry (the rewrite sees an untouched line).
+        # P5, decision-side (found by the OCR17+ corpus, 2026-07-23): if
+        # the SOURCE line ends in a word-break character and the accepted
+        # correction ends in a DIFFERENT one, force the source's char
+        # BEFORE decisions materialize — historically the PAGE rewriter
+        # enforced this after the decision was recorded, so the artefact
+        # diverged from the decision and _verify_projection raised.
+        for page in document_manifest.pages:
+            for lm in page.lines:
+                if lm.corrected_text is not None and lm.corrected_text != lm.ocr_text:
+                    # The proposal stage in the traces keeps the
+                    # producer's RAW text (auditability); only the
+                    # decided text is normalized.
+                    lm.corrected_text = preserve_break_char(
+                        lm.ocr_text, lm.corrected_text
+                    )
+
         sidecar_entries = self._loss_policy_pass(
             document_manifest=document_manifest,
             all_lines=all_lines_global,

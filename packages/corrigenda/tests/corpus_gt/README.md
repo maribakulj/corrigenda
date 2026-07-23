@@ -42,20 +42,19 @@ IDs.
   references are the upstream human corrections, satisfying the
   provenance rule above.
 
-  **Not yet registered in `manifest.json`** — and that gap is itself a
-  measurement: the very first oracle run over these pages exposed a
-  real decision/artifact coherence bug (2026-07-23). The source line
-  ends in `-` (raw Word OCR) while the reference ends in `¬`; the PAGE
-  rewriter's P5 pass forces the SOURCE break character back onto the
-  corrected text *after* the decision recorded `¬`, so the artefact
-  diverges from the decision and `_verify_projection` rightly raises
-  `ProjectionError`. P5 must be enforced BEFORE the decision
-  materializes (decision == artefact, always). Registering these cases
-  (corpus_version bump) is the acceptance test of that fix. Measured
-  meanwhile with `scripts/benchmark.py` on a locally-extended
-  manifest: `default_french_ocr_rules()` corrects NOTHING on this real
-  OCR (CER 0.069→0.069 and 0.133→0.133, zero false positives) — the
-  honest baseline the synthetic case could not provide.
+  Registered in `manifest.json` since corpus_version 0.2.0 — and the
+  registration itself was the acceptance test of a real bug these pages
+  exposed on their very first oracle run (2026-07-23): the PAGE
+  rewriter's P5 pass forced the SOURCE break character (`-`) onto the
+  corrected text (`¬`) AFTER the decision had been recorded, so the
+  artefact diverged from the decision and `_verify_projection` raised
+  `ProjectionError`. P5 now runs decision-side in the pipeline
+  (`preserve_break_char`, `core/pairing.py`) — decision == artefact,
+  always. Honest baselines measured here: `default_french_ocr_rules()`
+  corrects NOTHING on this real OCR (CER 0.069→0.069 / 0.133→0.133,
+  zero false positives), and even the ORACLE plateaus at CER 0.057 on
+  the hyphen-dense Descartes page (the guards arbitrate its proposals)
+  — the guard-calibration ceiling Phase 2 exists to study.
 
 ## Manifest
 

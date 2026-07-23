@@ -53,8 +53,12 @@ def test_rules_report_contract_and_improvement(tmp_path: Path):
     assert case["latency_s_per_page"] > 0
     assert case["peak_memory_mb"] > 0
 
+    assert case["lines"] == 6
+    # Corpus 0.2.0 — the aggregate spans EVERY case (synthetic + the two
+    # real OCR17+ pages), not just the first one.
     agg = report["aggregate"]
-    assert agg["lines"] == case["lines"] == 6
+    assert agg["lines"] == sum(c["lines"] for c in report["cases"])
+    assert len(report["cases"]) == 3
     assert agg["cer_after"] < agg["cer_before"]
 
 
