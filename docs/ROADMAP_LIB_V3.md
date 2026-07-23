@@ -143,24 +143,29 @@ ALTO n'associe plus jamais un texte à la mauvaise identité de mot.
 
 Le chemin critique de la crédibilité. **À faire avant la Phase 4.**
 
-- [ ] **Corpus réel gelé ALTO+PAGE avec images** : amorcé avec les paires
-      raw/corrected de `examples/page/` (Descartes 1637, La Fayette 1678,
-      NewsEye) ; peupler le corpus externe épinglé (aujourd'hui vide) avec des
-      pages Gallica stratifiées — presse multi-colonnes, monographie, français
-      moderne précoce et contemporain, césures explicites et heuristiques.
-- [ ] **Benchmark étendu** : CER/WER avant/après, **taux de fausses
-      corrections**, taux de lignes détériorées, conservation
-      lignes/mots/attributs, validité XSD, coût/page, latence. Seuils
-      bloquants en CI sur le corpus épinglé.
-- [ ] **Harnais de calibration** : fiabilité des confiances (ECE/Brier) par
-      producteur/scorer ; conditionne l'ouverture de `write_wc`.
-- [ ] **Générateur de données QE** : réutiliser les dégradations scriptées du
-      corpus synthétique pour produire des paires étiquetées token par token
-      (actif d'entraînement de la Phase 3).
+- [x] **Corpus réel gelé** (amorce) : deux paires OCR17+ réelles (Descartes
+      1637, La Fayette 1678 — CC-BY) enregistrées dans `tests/corpus_gt/`
+      (manifest 0.2.0), OCR Transkribus brut vs vérité terrain humaine ;
+      `derive_ocr17.py` réexpose le vrai OCR au niveau ligne. *Reste* : pages
+      Gallica stratifiées supplémentaires (presse multi-colonnes), images.
+- [x] **Benchmark étendu** : le premier run oracle sur ces pages a débusqué
+      un vrai bug (P5 décision≠artefact, corrigé) ; **seuils bloquants en CI**
+      (`false_positives == 0`, `lines_degraded == 0` sur corpus réel inclus).
+      *Reste* : coût/page LLM réel, latence p95 (dépend d'un cassette LLM).
+- [x] **Harnais de calibration ECE/Brier** dans le benchmark, par cas +
+      micro-agrégat. Verdict mesuré : confiances mal calibrées sur vrai OCR
+      (Brier rules 0.82 / oracle 0.57) — le signal manquant « cette ligne
+      est-elle déjà correcte ? » justifie le QE scorer Phase 3. Conditionne
+      l'ouverture de `write_wc`.
+- [x] **Générateur de données QE** (`scripts/qe_data.py`) : deux sources
+      étiquetées token par token — **réelle** (alignement raw↔ref, labels or)
+      et **synthétique** (dégradations scriptées `clean → OCR`,
+      déterministes par hash, sans RNG). ~730 tokens, ~30 % d'erreurs sur le
+      corpus actuel ; actif d'entraînement de la Phase 3.
 
 **Critère de sortie** : on sait dire, chiffres à l'appui, si corrigenda
 améliore de vrais OCR — et un plafond de fausses corrections gate chaque
-release.
+release. *(Atteint sur l'amorce ; à étendre avec plus de corpus réel.)*
 
 ## Phase 3 — QE local et routage hybride
 
