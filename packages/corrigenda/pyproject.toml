@@ -29,6 +29,17 @@ dependencies = [
     "lxml>=6.1,<7.0",
 ]
 
+[project.optional-dependencies]
+# QE scorer (ROADMAP V3 Phase 3): the zero-shot D'AlemBERT pseudo-perplexity
+# scorer behind core.quality.QEScorer. RUNTIME is onnxruntime + tokenizers
+# only — NO torch, NO transformers (the heavy conversion lives in the
+# dev-time scripts/export_masked_lm_onnx.py, never on the install path).
+qe = [
+    "onnxruntime>=1.17,<2.0",
+    "tokenizers>=0.15,<1.0",
+    "numpy>=1.24,<3.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/maribakulj/corrigenda"
 Issues = "https://github.com/maribakulj/corrigenda/issues"
@@ -84,7 +95,12 @@ markers = [
 [tool.coverage.run]
 source = ["corrigenda"]
 branch = true
-omit = ["*/__init__.py"]
+# integrations/qe.py is the corrigenda[qe] extra: it only runs with
+# onnxruntime + the exported D'AlemBERT bundle present, which the default
+# CI test job cannot provide (heavy deps + a 545 MB model). It has its own
+# suite (tests/test_qe_dalembert.py) that self-skips when the extra/bundle
+# is absent, so gating the core coverage on it would falsely read 0%.
+omit = ["*/__init__.py", "*/integrations/qe.py"]
 
 [tool.coverage.report]
 fail_under = 85
@@ -110,4 +126,11 @@ files = ["src/corrigenda"]
 # untyped. We install lxml-stubs in CI; this keeps the odd residual
 # module import from failing strict mode.
 module = ["lxml.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The corrigenda[qe] runtime deps are lazy-imported inside
+# integrations/qe.py and absent from the mypy CI env (it installs only the
+# package + lxml-stubs). Treat them as untyped so --strict still runs.
+module = ["onnxruntime.*", "tokenizers.*", "numpy.*"]
 ignore_missing_imports = true
