@@ -25,6 +25,7 @@ import hashlib
 import json
 from typing import Any
 
+from corrigenda.core.confidence import DEFAULT_CONFUSIONS, score_producer_claims
 from corrigenda.core.editing import EditScript, ReplaceLine
 from corrigenda.core.protocols import (
     ProducerMetadata,
@@ -32,7 +33,12 @@ from corrigenda.core.protocols import (
     StructuredCompletionClient,
 )
 from corrigenda.core.schemas import CorrectionRequest, Usage
-from corrigenda.integrations.llm import OUTPUT_JSON_SCHEMA, SYSTEM_PROMPT
+from corrigenda.integrations.llm import (
+    OUTPUT_JSON_SCHEMA,
+    SYSTEM_PROMPT,
+    uncertainty_output_schema,
+    uncertainty_system_prompt,
+)
 
 
 class LLMEditProducer:
@@ -57,13 +63,31 @@ class LLMEditProducer:
         *,
         system_prompt: str | None = None,
         output_schema: dict[str, Any] | None = None,
+        uncertainty_channel: bool = False,
+        lexicon: set[str] | None = None,
+        confusions: tuple[tuple[str, str], ...] = DEFAULT_CONFUSIONS,
     ) -> None:
         self._provider = provider
         self._api_key = api_key
         self._model = model
-        self._system_prompt = SYSTEM_PROMPT if system_prompt is None else system_prompt
+        # Phase 1 uncertainty channel (opt-in): the contract variant asks
+        # the model for a per-line status and per-token reason-coded
+        # edits; produce() VERIFIES those claims (confusion table /
+        # lexicon) and stamps the resulting score on each ReplaceLine.
+        # An explicit prompt/schema injection always wins over the
+        # channel's defaults.
+        self._uncertainty_channel = uncertainty_channel
+        self._lexicon = lexicon
+        self._confusions = confusions
+        default_prompt = (
+            uncertainty_system_prompt() if uncertainty_channel else SYSTEM_PROMPT
+        )
+        default_schema = (
+            uncertainty_output_schema() if uncertainty_channel else OUTPUT_JSON_SCHEMA
+        )
+        self._system_prompt = default_prompt if system_prompt is None else system_prompt
         self._output_schema = (
-            OUTPUT_JSON_SCHEMA if output_schema is None else output_schema
+            default_schema if output_schema is None else output_schema
         )
         #: Declared provenance (P3.7-4) — the adapter cannot know the
         #: vendor's marketing name, so ``name`` stays the generic "llm";
@@ -108,6 +132,10 @@ class LLMEditProducer:
             # this attempt's resolved temperature (P3.7).
             temperature=options.temperature,
         )
+        source_by_id = {
+            ln.get("line_id"): ln.get("ocr_text", "")
+            for ln in payload.model_dump().get("lines", [])
+        }
         ops: list[ReplaceLine] = []
         lines = raw.get("lines", []) if isinstance(raw, dict) else []
         if isinstance(lines, list):
@@ -116,8 +144,25 @@ class LLMEditProducer:
                     continue
                 line_id = entry.get("line_id")
                 text = entry.get("corrected_text")
-                if line_id and isinstance(text, str):
-                    ops.append(ReplaceLine(line_id=line_id, text=text))
+                if not line_id or not isinstance(text, str):
+                    continue
+                confidence: float | None = None
+                if self._uncertainty_channel:
+                    status = entry.get("status")
+                    claims = entry.get("edits")
+                    confidence = score_producer_claims(
+                        source_text=source_by_id.get(line_id, ""),
+                        corrected_text=text,
+                        status=status if isinstance(status, str) else None,
+                        claims=claims if isinstance(claims, list) else [],
+                        confusions=self._confusions,
+                        lexicon=self._lexicon,
+                    )
+                ops.append(
+                    ReplaceLine(
+                        line_id=line_id, text=text, producer_confidence=confidence
+                    )
+                )
         return EditScript(ops=ops), usage  # type: ignore[arg-type]
 
 

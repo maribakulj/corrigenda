@@ -45,6 +45,30 @@ _LEXICON_SCORE = 0.9
 _INSERTION_SCORE = 0.3
 _DELETION_SCORE = 0.4
 
+#: Claim-verification values (uncertainty channel). Starting points for
+#: the Phase 2 calibration, like every constant in this module.
+_FAILED_CLAIM_SCORE = 0.2
+_CONTEXT_CLAIM_SCORE = 0.6
+_CONJECTURE_SCORE = 0.3
+_UNCERTAIN_STATUS_SCORE = 0.3
+_BARE_CERTAIN_SCORE = 0.75
+
+
+def is_known_confusion(
+    source: str,
+    target: str,
+    confusions: tuple[tuple[str, str], ...] = DEFAULT_CONFUSIONS,
+) -> bool:
+    """True when ONE substitution from the table turns ``source`` into
+    ``target`` (checked at every occurrence position)."""
+    for old, new in confusions:
+        start = 0
+        while (i := source.find(old, start)) != -1:
+            if source[:i] + new + source[i + len(old) :] == target:
+                return True
+            start = i + 1
+    return False
+
 
 @runtime_checkable
 class ConfidenceScorer(Protocol):
@@ -95,20 +119,9 @@ class HeuristicScorer:
         self._confusions = confusions
         self._lexicon = {w.casefold() for w in lexicon} if lexicon else set()
 
-    def _is_known_confusion(self, source: str, target: str) -> bool:
-        """True when ONE substitution from the table turns source into
-        target (checked at every occurrence position)."""
-        for old, new in self._confusions:
-            start = 0
-            while (i := source.find(old, start)) != -1:
-                if source[:i] + new + source[i + len(old) :] == target:
-                    return True
-                start = i + 1
-        return False
-
     def _token_score(self, source: str, target: str) -> float:
         score = char_similarity(source, target)
-        if self._is_known_confusion(source, target):
+        if is_known_confusion(source, target, self._confusions):
             score = max(score, _CONFUSION_SCORE)
         if self._lexicon and target.casefold() in self._lexicon and score >= 0.5:
             score = max(score, _LEXICON_SCORE)
@@ -139,6 +152,76 @@ class HeuristicScorer:
         if not events:
             return 1.0  # e.g. whitespace-only difference
         return sum(events) / len(events)
+
+
+def score_producer_claims(
+    *,
+    source_text: str,
+    corrected_text: str,
+    status: str | None,
+    claims: list[dict[str, str]],
+    confusions: tuple[tuple[str, str], ...] = DEFAULT_CONFUSIONS,
+    lexicon: set[str] | None = None,
+) -> float | None:
+    """Turn the LLM uncertainty channel's CLAIMS into a verified score.
+
+    Doctrine: the model supplies auditable evidence, never a raw score —
+    every verifiable claim is CHECKED, and a claim that fails its check
+    scores *below* a plain admission of guessing (a fabricated
+    justification is worse evidence than honesty):
+
+    - ``status == "uncertain"`` → 0.3, full stop (claims cannot rescue
+      an admitted doubt);
+    - ``confusion_connue`` → 0.95 verified against the table, 0.2 when
+      the diff is NOT a tabled confusion;
+    - ``mot_du_lexique`` → 0.9 when the corrected token is in the
+      lexicon, 0.2 otherwise (0.2 too when no lexicon was configured —
+      an unverifiable verifiable-class claim);
+    - ``infere_du_contexte`` → 0.6 (honest but unverifiable);
+    - ``conjecture`` → 0.3;
+    - any claim whose ``source``/``corrected`` tokens do not appear in
+      the line's actual source/corrected text → 0.2 (fabricated);
+    - line score = min over claim scores; ``certain`` with no claims →
+      0.75 (a bare self-report, the classic miscalibrated signal).
+
+    Returns ``None`` when the model declared nothing (no status).
+    """
+    if status is None:
+        return None
+    if status == "uncertain":
+        return _UNCERTAIN_STATUS_SCORE
+    if not claims:
+        return _BARE_CERTAIN_SCORE
+
+    source_tokens = set(source_text.split())
+    corrected_tokens = set(corrected_text.split())
+    lex = {w.casefold() for w in lexicon} if lexicon else set()
+
+    scores: list[float] = []
+    for claim in claims:
+        src = claim.get("source", "")
+        tgt = claim.get("corrected", "")
+        reason = claim.get("reason", "")
+        if src not in source_tokens or tgt not in corrected_tokens:
+            scores.append(_FAILED_CLAIM_SCORE)  # fabricated tokens
+            continue
+        if reason == "confusion_connue":
+            scores.append(
+                _CONFUSION_SCORE
+                if is_known_confusion(src, tgt, confusions)
+                else _FAILED_CLAIM_SCORE
+            )
+        elif reason == "mot_du_lexique":
+            scores.append(
+                _LEXICON_SCORE if tgt.casefold() in lex else _FAILED_CLAIM_SCORE
+            )
+        elif reason == "infere_du_contexte":
+            scores.append(_CONTEXT_CLAIM_SCORE)
+        elif reason == "conjecture":
+            scores.append(_CONJECTURE_SCORE)
+        else:
+            scores.append(_FAILED_CLAIM_SCORE)  # unknown reason code
+    return min(scores)
 
 
 def build_line_confidence(
@@ -188,4 +271,6 @@ __all__ = [
     "ConfidenceScorer",
     "HeuristicScorer",
     "build_line_confidence",
+    "is_known_confusion",
+    "score_producer_claims",
 ]

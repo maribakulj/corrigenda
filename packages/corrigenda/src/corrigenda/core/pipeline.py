@@ -812,6 +812,8 @@ class CorrectionPipeline:
         confidence_scorers: tuple[ConfidenceScorer, ...] | None = None,
         system_prompt: str | None = None,
         output_schema: dict[str, Any] | None = None,
+        uncertainty_channel: bool = False,
+        lexicon: set[str] | None = None,
     ) -> CorrectionPipeline:
         """Build a pipeline around a raw ``StructuredCompletionClient`` (§5.1).
 
@@ -834,6 +836,8 @@ class CorrectionPipeline:
             model,
             system_prompt=system_prompt,
             output_schema=output_schema,
+            uncertainty_channel=uncertainty_channel,
+            lexicon=lexicon,
         )
         return cls(
             producer=producer,
@@ -1192,15 +1196,28 @@ class CorrectionPipeline:
         # outcome scores its FINAL decided text, whatever path decided it.
         if self.confidence_policy.mode != "drop":
             for outcome in report.lines:
-                scored_line = all_lines_global.get(
-                    LineRef(page_id=outcome.page_id, line_id=outcome.line_id)
-                )
+                ref = LineRef(page_id=outcome.page_id, line_id=outcome.line_id)
+                scored_line = all_lines_global.get(ref)
+                # The producer's verified self-assessment rides the
+                # captured ops (uncertainty channel); min over a line's
+                # ops when several declared one.
+                producer_conf: float | None = None
+                captured_line = ctx.producer_ops.get(ref)
+                if captured_line is not None:
+                    declared_confidences: list[float] = [
+                        pc
+                        for op in captured_line[0]
+                        if (pc := getattr(op, "producer_confidence", None)) is not None
+                    ]
+                    if declared_confidences:
+                        producer_conf = min(declared_confidences)
                 outcome.confidence = build_line_confidence(
                     source_text=outcome.source_text,
                     final_text=outcome.decision.final_text,
                     ocr_confidence=(
                         scored_line.ocr_confidence if scored_line is not None else None
                     ),
+                    producer_confidence=producer_conf,
                     scorers=self.confidence_scorers,
                 )
 

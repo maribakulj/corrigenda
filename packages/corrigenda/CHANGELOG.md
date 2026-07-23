@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **LLM uncertainty channel (ROADMAP V3 Phase 1).** Opt-in contract
+  variant for ``LLMEditProducer`` (``uncertainty_channel=True``, also
+  on ``CorrectionPipeline.for_provider``): the model must return a
+  per-line ``status`` (``certain``/``uncertain`` — an explicit outlet
+  for doubt instead of silent guessing) and reason-coded per-token
+  ``edits`` (``confusion_connue`` / ``mot_du_lexique`` /
+  ``infere_du_contexte`` / ``conjecture``). The app VERIFIES every
+  verifiable claim (``corrigenda.core.confidence.score_producer_claims``
+  — confusion table, lexicon, token existence); a failed check scores
+  BELOW an honest conjecture. The verified score rides
+  ``ReplaceLine.producer_confidence`` (additive) and feeds the
+  ``producer`` component of ``LineConfidence``. Off by default: the
+  base prompt/schema stay byte-identical, and the channel's different
+  contract yields a different producer ``configuration_fingerprint``
+  (§11).
+
 - **Multi-component line confidence (ROADMAP V3 Phase 1).**
   ``ConfidencePolicy(mode="drop"|"report_only")`` — default ``drop``
   keeps behaviour identical; ``report_only`` fills a
