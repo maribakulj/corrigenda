@@ -192,11 +192,22 @@ La phase qui rend l'ensemble économiquement positif.
       routing-on vs routing-off sur un même document prouve que l'hybride
       est moins cher, sans contrefactuel fabriqué. *Reste* : tier `rules`,
       exposition dans le benchmark avec comparaison on/off.
-- [ ] **Extra `corrigenda[qe]`** : `QEScorer` sur discriminateur type ELECTRA
-      exporté ONNX (onnxruntime, pas torch), affiné sur les données Phase 2,
-      derrière le protocole `QEScorer` ci-dessus. Pour le français ancien :
-      D'AlemBERT, pas un modèle contemporain. *(Nécessite un modèle
-      entraîné — non livrable dans cet environnement ; le seam est prêt.)*
+- [x] **Extra `corrigenda[qe]`** : `MaskedLMQEScorer` ZÉRO-SHOT derrière le
+      protocole `QEScorer`, sur la **pseudo-perplexité masquée** (Salazar
+      2020) de D'AlemBERT (`pjox/dalembert`, Apache-2.0) — pas
+      d'entraînement, un token que le modèle de langue d'époque juge
+      improbable est une erreur OCR probable. Runtime **onnxruntime +
+      tokenizers, PAS torch** (conversion torch→ONNX en dev-time,
+      `scripts/export_dalembert_onnx.py`) ; imports lourds paresseux, cœur
+      jamais contaminé (test de contrat). Découverte ÉTAPE 0 : D'AlemBERT
+      connaît la graphie d'époque (`eſt`/`auoir` tokens natifs) mais porte
+      une pénalité TYPOGRAPHIQUE long-s → on note une **copie dé-glyphée**
+      (`ſ→s`, ligatures), texte du document jamais modifié (règle 3).
+      Mesuré (`scripts/qe_benchmark.py`) il bat `HeuristicQEScorer` sur
+      tout (réel/synth) : AUC token 0.66/0.66 vs 0.50, ECE token 0.04/0.03
+      vs 0.32, AUC ligne 0.77/0.88 vs 0.50. *Reste (ÉTAPE 4, optionnel)* :
+      fine-tuning d'une tête QE type ELECTRA sur les données Phase 2 si le
+      zéro-shot devient insuffisant.
 - [ ] **Comptabilité de coût** dans le rapport : tokens économisés par le
       gate vs dépensés par l'escalade — l'hybride doit *prouver* qu'il est
       moins cher.
