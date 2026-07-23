@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a token the period language model finds improbable is a likely OCR
   break. **Runtime is `onnxruntime` + `tokenizers` only — no torch, no
   transformers** (the heavy torch→ONNX conversion lives in the dev-time
-  ``scripts/export_dalembert_onnx.py``, never on the install path); heavy
+  ``scripts/export_masked_lm_onnx.py``, never on the install path); heavy
   imports are lazy and the pixel-light core never loads them
   (import-contract test). Historical orthography is never an error
   signal (rule 3): the scorer reads a **glyph-neutralized copy**
@@ -30,7 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (vs 0.50), token ECE 0.04 / 0.03 (vs 0.32 / 0.29), line AUC 0.77 /
   0.88 (vs 0.50). OFF by default (opt-in scorer; byte-identical without
   it). ONNX bundle built offline via
-  ``python scripts/export_dalembert_onnx.py``.
+  ``python scripts/export_masked_lm_onnx.py``.
+- **Model- and register-adaptive QE — pick the model per period.** The
+  same ``MaskedLMQEScorer`` drives ANY masked LM behind the seam: each
+  ONNX bundle is SELF-DESCRIBING (its ``qe_model.json`` carries the Platt
+  constants, the subword ``word_reducer`` and the ``line_reducer``), so
+  pointing ``model_dir`` at the right bundle loads the right calibration.
+  ``scripts/export_masked_lm_onnx.py --model-id <hf>`` builds any bundle;
+  ``scripts/fit_qe_calibration.py`` fits its calibration on a target-
+  register corpus and picks ``line_reducer`` by line-level AUC. Word→word
+  mapping is now offset-based (robust to WordPiece/SentencePiece splitting
+  apostrophes and hyphens, not just byte-level BPE), and the ORIGINAL
+  archaic spelling is still reported. For **late-19th-c. press**,
+  CamemBERT (``camembert-base``, MIT) with ``line_reducer="mean"`` is the
+  recommendation — token AUC 0.98, clean/OCR line score 0.14/0.51 (``mean``
+  beats ``max`` here because press proper nouns spike a few clean words a
+  contemporary model rarely saw). See ``docs/qe-scorer.md``.
 - **Routing cost accounting (ROADMAP V3 Phase 3).**
   ``CorrectionResult.producer_calls`` counts every ``producer.produce``
   invocation (retries included) — the real per-call cost driver for an
