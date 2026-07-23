@@ -4,6 +4,7 @@ import hashlib
 import json
 import uuid
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
@@ -145,6 +146,13 @@ class LineManifest(BaseModel):
     #: a correction whose token count diverges from this cannot project
     #: without dropping the word geometry.
     word_count: int | None = None
+    #: Phase 1 (ROADMAP V3) — the SOURCE engine's own confidence in this
+    #: line, in [0, 1]: mean of the ALTO ``String/@WC`` values, or the
+    #: PAGE line ``TextEquiv/@conf``. ``None`` when the source carries
+    #: none. Preserved so the audit trail keeps the OCR confidence even
+    #: where a correction invalidates the per-word attributes — it feeds
+    #: the ``ocr`` component of :class:`LineConfidence`.
+    ocr_confidence: float | None = None
     prev_line_id: str | None = None
     next_line_id: str | None = None
     corrected_text: str | None = None
@@ -572,6 +580,44 @@ class LossPolicy(FrozenPolicy):
 DEFAULT_LOSS_POLICY = LossPolicy()
 
 
+class ConfidencePolicy(FrozenPolicy):
+    """What the run does with line confidences (ROADMAP V3 Phase 1).
+
+    * **DROP** (default — the historical behaviour): no confidence is
+      computed; the report carries none.
+    * **REPORT_ONLY**: every :class:`LineOutcome` gains a
+      :class:`LineConfidence` block (multi-component, identified
+      aggregation formula). Nothing is written into the XML.
+    * **WRITE_WC**: reserved — stamping confidences into the output
+      markup (ALTO ``WC`` with a declared ``postProcessingStep``, PAGE
+      multi-``TextEquiv``) is LOCKED until the Phase 2 calibration
+      harness proves the values against a real corpus. Requesting it
+      raises at construction.
+
+    Deliberately NOT part of the §8.2 composite ``config_fingerprint``
+    yet: ``report_only`` affects the report, never the corrected XML —
+    the policy joins the fingerprinted surface in the same release that
+    unlocks ``write_wc`` (which does affect outputs).
+    """
+
+    mode: Literal["drop", "report_only", "write_wc"] = "drop"
+
+    @model_validator(mode="after")
+    def _write_wc_is_locked(self) -> "ConfidencePolicy":
+        if self.mode == "write_wc":
+            raise ValueError(
+                "ConfidencePolicy(mode='write_wc') is locked until the "
+                "calibration harness (ROADMAP V3 Phase 2/3) proves the "
+                "confidence values against a real corpus — use "
+                "'report_only' and read LineOutcome.confidence instead."
+            )
+        return self
+
+
+#: Module-level default reused wherever a caller passes no ConfidencePolicy.
+DEFAULT_CONFIDENCE_POLICY = ConfidencePolicy()
+
+
 class RetryPolicy(FrozenPolicy):
     """Per-chunk LLM retry strategy (F9), injectable and frozen.
 
@@ -931,6 +977,37 @@ class ProjectionStage(BaseModel):
     losses: dict[str, int] | None = None
 
 
+class LineConfidence(BaseModel):
+    """Multi-component confidence of one line's DECISION (Phase 1).
+
+    Every component keeps its own name — a single magic number whose
+    recipe is lost is exactly what this type exists to prevent:
+
+    - ``ocr``: the source engine's confidence in the ORIGINAL reading
+      (mean ALTO ``WC`` / PAGE ``conf``), preserved for the audit even
+      when a correction invalidates the per-word attributes;
+    - ``producer``: the producer's self-assessment (LLM uncertainty
+      channel; ``None`` until it lands or for producers that have none);
+    - ``alignment``: the token-alignment score of final vs source text
+      (1.0 for an unchanged line);
+    - ``scorers``: each injected :class:`ConfidenceScorer`'s value by
+      name (e.g. ``heuristic``);
+    - ``decision``: the aggregate, computed by the IDENTIFIED
+      ``formula`` (currently ``min`` over present components —
+      conservative: a decision is only as safe as its weakest evidence).
+
+    These values ORDER lines from safest to riskiest; they are not
+    calibrated probabilities until the Phase 2 harness says so.
+    """
+
+    ocr: float | None = None
+    producer: float | None = None
+    alignment: float | None = None
+    scorers: dict[str, float] = Field(default_factory=dict)
+    decision: float
+    formula: str = "min"
+
+
 class LineOutcome(BaseModel):
     """One line's whole journey through a run (report v2, §9)."""
 
@@ -941,6 +1018,10 @@ class LineOutcome(BaseModel):
     proposal: ProposalStage | None = None
     decision: DecisionStage
     projection: ProjectionStage | None = None
+    #: Phase 1 — multi-component decision confidence, computed when the
+    #: run's :class:`ConfidencePolicy` is not ``drop``. Additive and
+    #: optional — no ``report_version`` bump.
+    confidence: LineConfidence | None = None
 
 
 #: Bumped on any breaking change to the CorrectionReport JSON shape (§9).
@@ -1088,6 +1169,8 @@ __all__ = [
     "ChunkPlannerConfig",
     "FrozenPolicy",
     "GuardConfig",
+    "ConfidencePolicy",
+    "LineConfidence",
     "LossPolicy",
     "PairingPolicy",
     "RetryPolicy",

@@ -122,6 +122,11 @@ PUBLIC_API_1_0 = sorted(
         "RunProvenance",
         # token_realign sidecar (ROADMAP V3 Phase 1) — additive
         "SidecarEntry",
+        # Confidence block (ROADMAP V3 Phase 1) — additive
+        "ConfidencePolicy",
+        "ConfidenceScorer",
+        "HeuristicScorer",
+        "LineConfidence",
     ]
 )
 

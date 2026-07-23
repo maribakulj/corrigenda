@@ -86,8 +86,14 @@ from corrigenda.core.protocols import (
     require_page_images,
 )
 from corrigenda.core.alignment import align_tokens
+from corrigenda.core.confidence import (
+    ConfidenceScorer,
+    HeuristicScorer,
+    build_line_confidence,
+)
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
+    DEFAULT_CONFIDENCE_POLICY,
     DEFAULT_LOSS_POLICY,
     DEFAULT_PAIRING_POLICY,
     DEFAULT_RETRY_POLICY,
@@ -102,6 +108,7 @@ from corrigenda.core.schemas import (
     LineManifest,
     LineStatus,
     LineTrace,
+    ConfidencePolicy,
     LossPolicy,
     ProducerProvenance,
     ProposalBatch,
@@ -729,6 +736,8 @@ class CorrectionPipeline:
         *,
         loss_policy: LossPolicy | None = None,
         producer_metadata: ProducerMetadata | None = None,
+        confidence_policy: ConfidencePolicy | None = None,
+        confidence_scorers: tuple[ConfidenceScorer, ...] | None = None,
     ) -> None:
         self.producer = producer
         self.observer = observer
@@ -748,6 +757,16 @@ class CorrectionPipeline:
         # lose format granularity: REPORT (default, historical) counts
         # and attributes; STRICT rejects the unit pre-projection.
         self.loss_policy = loss_policy or DEFAULT_LOSS_POLICY
+        # Phase 1 (ROADMAP V3) — line confidences on the report. DROP
+        # (default) computes nothing; REPORT_ONLY fills
+        # LineOutcome.confidence via the injected scorers (default: the
+        # zero-dependency HeuristicScorer). Deliberately outside the
+        # §8.2 composite fingerprint until write_wc unlocks (report-only
+        # never affects the corrected XML).
+        self.confidence_policy = confidence_policy or DEFAULT_CONFIDENCE_POLICY
+        self.confidence_scorers: tuple[ConfidenceScorer, ...] = (
+            confidence_scorers if confidence_scorers is not None else (HeuristicScorer(),)
+        )
         # §3 format seam — None derives the adapter from the MANIFEST's
         # stamped source_format at write time (_adapter_for_format); an
         # injected adapter that contradicts that format is refused at
@@ -789,6 +808,8 @@ class CorrectionPipeline:
         pairing_policy: PairingPolicy | None = None,
         format_adapter: FormatAdapter | None = None,
         loss_policy: LossPolicy | None = None,
+        confidence_policy: ConfidencePolicy | None = None,
+        confidence_scorers: tuple[ConfidenceScorer, ...] | None = None,
         system_prompt: str | None = None,
         output_schema: dict[str, Any] | None = None,
     ) -> CorrectionPipeline:
@@ -823,6 +844,8 @@ class CorrectionPipeline:
             pairing_policy=pairing_policy,
             format_adapter=format_adapter,
             loss_policy=loss_policy,
+            confidence_policy=confidence_policy,
+            confidence_scorers=confidence_scorers,
             # Vendor vocabulary is native HERE (the LLM convenience):
             # the two strings become the generic identity envelope. The
             # producer's configuration fingerprint (prompt + schema)
@@ -1163,6 +1186,23 @@ class CorrectionPipeline:
             # project, preserved for review instead of lost.
             sidecar=sidecar_entries or None,
         )
+
+        # Phase 1 — line confidences (report-only; write_wc stays locked
+        # until calibration). Filled AFTER the report is built so every
+        # outcome scores its FINAL decided text, whatever path decided it.
+        if self.confidence_policy.mode != "drop":
+            for outcome in report.lines:
+                scored_line = all_lines_global.get(
+                    LineRef(page_id=outcome.page_id, line_id=outcome.line_id)
+                )
+                outcome.confidence = build_line_confidence(
+                    source_text=outcome.source_text,
+                    final_text=outcome.decision.final_text,
+                    ocr_confidence=(
+                        scored_line.ocr_confidence if scored_line is not None else None
+                    ),
+                    scorers=self.confidence_scorers,
+                )
 
         # Line-level fallback accounting, read from the DecisionSet
         # (ADR-011): it covers every path that leaves a line at its OCR

@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multi-component line confidence (ROADMAP V3 Phase 1).**
+  ``ConfidencePolicy(mode="drop"|"report_only")`` — default ``drop``
+  keeps behaviour identical; ``report_only`` fills a
+  ``LineConfidence`` block on every ``LineOutcome``: named components
+  (``ocr`` — the source engine's own confidence, now preserved by both
+  parsers as ``LineManifest.ocr_confidence`` from ALTO ``String/@WC``
+  mean / PAGE ``TextEquiv/@conf``; ``alignment`` — the token-alignment
+  score of the decided text; ``scorers`` — each injected
+  ``ConfidenceScorer`` by name; ``producer`` — reserved for the LLM
+  uncertainty channel) plus a ``decision`` aggregate under an
+  IDENTIFIED formula (``min`` over present components). New
+  ``corrigenda.core.confidence`` module with the ``ConfidenceScorer``
+  protocol and the zero-dependency ``HeuristicScorer`` (character
+  evidence + classic OCR confusion table + optional lexicon).
+  ``mode="write_wc"`` is declared but LOCKED (raises) until the
+  Phase 2 calibration harness proves the values on a real corpus.
+  ``ConfidencePolicy`` deliberately stays OUT of the §8.2 composite
+  fingerprint until then (``report_only`` never affects the corrected
+  XML) — pinned by test.
+
 - **token_realign loss policy + sidecar (ROADMAP V3 Phase 1).**
   ``LossPolicy`` grew ``min_alignment_score`` (default ``None`` — the
   gate is off and behaviour is identical). When set, a word-count-

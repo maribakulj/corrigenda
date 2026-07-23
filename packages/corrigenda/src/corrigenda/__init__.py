@@ -19,6 +19,10 @@ producer-bound symbols are exposed LAZILY (PEP 562) so that importing
 
 from typing import TYPE_CHECKING, Any
 
+from corrigenda.core.confidence import (
+    ConfidenceScorer,
+    HeuristicScorer,
+)
 from corrigenda.core.decisions import (
     DecisionSet,
     LineDecision,
@@ -70,6 +74,8 @@ from corrigenda.core.schemas import (
     LineTrace,
     LineContext,
     LineProposal,
+    ConfidencePolicy,
+    LineConfidence,
     LossPolicy,
     ModelInfo,
     PageManifest,
@@ -257,6 +263,10 @@ __all__ = [
     "LineTrace",
     "LineContext",
     "LineProposal",
+    "ConfidencePolicy",
+    "ConfidenceScorer",
+    "HeuristicScorer",
+    "LineConfidence",
     "LossPolicy",
     "ModelInfo",
     "PageManifest",
