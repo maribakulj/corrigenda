@@ -25,6 +25,12 @@ from fastapi import FastAPI, Request
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SAMPLE_XML = REPO_ROOT / "examples" / "sample.xml"
+PAGE_SAMPLE_XML = (
+    REPO_ROOT
+    / "examples"
+    / "page"
+    / "Descartes1637_Discours_btv1b86069594_corrected_0014_page_raw.xml"
+)
 
 # ---------------------------------------------------------------------------
 # Mock vendor apps (Mistral dialect)

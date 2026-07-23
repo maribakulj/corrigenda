@@ -264,34 +264,52 @@ async def call_llm(
 
 
 def extract_usage(data: dict[str, Any]) -> Usage | None:
-    """Best-effort token usage from a provider response (F14).
+    """Best-effort token usage + response id from a provider response
+    (F14, §11).
 
-    Handles the three shapes the bundled providers see:
+    Handles the three token shapes the bundled providers see:
       - OpenAI / Mistral: ``usage.{prompt_tokens, completion_tokens}``
       - Anthropic:        ``usage.{input_tokens, output_tokens}``
       - Google Gemini:    ``usageMetadata.{promptTokenCount, candidatesTokenCount}``
 
-    Returns ``None`` when no usage block is present.
+    The vendor's response identifier (``id`` for OpenAI/Mistral/
+    Anthropic, ``responseId`` for Gemini) rides along on
+    ``Usage.response_ids`` so the run's provenance can name every
+    provider response that contributed. Returns ``None`` only when
+    NEITHER a usage block nor a response id is present.
     """
+    tokens: tuple[int, int] | None = None
     u = data.get("usage")
     if isinstance(u, dict):
         if "prompt_tokens" in u or "completion_tokens" in u:
-            return Usage(
-                input_tokens=int(u.get("prompt_tokens") or 0),
-                output_tokens=int(u.get("completion_tokens") or 0),
+            tokens = (
+                int(u.get("prompt_tokens") or 0),
+                int(u.get("completion_tokens") or 0),
             )
-        if "input_tokens" in u or "output_tokens" in u:
-            return Usage(
-                input_tokens=int(u.get("input_tokens") or 0),
-                output_tokens=int(u.get("output_tokens") or 0),
+        elif "input_tokens" in u or "output_tokens" in u:
+            tokens = (
+                int(u.get("input_tokens") or 0),
+                int(u.get("output_tokens") or 0),
             )
-    gm = data.get("usageMetadata")
-    if isinstance(gm, dict):
-        return Usage(
-            input_tokens=int(gm.get("promptTokenCount") or 0),
-            output_tokens=int(gm.get("candidatesTokenCount") or 0),
-        )
-    return None
+    if tokens is None:
+        gm = data.get("usageMetadata")
+        if isinstance(gm, dict):
+            tokens = (
+                int(gm.get("promptTokenCount") or 0),
+                int(gm.get("candidatesTokenCount") or 0),
+            )
+
+    rid = data.get("id") or data.get("responseId")
+    response_ids = [rid] if isinstance(rid, str) and rid else []
+
+    if tokens is None and not response_ids:
+        return None
+    input_tokens, output_tokens = tokens or (0, 0)
+    return Usage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        response_ids=response_ids,
+    )
 
 
 def extract_chat_text(data: dict[str, Any], provider_label: str) -> dict[str, Any]:

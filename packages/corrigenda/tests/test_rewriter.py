@@ -514,10 +514,13 @@ def test_fast_path_subs_not_on_wrong_token(tmp_path):
 def test_slow_path_preserves_original_attributes(tmp_path):
     """Slow path: recycles ONLY ID + STYLEREFS; WC/CC never recycled.
 
-    Spec F2 / §6.1 — the slow-path rebuild reuses ``ID`` and ``STYLEREFS``
-    positionally, recomputes ``HPOS``/``WIDTH``, inherits ``VPOS``/``HEIGHT``
-    from the line, and never carries the stale ``WC``/``CC`` confidences
-    (CC's length would no longer match the rebuilt CONTENT).
+    Spec F2 / §6.1, updated by Phase 1 (ROADMAP V3): the rebuild reuses
+    ``ID`` and ``STYLEREFS`` by token ALIGNMENT (identity follows the
+    word the source token corresponds to — here ``old`` is closer to
+    ``world`` than to ``hello`` by character evidence), recomputes
+    ``HPOS``/``WIDTH``, inherits ``VPOS``/``HEIGHT`` from the line, and
+    never carries the stale ``WC``/``CC`` confidences (CC's length would
+    no longer match the rebuilt CONTENT).
     """
     lines_xml = """\
 <TextLine ID="TL1" HPOS="10" VPOS="20" WIDTH="400" HEIGHT="30">
@@ -531,10 +534,12 @@ def test_slow_path_preserves_original_attributes(tmp_path):
     strings = root.findall(f".//{_ns('String')}")
     assert len(strings) == 2
 
-    # First String recycles ID + STYLEREFS; VPOS/HEIGHT inherited from line
-    s1 = strings[0]
+    # The alignment matches 'old' to 'world' (sim 0.6 vs 0.2 for
+    # 'hello'), so S1's identity + STYLEREFS land THERE — positional
+    # recycling would have glued them onto 'hello'.
+    s1 = strings[1]
     assert s1.get("ID") == "S1"
-    assert s1.get("CONTENT") == "hello"
+    assert s1.get("CONTENT") == "world"
     assert s1.get("VPOS") == "20"
     assert s1.get("HEIGHT") == "30"
     assert s1.get("STYLEREFS") == "font1"
@@ -542,10 +547,11 @@ def test_slow_path_preserves_original_attributes(tmp_path):
     assert s1.get("WC") is None
     assert s1.get("CC") is None
 
-    # Second String gets generated ID
-    s2 = strings[1]
-    assert s2.get("ID") == "TL1_STR_0001"
-    assert s2.get("CONTENT") == "world"
+    # The unmatched new word gets a generated ID and no styling.
+    s2 = strings[0]
+    assert s2.get("ID") == "TL1_STR_0000"
+    assert s2.get("CONTENT") == "hello"
+    assert s2.get("STYLEREFS") is None
 
 
 def test_slow_path_does_not_copy_stale_subs(tmp_path):
@@ -745,7 +751,9 @@ def test_no_newline_in_content(tmp_path):
 
 
 def test_string_ids_slow_path(tmp_path):
-    """Slow path: extra words get generated IDs; existing words reuse original."""
+    """Slow path: extra words get generated IDs; existing words reuse
+    original — via alignment (Phase 1): 'old' matches 'world', so the
+    generated ID goes to 'hello' (target index 0)."""
     lines_xml = """\
 <TextLine ID="TL1" HPOS="10" VPOS="20" WIDTH="400" HEIGHT="30">
   <String ID="S1" CONTENT="old" HPOS="10" VPOS="20" WIDTH="100" HEIGHT="30"/>
@@ -755,7 +763,7 @@ def test_string_ids_slow_path(tmp_path):
     strings = root.findall(f".//{_ns('String')}")
     ids = [s.get("ID") for s in strings]
     assert "S1" in ids
-    assert "TL1_STR_0001" in ids
+    assert "TL1_STR_0000" in ids
 
 
 # ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ import pytest
 from lxml import etree
 
 from tests.e2e._harness import (
+    PAGE_SAMPLE_XML,
     SAMPLE_XML,
     collect_sse_until_terminal,
     download_xml,
@@ -108,6 +109,45 @@ def test_honest_job_end_to_end(backend_server, use_honest_vendor):
     tl5_first_string = [el for el in out_lines["TL5"] if el.tag.endswith("}String")][0]
     assert tl5_first_string.get("SUBS_TYPE") == "HypPart2"
     assert tl5_first_string.get("SUBS_CONTENT") == "dénonçait"
+
+
+# ---------------------------------------------------------------------------
+# Scenario 1 bis — honest vendor, PAGE XML (ROADMAP V3 Phase 0)
+# ---------------------------------------------------------------------------
+
+
+def test_honest_page_job_end_to_end(backend_server, use_honest_vendor):
+    """PAGE crosses the full HTTP boundary: upload → SSE → download.
+
+    Failed before the generic-loader switch: create_job hard-wired the
+    ALTO parser, which reads this valid PAGE file as 0 pages / 0 lines,
+    so the upload died on a 400 before any job existed.
+    """
+    base_url = backend_server.base_url
+    created = submit_job(base_url, model=use_honest_vendor, xml_path=PAGE_SAMPLE_XML)
+    job_id, token = created["job_id"], created["job_token"]
+
+    events = collect_sse_until_terminal(base_url, job_id, token)
+    terminal_name, terminal_data = events[-1]
+    assert terminal_name == "completed", events
+    assert terminal_data["status"] == "completed"
+
+    output = download_xml(base_url, job_id, token)
+
+    # The output is PAGE again (PcGts root, PAGE namespace) — never an
+    # ALTO re-serialization.
+    out_root = etree.fromstring(output)
+    assert "primaresearch.org/PAGE" in out_root.nsmap[None]
+    assert etree.QName(out_root).localname == "PcGts"
+
+    # Line identity and order are invariant across the rewrite.
+    src_root = etree.fromstring(PAGE_SAMPLE_XML.read_bytes())
+
+    def _text_line_ids(root: etree._Element) -> list[str]:
+        return [el.get("id") for el in root.iter() if etree.QName(el).localname == "TextLine"]
+
+    assert _text_line_ids(out_root) == _text_line_ids(src_root)
+    assert len(_text_line_ids(out_root)) > 0
 
 
 # ---------------------------------------------------------------------------

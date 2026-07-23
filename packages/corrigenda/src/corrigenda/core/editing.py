@@ -113,6 +113,14 @@ class ReplaceLine(BaseModel):
     # and per the CorrectionReport contract a new optional key does NOT
     # bump report_version.
     page_id: str | None = None
+    #: Phase 1 (ROADMAP V3) — the producer's self-assessment of THIS
+    #: proposal in [0, 1], already VERIFIED app-side when it comes from
+    #: the LLM uncertainty channel (claims checked against the confusion
+    #: table / lexicon — the model supplies auditable evidence, never a
+    #: raw score). Feeds the ``producer`` component of
+    #: :class:`~corrigenda.core.schemas.LineConfidence`. Optional and
+    #: additive; ``None`` = the producer declared nothing.
+    producer_confidence: float | None = None
 
 
 class ReplaceSpan(BaseModel):

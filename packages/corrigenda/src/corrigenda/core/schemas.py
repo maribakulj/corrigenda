@@ -4,6 +4,7 @@ import hashlib
 import json
 import uuid
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
@@ -145,6 +146,13 @@ class LineManifest(BaseModel):
     #: a correction whose token count diverges from this cannot project
     #: without dropping the word geometry.
     word_count: int | None = None
+    #: Phase 1 (ROADMAP V3) — the SOURCE engine's own confidence in this
+    #: line, in [0, 1]: mean of the ALTO ``String/@WC`` values, or the
+    #: PAGE line ``TextEquiv/@conf``. ``None`` when the source carries
+    #: none. Preserved so the audit trail keeps the OCR confidence even
+    #: where a correction invalidates the per-word attributes — it feeds
+    #: the ``ocr`` component of :class:`LineConfidence`.
+    ocr_confidence: float | None = None
     prev_line_id: str | None = None
     next_line_id: str | None = None
     corrected_text: str | None = None
@@ -527,11 +535,11 @@ DEFAULT_PAIRING_POLICY = PairingPolicy()
 
 class LossPolicy(FrozenPolicy):
     """What the run does when projecting a correction would LOSE format
-    granularity (ADR-012, P3.8).
+    granularity (ADR-012, P3.8; token_realign — ROADMAP V3 Phase 1).
 
     The PAGE rewriter cannot keep ``Word`` geometry when a correction
     changes a line's word count (6.2 P4 slow path: the ``Word`` children
-    are dropped and the text lives at line level). Two stances:
+    are dropped and the text lives at line level). Three stances:
 
     * **REPORT** (``strict=False``, the default — the library's
       historical behaviour, now explicit): the correction projects, the
@@ -542,19 +550,72 @@ class LossPolicy(FrozenPolicy):
       hyphen unit falls back to source text with a ``format_loss``
       reason, consistent with the conservative-on-ambiguity fallback
       philosophy. The source markup keeps its word geometry.
+    * **TOKEN_REALIGN** (``min_alignment_score`` set, ``strict=False``):
+      the middle ground. A word-count-changing correction projects only
+      when the token alignment onto the source words is CONFIDENT
+      (aggregate score ≥ the threshold, no suspected word move); a
+      same-count correction is additionally gated on the move flag. A
+      gated line reverts to source markup — but its correction is NOT
+      lost: it lands in the run's **sidecar**
+      (``CorrectionReport.sidecar``, ``sidecar.json`` on
+      :meth:`CorrectionResult.write`) for review. ``strict=True`` wins
+      over this gate.
 
-    Scope: word-granularity loss only (``LineManifest.word_count``).
-    Stale-annotation drops (``conf``, alternative ``TextEquiv``,
-    offset-anchored ``custom`` groups) describe the OLD reading — they
-    are inherent to ANY correction, so they stay report-only in both
-    modes. No third mode until a real need shows up.
+    Scope of strict: word-granularity loss only
+    (``LineManifest.word_count``). Stale-annotation drops (``conf``,
+    alternative ``TextEquiv``, offset-anchored ``custom`` groups)
+    describe the OLD reading — they are inherent to ANY correction, so
+    they stay report-only in every mode.
     """
 
     strict: bool = False
+    #: token_realign threshold in [0, 1] — ``None`` disables the gate
+    #: (historical behaviour). 0.6 is a reasonable starting point:
+    #: ordinary OCR corrections align far above it, wholesale rewrites
+    #: far below. Calibration against a real corpus is Phase 2's job.
+    min_alignment_score: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 #: Module-level default reused wherever a caller passes no LossPolicy.
 DEFAULT_LOSS_POLICY = LossPolicy()
+
+
+class ConfidencePolicy(FrozenPolicy):
+    """What the run does with line confidences (ROADMAP V3 Phase 1).
+
+    * **DROP** (default — the historical behaviour): no confidence is
+      computed; the report carries none.
+    * **REPORT_ONLY**: every :class:`LineOutcome` gains a
+      :class:`LineConfidence` block (multi-component, identified
+      aggregation formula). Nothing is written into the XML.
+    * **WRITE_WC**: reserved — stamping confidences into the output
+      markup (ALTO ``WC`` with a declared ``postProcessingStep``, PAGE
+      multi-``TextEquiv``) is LOCKED until the Phase 2 calibration
+      harness proves the values against a real corpus. Requesting it
+      raises at construction.
+
+    Deliberately NOT part of the §8.2 composite ``config_fingerprint``
+    yet: ``report_only`` affects the report, never the corrected XML —
+    the policy joins the fingerprinted surface in the same release that
+    unlocks ``write_wc`` (which does affect outputs).
+    """
+
+    mode: Literal["drop", "report_only", "write_wc"] = "drop"
+
+    @model_validator(mode="after")
+    def _write_wc_is_locked(self) -> "ConfidencePolicy":
+        if self.mode == "write_wc":
+            raise ValueError(
+                "ConfidencePolicy(mode='write_wc') is locked until the "
+                "calibration harness (ROADMAP V3 Phase 2/3) proves the "
+                "confidence values against a real corpus — use "
+                "'report_only' and read LineOutcome.confidence instead."
+            )
+        return self
+
+
+#: Module-level default reused wherever a caller passes no ConfidencePolicy.
+DEFAULT_CONFIDENCE_POLICY = ConfidencePolicy()
 
 
 class RetryPolicy(FrozenPolicy):
@@ -779,6 +840,12 @@ class Usage(BaseModel):
 
     input_tokens: int = 0
     output_tokens: int = 0
+    #: §11 — vendor response identifiers, when the provider surfaces one
+    #: (OpenAI/Mistral/Anthropic ``id``, Gemini ``responseId``). They ride
+    #: the same producer→pipeline→report path as the token counts and
+    #: aggregate by concatenation (call order), so a report names every
+    #: provider response that contributed to the run.
+    response_ids: list[str] = Field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:
@@ -788,6 +855,7 @@ class Usage(BaseModel):
         return Usage(
             input_tokens=self.input_tokens + other.input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
+            response_ids=[*self.response_ids, *other.response_ids],
         )
 
 
@@ -909,6 +977,37 @@ class ProjectionStage(BaseModel):
     losses: dict[str, int] | None = None
 
 
+class LineConfidence(BaseModel):
+    """Multi-component confidence of one line's DECISION (Phase 1).
+
+    Every component keeps its own name — a single magic number whose
+    recipe is lost is exactly what this type exists to prevent:
+
+    - ``ocr``: the source engine's confidence in the ORIGINAL reading
+      (mean ALTO ``WC`` / PAGE ``conf``), preserved for the audit even
+      when a correction invalidates the per-word attributes;
+    - ``producer``: the producer's self-assessment (LLM uncertainty
+      channel; ``None`` until it lands or for producers that have none);
+    - ``alignment``: the token-alignment score of final vs source text
+      (1.0 for an unchanged line);
+    - ``scorers``: each injected :class:`ConfidenceScorer`'s value by
+      name (e.g. ``heuristic``);
+    - ``decision``: the aggregate, computed by the IDENTIFIED
+      ``formula`` (currently ``min`` over present components —
+      conservative: a decision is only as safe as its weakest evidence).
+
+    These values ORDER lines from safest to riskiest; they are not
+    calibrated probabilities until the Phase 2 harness says so.
+    """
+
+    ocr: float | None = None
+    producer: float | None = None
+    alignment: float | None = None
+    scorers: dict[str, float] = Field(default_factory=dict)
+    decision: float
+    formula: str = "min"
+
+
 class LineOutcome(BaseModel):
     """One line's whole journey through a run (report v2, §9)."""
 
@@ -919,6 +1018,10 @@ class LineOutcome(BaseModel):
     proposal: ProposalStage | None = None
     decision: DecisionStage
     projection: ProjectionStage | None = None
+    #: Phase 1 — multi-component decision confidence, computed when the
+    #: run's :class:`ConfidencePolicy` is not ``drop``. Additive and
+    #: optional — no ``report_version`` bump.
+    confidence: LineConfidence | None = None
 
 
 #: Bumped on any breaking change to the CorrectionReport JSON shape (§9).
@@ -983,6 +1086,26 @@ class RunProvenance(BaseModel):
     dependencies: dict[str, str] = Field(default_factory=dict)
 
 
+class SidecarEntry(BaseModel):
+    """A correction the run REFUSED to project into the XML — preserved
+    here instead of lost (token_realign gate, ROADMAP V3 Phase 1).
+
+    The line's XML keeps its source markup (decision status
+    ``fallback``); the corrected text plus the refusal evidence live
+    here so a reviewer can apply, adapt or discard it.
+    ``alignment_score`` is ``None`` for a line reverted only by hyphen-
+    unit atomicity (its own alignment was never the problem).
+    """
+
+    page_id: str
+    line_id: str
+    source_text: str
+    corrected_text: str
+    reason: str
+    alignment_score: float | None = None
+    move_suspected: bool = False
+
+
 class CorrectionReport(BaseModel):
     """Public, versioned correction report (§9).
 
@@ -1013,6 +1136,18 @@ class CorrectionReport(BaseModel):
     #: ignores unknown keys keeps working, one that reads it gains the
     #: source digests, producer identity and dependency versions.
     provenance: RunProvenance | None = None
+    #: F14/§11 — provider usage aggregated over the run (tokens +
+    #: response ids). Historically it lived only on the TRANSIENT
+    #: ``CorrectionResult`` while the report was the persisted artefact,
+    #: so cost never reached trace.json. ``None`` when no producer call
+    #: reported usage (rules producer, dry runs). Additive and optional —
+    #: no ``report_version`` bump (same contract as ``format_losses``).
+    usage: Usage | None = None
+    #: Phase 1 — corrections the token_realign gate refused to project,
+    #: preserved for review (see :class:`SidecarEntry`). ``None`` when
+    #: the gate is off or nothing was refused. Additive and optional —
+    #: no ``report_version`` bump.
+    sidecar: list[SidecarEntry] | None = None
 
     @property
     def fallback_lines(self) -> list[LineOutcome]:
@@ -1034,6 +1169,8 @@ __all__ = [
     "ChunkPlannerConfig",
     "FrozenPolicy",
     "GuardConfig",
+    "ConfidencePolicy",
+    "LineConfidence",
     "LossPolicy",
     "PairingPolicy",
     "RetryPolicy",
@@ -1056,5 +1193,6 @@ __all__ = [
     "ProjectionStage",
     "ProducerProvenance",
     "RunProvenance",
+    "SidecarEntry",
     "CorrectionReport",
 ]

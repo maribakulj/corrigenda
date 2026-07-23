@@ -1060,3 +1060,76 @@ def test_provider_transient_error_default_status_code_is_none():
     err = ProviderTransientError("plain message")
     assert err.status_code is None
     assert str(err) == "plain message"
+
+
+# ---------------------------------------------------------------------------
+# extract_usage — tokens + response id (F14, §11 / ROADMAP V3 Phase 0)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_usage_openai_mistral_shape_carries_the_response_id():
+    from app.providers.base import extract_usage
+
+    usage = extract_usage(
+        {
+            "id": "chatcmpl-abc123",
+            "usage": {"prompt_tokens": 12, "completion_tokens": 5},
+        }
+    )
+    assert usage is not None
+    assert (usage.input_tokens, usage.output_tokens) == (12, 5)
+    assert usage.response_ids == ["chatcmpl-abc123"]
+
+
+def test_extract_usage_anthropic_shape_carries_the_response_id():
+    from app.providers.base import extract_usage
+
+    usage = extract_usage(
+        {
+            "id": "msg_01XYZ",
+            "usage": {"input_tokens": 7, "output_tokens": 3},
+        }
+    )
+    assert usage is not None
+    assert (usage.input_tokens, usage.output_tokens) == (7, 3)
+    assert usage.response_ids == ["msg_01XYZ"]
+
+
+def test_extract_usage_gemini_shape_carries_response_id():
+    from app.providers.base import extract_usage
+
+    usage = extract_usage(
+        {
+            "responseId": "gen-42",
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 4},
+        }
+    )
+    assert usage is not None
+    assert (usage.input_tokens, usage.output_tokens) == (9, 4)
+    assert usage.response_ids == ["gen-42"]
+
+
+def test_extract_usage_id_without_token_block_still_reports():
+    """Failed before: a response with an id but no usage block returned
+    None, dropping the §11 provenance the vendor DID surface."""
+    from app.providers.base import extract_usage
+
+    usage = extract_usage({"id": "msg_only"})
+    assert usage is not None
+    assert usage.total_tokens == 0
+    assert usage.response_ids == ["msg_only"]
+
+
+def test_extract_usage_tokens_without_id_keep_working():
+    from app.providers.base import extract_usage
+
+    usage = extract_usage({"usage": {"prompt_tokens": 1, "completion_tokens": 2}})
+    assert usage is not None
+    assert usage.response_ids == []
+
+
+def test_extract_usage_returns_none_when_nothing_is_present():
+    from app.providers.base import extract_usage
+
+    assert extract_usage({}) is None
+    assert extract_usage({"id": 123}) is None  # non-string id is ignored

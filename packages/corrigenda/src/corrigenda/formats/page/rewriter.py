@@ -30,7 +30,11 @@ from lxml import etree
 
 from corrigenda.core._norm import nfc
 from corrigenda.core.identity import ensure_unique_identities
-from corrigenda.core.pairing import HYPHEN_CHARS, trailing_hyphen_char
+from corrigenda.core.pairing import (
+    HYPHEN_CHARS,
+    preserve_break_char,
+    trailing_hyphen_char,
+)
 from corrigenda.errors import DuplicateIdError
 from corrigenda.core.protocols import RewriteResult
 from corrigenda.core.schemas import LineManifest, PageManifest
@@ -240,21 +244,10 @@ def _strip_custom_offsets(el: etree._Element, metrics: PageRewriterMetrics) -> N
         del el.attrib["custom"]
 
 
-def _preserve_hyphen(source_text: str, corrected: str) -> str:
-    """P5 / E5-extended: if the source line ended in a word-break hyphen,
-    force the corrected line to end in the SAME character (no ``¬`` → ``-``
-    normalisation). Internal spacing is preserved."""
-    src_h = trailing_hyphen_char(source_text, HYPHEN_CHARS)
-    if src_h is None:
-        return corrected
-    stripped = corrected.rstrip()
-    trailing_ws = corrected[len(stripped) :]
-    for ch in HYPHEN_CHARS:
-        if stripped.endswith(ch):
-            if ch != src_h:
-                stripped = stripped[:-1] + src_h
-            break
-    return stripped + trailing_ws
+# P5 / E5-extended — now the shared core helper: the PIPELINE applies it
+# before decisions materialize (decision == artefact, always); this call
+# site remains as idempotent defence in depth.
+_preserve_hyphen = preserve_break_char
 
 
 # ---------------------------------------------------------------------------

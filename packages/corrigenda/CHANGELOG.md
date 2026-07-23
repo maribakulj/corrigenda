@@ -9,6 +9,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Routing cost accounting (ROADMAP V3 Phase 3).**
+  ``CorrectionResult.producer_calls`` counts every ``producer.produce``
+  invocation (retries included) — the real per-call cost driver for an
+  LLM API. Routing lowers it by dropping whole all-skipped chunks, so
+  comparing a routing-on run to a routing-off run on one document is how
+  the hybrid PROVES it is cheaper (the review's "l'hybride doit prouver
+  qu'il est moins cher"), no fabricated counterfactual. Additive,
+  ``0``-safe, unrelated to the fingerprint.
+- **Hybrid-selective routing wired into the pipeline (ROADMAP V3
+  Phase 3).** ``CorrectionPipeline(qe_scorer=…, routing_policy=…)`` (and
+  ``for_provider``): a line the QE scorer + policy route to SKIP is
+  confirmed clean and dropped from its chunk's targets — it stays as
+  context for neighbours but its output is discarded, and a chunk whose
+  targets are ALL skipped is dropped entirely (no producer call, the
+  token savings). A hyphen unit is never skipped (atomicity). SKIP
+  lines end ``CORRECTED`` with unchanged text; the auditable skip
+  signature is a corrected line whose trace ``model_input_text`` is
+  ``None`` (never sent to the model). ``CorrectionResult.lines_skipped``
+  exposes the count (the economics signal). OFF by default — no scorer
+  and ``RoutingPolicy()`` routes every line to the LLM, so a default run
+  is byte-identical (byte-parity corpus unchanged); routing is not in
+  the §8.2 composite fingerprint.
+- **QE scoring + routing brain (ROADMAP V3 Phase 3, core).** New
+  ``corrigenda.core.quality``: the ``QEScorer`` protocol (score a
+  SOURCE line's need for correction in [0,1], pre-LLM), a
+  zero-dependency ``HeuristicQEScorer`` baseline, and the routing brain
+  (``RoutingPolicy`` frozen thresholds, ``RoutingDecision`` enum,
+  ``route_line`` — SKIP a clean line for no LLM call / LLM / ESCALATE).
+  Routing is opt-in: ``RoutingPolicy()`` defaults both bounds to
+  ``None`` (every line → LLM, historical behaviour). The heuristic uses
+  ONLY orthography-neutral signals (a digit stranded in a word;
+  out-of-lexicon against a supplied lexicon) — NOT archaic glyphs:
+  measured on the OCR17+ corpus, an archaic-glyph heuristic scored the
+  human-corrected reference (full of preserved long-s / u-for-v)
+  HIGHER than raw OCR, the exact "flag historical spelling as
+  improbable" trap. Without a lexicon the baseline abstains by design;
+  distinguishing a real OCR non-word (``cukiuent``) from a valid
+  historical form (``cultiuent``) needs a historical lexicon or model —
+  the measured justification for the Phase 3 ONNX/D'AlemBERT scorer,
+  which will sit behind the same ``QEScorer`` protocol in
+  ``corrigenda[qe]``. Additive public API; not yet in the pipeline or
+  the §8.2 composite fingerprint (wiring is the next Phase 3 step).
+
+- **LLM uncertainty channel (ROADMAP V3 Phase 1).** Opt-in contract
+  variant for ``LLMEditProducer`` (``uncertainty_channel=True``, also
+  on ``CorrectionPipeline.for_provider``): the model must return a
+  per-line ``status`` (``certain``/``uncertain`` — an explicit outlet
+  for doubt instead of silent guessing) and reason-coded per-token
+  ``edits`` (``confusion_connue`` / ``mot_du_lexique`` /
+  ``infere_du_contexte`` / ``conjecture``). The app VERIFIES every
+  verifiable claim (``corrigenda.core.confidence.score_producer_claims``
+  — confusion table, lexicon, token existence); a failed check scores
+  BELOW an honest conjecture. The verified score rides
+  ``ReplaceLine.producer_confidence`` (additive) and feeds the
+  ``producer`` component of ``LineConfidence``. Off by default: the
+  base prompt/schema stay byte-identical, and the channel's different
+  contract yields a different producer ``configuration_fingerprint``
+  (§11).
+
+- **Multi-component line confidence (ROADMAP V3 Phase 1).**
+  ``ConfidencePolicy(mode="drop"|"report_only")`` — default ``drop``
+  keeps behaviour identical; ``report_only`` fills a
+  ``LineConfidence`` block on every ``LineOutcome``: named components
+  (``ocr`` — the source engine's own confidence, now preserved by both
+  parsers as ``LineManifest.ocr_confidence`` from ALTO ``String/@WC``
+  mean / PAGE ``TextEquiv/@conf``; ``alignment`` — the token-alignment
+  score of the decided text; ``scorers`` — each injected
+  ``ConfidenceScorer`` by name; ``producer`` — reserved for the LLM
+  uncertainty channel) plus a ``decision`` aggregate under an
+  IDENTIFIED formula (``min`` over present components). New
+  ``corrigenda.core.confidence`` module with the ``ConfidenceScorer``
+  protocol and the zero-dependency ``HeuristicScorer`` (character
+  evidence + classic OCR confusion table + optional lexicon).
+  ``mode="write_wc"`` is declared but LOCKED (raises) until the
+  Phase 2 calibration harness proves the values on a real corpus.
+  ``ConfidencePolicy`` deliberately stays OUT of the §8.2 composite
+  fingerprint until then (``report_only`` never affects the corrected
+  XML) — pinned by test.
+
+- **token_realign loss policy + sidecar (ROADMAP V3 Phase 1).**
+  ``LossPolicy`` grew ``min_alignment_score`` (default ``None`` — the
+  gate is off and behaviour is identical). When set, a word-count-
+  changing correction whose token alignment onto the source scores
+  below the threshold — or ANY correction raising the aligner's move
+  flag — is not projected: the line reverts to source markup (whole
+  hyphen unit, ADR-010) and the correction is PRESERVED as a
+  ``SidecarEntry`` on ``CorrectionReport.sidecar`` (also written as
+  ``sidecar.json`` by ``CorrectionResult.write`` when non-empty) for
+  review instead of lost. New core module ``corrigenda.core.alignment``
+  (char-level Levenshtein similarity → monotonic token DP; a match
+  requires character evidence; moves are flagged, never applied) also
+  drives the ALTO slow path's identity recycling, which is now aligned
+  instead of positional. The §11 composite ``config_fingerprint``
+  moved (``55dc80679dd71f94`` → ``15dc07cba9122106``): the new FIELD
+  joins the fingerprinted policy surface (defaults unchanged).
+
 - **Versioned correction benchmark + ground-truth corpus seed (P4.2).**
   ``scripts/benchmark.py`` (repo tooling, not part of the package)
   measures a producer against ``tests/corpus_gt/`` — micro-averaged

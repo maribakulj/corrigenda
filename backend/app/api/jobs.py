@@ -14,7 +14,11 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 
 from corrigenda.core.schemas import PairingPolicy
-from corrigenda.formats.alto.parser import build_document_manifest
+
+# ROADMAP V3 Phase 0 — the generic loader, NOT the ALTO parser: the ALTO
+# parser applied to a valid PAGE file yields an empty manifest (0 pages,
+# 0 lines) instead of an error, silently dropping every PAGE upload.
+from corrigenda.formats.loader import build_document_manifest
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from sse_starlette.sse import EventSourceResponse
@@ -250,7 +254,7 @@ async def create_job(
     geometric_pairing: bool = Form(True),
     store: JobStore = Depends(get_job_store),
 ) -> CreateJobResponse:
-    """Upload ALTO files and start a correction job.
+    """Upload ALTO/PAGE XML files and start a correction job.
 
     Upload concurrency is reserved by ``UploadAdmissionMiddleware``
     BEFORE the multipart body is read: by the time this handler runs,
@@ -358,7 +362,7 @@ async def _create_job_reserved(
         if not saved:
             raise HTTPException(
                 status_code=400,
-                detail="No ALTO/XML files found after extraction.",
+                detail="No XML files found after extraction.",
             )
 
         # Build document manifest
@@ -376,7 +380,7 @@ async def _create_job_reserved(
         if doc_manifest.total_lines == 0:
             raise HTTPException(
                 status_code=400,
-                detail="No text lines found in the uploaded ALTO files.",
+                detail="No text lines found in the uploaded files.",
             )
 
         pages_info = [(p.page_id, p.source_file) for p in doc_manifest.pages]

@@ -33,6 +33,33 @@ from corrigenda.core.schemas import (
 HYPHEN_CHARS: tuple[str, ...] = ("-", "¬", "⸗", "­")
 
 
+def preserve_break_char(source_text: str, corrected: str) -> str:
+    """P5 — if the source line ends in a word-break character and the
+    corrected text ends in a DIFFERENT one, force the corrected text to
+    end in the SOURCE's character (no ``-`` ↔ ``¬`` drift; trailing
+    whitespace preserved). Idempotent; a no-op when either side carries
+    no word-break hyphen.
+
+    Historically enforced by the PAGE rewriter only, AFTER the decision
+    was recorded — so the artefact could diverge from the decision and
+    trip ``_verify_projection`` (found by the OCR17+ corpus, 2026-07-23:
+    source ``tou-`` / oracle ``tou¬``). The pipeline now applies it
+    BEFORE decisions materialize; the rewriter keeps its call as
+    defence in depth (idempotent).
+    """
+    src_h = trailing_hyphen_char(source_text, HYPHEN_CHARS)
+    if src_h is None:
+        return corrected
+    stripped = corrected.rstrip()
+    trailing_ws = corrected[len(stripped) :]
+    for ch in HYPHEN_CHARS:
+        if stripped.endswith(ch):
+            if ch != src_h:
+                stripped = stripped[:-1] + src_h
+            break
+    return stripped + trailing_ws
+
+
 def trailing_hyphen_char(text: str, hyphen_chars: tuple[str, ...]) -> str | None:
     """Return the trailing hyphen character of ``text``, or ``None``.
 

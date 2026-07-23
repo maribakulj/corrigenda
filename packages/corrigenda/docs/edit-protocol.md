@@ -115,9 +115,10 @@ apply_edit_script(script, {"l1": "ſoleil"}).text_by_id     # {"l1": "soleil"}
   **never opens a pixel** (invariant **I4**, enforced by
   `test_edit_producer.py::test_i4_no_image_libraries_in_corrigenda`);
   loading/cropping/encoding belongs to the out-of-lib producer.
-  `run(source_images=…)` forwards the mapping verbatim; a `wants_image`
-  producer with no image is a start-up `ValidationError`
-  (`require_source_images`).
+  `run(page_images=…)` forwards the mapping verbatim — keyed by
+  **page_id** (document-unique, one image per physical page, never per
+  source file); a `wants_image` producer with a page left uncovered is a
+  start-up `ConfigurationError` (`require_page_images`).
 
 ## Dry run
 

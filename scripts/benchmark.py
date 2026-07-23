@@ -55,7 +55,7 @@ from corrigenda import (  # noqa: E402
     default_french_ocr_rules,
 )
 from corrigenda.core.pipeline import CorrectionPipeline  # noqa: E402
-from corrigenda.core.schemas import CorrectionRequest  # noqa: E402
+from corrigenda.core.schemas import ConfidencePolicy, CorrectionRequest  # noqa: E402
 
 BENCHMARK_VERSION = "1"
 DEFAULT_CORPUS = (
@@ -173,7 +173,13 @@ def run_case(case_dir: Path, case: dict, producer_spec: str) -> dict:
 
     document = corrigenda.load(source)
     producer = _make_producer(producer_spec, ref_texts)
-    pipeline = CorrectionPipeline(producer=producer, observer=_NullObserver())
+    pipeline = CorrectionPipeline(
+        producer=producer,
+        observer=_NullObserver(),
+        # Phase 2 — the calibration harness scores every line's decision
+        # confidence against ground truth (ECE/Brier below).
+        confidence_policy=ConfidencePolicy(mode="report_only"),
+    )
 
     tracemalloc.start()
     started = time.perf_counter()
@@ -212,6 +218,22 @@ def run_case(case_dir: Path, case: dict, producer_spec: str) -> dict:
     pages = max(1, len(document.manifest.pages))
     losses = result.report.format_losses
 
+    # Phase 2 calibration — (predicted decision confidence, was the
+    # decided text exactly right) per line, pooled by main() into the
+    # aggregate ECE/Brier. write_wc stays locked until these numbers,
+    # measured on a real corpus, say the confidences can be trusted.
+    calibration_pairs: list[tuple[float, float]] = []
+    for outcome in result.report.lines:
+        ref = ref_texts.get(outcome.line_id)
+        if ref is None or outcome.confidence is None:
+            continue
+        calibration_pairs.append(
+            (
+                outcome.confidence.decision,
+                1.0 if outcome.decision.final_text == ref else 0.0,
+            )
+        )
+
     return {
         "name": case["name"],
         "format": case["format"],
@@ -234,6 +256,39 @@ def run_case(case_dir: Path, case: dict, producer_spec: str) -> dict:
         "format_losses": losses,
         "latency_s_per_page": round(latency_s / pages, 4),
         "peak_memory_mb": round(peak_bytes / (1024 * 1024), 2),
+        "calibration": _calibration_metrics(calibration_pairs),
+        # Popped by main() into the pooled aggregate, never serialized.
+        "_calibration_pairs": calibration_pairs,
+    }
+
+
+def _calibration_metrics(
+    pairs: list[tuple[float, float]], bins: int = 10
+) -> dict[str, float | int]:
+    """Brier score + expected calibration error over equal-width bins.
+
+    ``pairs`` = (predicted confidence, 1.0 if the decided text matched
+    ground truth else 0.0). Both metrics in [0, 1], lower is better.
+    """
+    if not pairs:
+        return {"lines": 0, "brier": 0.0, "ece": 0.0, "bins": bins}
+    brier = sum((p - c) ** 2 for p, c in pairs) / len(pairs)
+    ece = 0.0
+    for b in range(bins):
+        lo, hi = b / bins, (b + 1) / bins
+        in_bin = [
+            (p, c) for p, c in pairs if (lo <= p < hi) or (b == bins - 1 and p == hi)
+        ]
+        if not in_bin:
+            continue
+        avg_conf = sum(p for p, _ in in_bin) / len(in_bin)
+        accuracy = sum(c for _, c in in_bin) / len(in_bin)
+        ece += abs(avg_conf - accuracy) * len(in_bin) / len(pairs)
+    return {
+        "lines": len(pairs),
+        "brier": round(brier, 6),
+        "ece": round(ece, 6),
+        "bins": bins,
     }
 
 
@@ -296,8 +351,16 @@ def main(argv: list[str] | None = None) -> int:
             "lines_degraded": sum(c["lines_degraded"] for c in cases),
             "false_positives": sum(c["false_positives"] for c in cases),
             "fallback_lines": sum(c["fallback_lines"] for c in cases),
+            # Phase 2 — micro-pooled over EVERY line of every case (a
+            # macro average across cases would let a tiny case swamp the
+            # aggregate calibration).
+            "calibration": _calibration_metrics(
+                [pair for c in cases for pair in c["_calibration_pairs"]]
+            ),
         },
     }
+    for c in cases:
+        del c["_calibration_pairs"]  # pooled above, never serialized
 
     payload = json.dumps(report, indent=2, ensure_ascii=False)
     if args.out:

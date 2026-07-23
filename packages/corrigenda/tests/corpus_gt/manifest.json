@@ -1,5 +1,5 @@
 {
-  "corpus_version": "0.1.0",
+  "corpus_version": "0.2.0",
   "cases": [
     {
       "name": "synthetic-fr-early-print",
@@ -7,6 +7,20 @@
       "source": "synthetic-fr-early-print.alto.xml",
       "reference": "synthetic-fr-early-print.ref.alto.xml",
       "provenance": "synthetic — reference written for this corpus; source derived by scripted degradations (long s, fi ligature, one rn confusion). See README.md."
+    },
+    {
+      "name": "ocr17-descartes-discours-p14",
+      "format": "page",
+      "source": "ocr17-descartes-discours-p14.src.page.xml",
+      "reference": "ocr17-descartes-discours-p14.ref.page.xml",
+      "provenance": "real — OCR17+ (Simon Gabay et al., e-ditiones, CC-BY), Descartes 1637 Discours de la méthode (ark btv1b86069594) p.14: raw Transkribus OCR (Word-level, re-exposed at line level by derive_ocr17.py) vs upstream human-corrected reference. See README.md and examples/page/PROVENANCE.md."
+    },
+    {
+      "name": "ocr17-lafayette-cleves-p11",
+      "format": "page",
+      "source": "ocr17-lafayette-cleves-p11.src.page.xml",
+      "reference": "ocr17-lafayette-cleves-p11.ref.page.xml",
+      "provenance": "real — OCR17+ (Simon Gabay et al., e-ditiones, CC-BY), La Fayette 1678 La Princesse de Clèves (ark btv1b8610820b) p.11: raw Transkribus OCR (Word-level, re-exposed at line level by derive_ocr17.py) vs upstream human-corrected reference. See README.md and examples/page/PROVENANCE.md."
     }
   ]
 }

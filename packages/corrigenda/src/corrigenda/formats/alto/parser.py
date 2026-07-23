@@ -358,6 +358,22 @@ def _parse_alto_file(
                 )
                 ocr_text = _build_ocr_text(tl, ns)
 
+                # Phase 1 (ROADMAP V3) — preserve the OCR engine's own
+                # confidence at line level (mean of String/@WC): the
+                # per-word attributes are invalidated by any correction,
+                # but the audit trail keeps the source signal.
+                wc_values = []
+                for s in tl.findall(_tag("String", ns)):
+                    raw_wc = s.get("WC")
+                    if raw_wc is None:
+                        continue
+                    try:
+                        wc = float(raw_wc)
+                    except ValueError:
+                        continue
+                    if 0.0 <= wc <= 1.0:
+                        wc_values.append(wc)
+
                 lm = LineManifest(
                     line_id=line_id,
                     page_id=page_id,
@@ -366,6 +382,9 @@ def _parse_alto_file(
                     line_order_in_block=line_order_in_block,
                     coords=coords,
                     ocr_text=ocr_text,
+                    ocr_confidence=(
+                        sum(wc_values) / len(wc_values) if wc_values else None
+                    ),
                 )
 
                 # First-pass hyphenation scan

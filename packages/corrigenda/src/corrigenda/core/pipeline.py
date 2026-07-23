@@ -85,8 +85,23 @@ from corrigenda.core.protocols import (
     ProviderTransientError,
     require_page_images,
 )
+from corrigenda.core.alignment import align_tokens
+from corrigenda.core.pairing import preserve_break_char
+from corrigenda.core.quality import (
+    DEFAULT_ROUTING_POLICY,
+    QEScorer,
+    RoutingDecision,
+    RoutingPolicy,
+    route_line,
+)
+from corrigenda.core.confidence import (
+    ConfidenceScorer,
+    HeuristicScorer,
+    build_line_confidence,
+)
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
+    DEFAULT_CONFIDENCE_POLICY,
     DEFAULT_LOSS_POLICY,
     DEFAULT_PAIRING_POLICY,
     DEFAULT_RETRY_POLICY,
@@ -101,6 +116,7 @@ from corrigenda.core.schemas import (
     LineManifest,
     LineStatus,
     LineTrace,
+    ConfidencePolicy,
     LossPolicy,
     ProducerProvenance,
     ProposalBatch,
@@ -109,6 +125,7 @@ from corrigenda.core.schemas import (
     PairingPolicy,
     RetryPolicy,
     RunProvenance,
+    SidecarEntry,
     Usage,
 )
 
@@ -619,6 +636,14 @@ class CorrectionResult:
     #: it is the caller's choice (:meth:`write`, or a host-owned
     #: transaction like the demo backend's staging writer).
     corrected_files: dict[str, bytes] = field(default_factory=dict)
+    #: Phase 3 — lines the QE router judged already clean and SKIPPED
+    #: (confirmed as-is, no producer call). 0 when routing is off. The
+    #: economics signal: each skip is one LLM call not spent.
+    lines_skipped: int = 0
+    #: Phase 3 — total ``producer.produce`` invocations (retries included):
+    #: the run's real call cost. Falls when routing drops whole chunks —
+    #: routing-on vs routing-off on one document is the cheaper-hybrid proof.
+    producer_calls: int = 0
 
     def write(self, directory: str | Path) -> list[Path]:
         """Persist the run's artefacts into ``directory`` (created if
@@ -641,6 +666,20 @@ class CorrectionResult:
         report_path = target / "report.json"
         report_path.write_text(self.report.model_dump_json(indent=2), encoding="utf-8")
         written.append(report_path)
+        # Phase 1 — refused-but-preserved corrections as their own small
+        # artefact for review tooling (they are ALSO inside report.json;
+        # this is the convenience view, written only when non-empty).
+        if self.report.sidecar:
+            sidecar_path = target / "sidecar.json"
+            sidecar_path.write_text(
+                json.dumps(
+                    [entry.model_dump(mode="json") for entry in self.report.sidecar],
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            written.append(sidecar_path)
         return written
 
 
@@ -662,6 +701,15 @@ class RunContext:
     retry_count: int = 0
     #: Chunks (or descent sub-chunks) that fell back to OCR source text.
     fallback_chunks: int = 0
+    #: Phase 3 — lines the QE router SKIPPED (confirmed clean, no producer
+    #: call). 0 when routing is off.
+    lines_skipped: int = 0
+    #: Phase 3 — number of ``producer.produce`` invocations across the run,
+    #: retries INCLUDED (the real per-call cost driver for an LLM API).
+    #: Routing lowers it by dropping whole all-skipped chunks; comparing
+    #: routing-on vs routing-off runs on one document is how the hybrid
+    #: PROVES it is cheaper.
+    producer_calls: int = 0
     #: Per-pair reconciliation outcomes (coherent / fallback / neutralised).
     reconcile_metrics: ReconcileMetrics = field(default_factory=ReconcileMetrics)
     #: Aggregate token consumption across every producer call of the run.
@@ -713,6 +761,10 @@ class CorrectionPipeline:
         *,
         loss_policy: LossPolicy | None = None,
         producer_metadata: ProducerMetadata | None = None,
+        confidence_policy: ConfidencePolicy | None = None,
+        confidence_scorers: tuple[ConfidenceScorer, ...] | None = None,
+        qe_scorer: QEScorer | None = None,
+        routing_policy: RoutingPolicy | None = None,
     ) -> None:
         self.producer = producer
         self.observer = observer
@@ -732,6 +784,28 @@ class CorrectionPipeline:
         # lose format granularity: REPORT (default, historical) counts
         # and attributes; STRICT rejects the unit pre-projection.
         self.loss_policy = loss_policy or DEFAULT_LOSS_POLICY
+        # Phase 1 (ROADMAP V3) — line confidences on the report. DROP
+        # (default) computes nothing; REPORT_ONLY fills
+        # LineOutcome.confidence via the injected scorers (default: the
+        # zero-dependency HeuristicScorer). Deliberately outside the
+        # §8.2 composite fingerprint until write_wc unlocks (report-only
+        # never affects the corrected XML).
+        self.confidence_policy = confidence_policy or DEFAULT_CONFIDENCE_POLICY
+        self.confidence_scorers: tuple[ConfidenceScorer, ...] = (
+            confidence_scorers
+            if confidence_scorers is not None
+            else (HeuristicScorer(),)
+        )
+        # Phase 3 (ROADMAP V3) — hybrid-selective routing. A line the QE
+        # scorer + RoutingPolicy send to SKIP is confirmed clean and
+        # never reaches the producer (no LLM call — the economics). Both
+        # OFF by default: no scorer, and DEFAULT_ROUTING_POLICY routes
+        # every line to LLM, so a default run is byte-identical. A hyphen
+        # unit is NEVER skipped (atomicity) — its members always route to
+        # the producer. Outside the §8.2 fingerprint until a run actually
+        # skips (same rule that held ConfidencePolicy out until write_wc).
+        self.qe_scorer = qe_scorer
+        self.routing_policy = routing_policy or DEFAULT_ROUTING_POLICY
         # §3 format seam — None derives the adapter from the MANIFEST's
         # stamped source_format at write time (_adapter_for_format); an
         # injected adapter that contradicts that format is refused at
@@ -773,8 +847,14 @@ class CorrectionPipeline:
         pairing_policy: PairingPolicy | None = None,
         format_adapter: FormatAdapter | None = None,
         loss_policy: LossPolicy | None = None,
+        confidence_policy: ConfidencePolicy | None = None,
+        confidence_scorers: tuple[ConfidenceScorer, ...] | None = None,
+        qe_scorer: QEScorer | None = None,
+        routing_policy: RoutingPolicy | None = None,
         system_prompt: str | None = None,
         output_schema: dict[str, Any] | None = None,
+        uncertainty_channel: bool = False,
+        lexicon: set[str] | None = None,
     ) -> CorrectionPipeline:
         """Build a pipeline around a raw ``StructuredCompletionClient`` (§5.1).
 
@@ -797,6 +877,8 @@ class CorrectionPipeline:
             model,
             system_prompt=system_prompt,
             output_schema=output_schema,
+            uncertainty_channel=uncertainty_channel,
+            lexicon=lexicon,
         )
         return cls(
             producer=producer,
@@ -807,10 +889,19 @@ class CorrectionPipeline:
             pairing_policy=pairing_policy,
             format_adapter=format_adapter,
             loss_policy=loss_policy,
+            confidence_policy=confidence_policy,
+            confidence_scorers=confidence_scorers,
+            qe_scorer=qe_scorer,
+            routing_policy=routing_policy,
             # Vendor vocabulary is native HERE (the LLM convenience):
-            # the two strings become the generic identity envelope.
+            # the two strings become the generic identity envelope. The
+            # producer's configuration fingerprint (prompt + schema)
+            # rides along — the explicit envelope overrides IDENTITY,
+            # it must not erase configuration provenance (§11).
             producer_metadata=ProducerMetadata(
-                name=provider_name, implementation=model
+                name=provider_name,
+                implementation=model,
+                configuration_fingerprint=producer.metadata.configuration_fingerprint,
             ),
         )
 
@@ -1092,7 +1183,23 @@ class CorrectionPipeline:
         # decisions materialize and before any output exists — the unit
         # falls back to source text and the source markup keeps its
         # Word geometry (the rewrite sees an untouched line).
-        self._loss_policy_pass(
+        # P5, decision-side (found by the OCR17+ corpus, 2026-07-23): if
+        # the SOURCE line ends in a word-break character and the accepted
+        # correction ends in a DIFFERENT one, force the source's char
+        # BEFORE decisions materialize — historically the PAGE rewriter
+        # enforced this after the decision was recorded, so the artefact
+        # diverged from the decision and _verify_projection raised.
+        for page in document_manifest.pages:
+            for lm in page.lines:
+                if lm.corrected_text is not None and lm.corrected_text != lm.ocr_text:
+                    # The proposal stage in the traces keeps the
+                    # producer's RAW text (auditability); only the
+                    # decided text is normalized.
+                    lm.corrected_text = preserve_break_char(
+                        lm.ocr_text, lm.corrected_text
+                    )
+
+        sidecar_entries = self._loss_policy_pass(
             document_manifest=document_manifest,
             all_lines=all_lines_global,
             traces=traces,
@@ -1129,7 +1236,47 @@ class CorrectionPipeline:
             provenance=self._build_provenance(
                 document_manifest=document_manifest, source_digests=source_digests
             ),
+            # F14/§11 — the aggregated usage is part of the persisted
+            # artefact, not just the transient result. None when nothing
+            # was reported: a zero Usage would be indistinguishable from
+            # "the provider reported zero tokens".
+            usage=(
+                ctx.usage if ctx.usage.total_tokens or ctx.usage.response_ids else None
+            ),
+            # Phase 1 — corrections the token_realign gate refused to
+            # project, preserved for review instead of lost.
+            sidecar=sidecar_entries or None,
         )
+
+        # Phase 1 — line confidences (report-only; write_wc stays locked
+        # until calibration). Filled AFTER the report is built so every
+        # outcome scores its FINAL decided text, whatever path decided it.
+        if self.confidence_policy.mode != "drop":
+            for outcome in report.lines:
+                ref = LineRef(page_id=outcome.page_id, line_id=outcome.line_id)
+                scored_line = all_lines_global.get(ref)
+                # The producer's verified self-assessment rides the
+                # captured ops (uncertainty channel); min over a line's
+                # ops when several declared one.
+                producer_conf: float | None = None
+                captured_line = ctx.producer_ops.get(ref)
+                if captured_line is not None:
+                    declared_confidences: list[float] = [
+                        pc
+                        for op in captured_line[0]
+                        if (pc := getattr(op, "producer_confidence", None)) is not None
+                    ]
+                    if declared_confidences:
+                        producer_conf = min(declared_confidences)
+                outcome.confidence = build_line_confidence(
+                    source_text=outcome.source_text,
+                    final_text=outcome.decision.final_text,
+                    ocr_confidence=(
+                        scored_line.ocr_confidence if scored_line is not None else None
+                    ),
+                    producer_confidence=producer_conf,
+                    scorers=self.confidence_scorers,
+                )
 
         # Line-level fallback accounting, read from the DecisionSet
         # (ADR-011): it covers every path that leaves a line at its OCR
@@ -1151,6 +1298,10 @@ class CorrectionPipeline:
             ),
             decisions=decisions,
             corrected_files=corrected_files,
+            # Phase 3 — routing economics: lines skipped (no producer
+            # call) and the run's total producer-call count.
+            lines_skipped=ctx.lines_skipped,
+            producer_calls=ctx.producer_calls,
         )
 
     def _build_provenance(
@@ -1289,6 +1440,77 @@ class CorrectionPipeline:
     # Per-page orchestration
     # ------------------------------------------------------------------
 
+    def _routing_enabled(self) -> bool:
+        """Routing runs only when a QE scorer is present AND the policy
+        has at least one active bound. Otherwise a no-op (default)."""
+        return self.qe_scorer is not None and (
+            self.routing_policy.skip_at_or_below is not None
+            or self.routing_policy.escalate_at_or_above is not None
+        )
+
+    def _route_and_filter_chunks(
+        self,
+        *,
+        page: PageManifest,
+        chunks: list[ChunkRequest],
+        line_by_id: dict[str, LineManifest],
+        ctx: RunContext,
+        traces: dict[LineRef, LineTrace],
+    ) -> list[ChunkRequest]:
+        """Pre-decide SKIP lines and drop them from chunk targets.
+
+        A line the QE scorer + RoutingPolicy route to SKIP is confirmed
+        clean: its final text is its OCR text, its status is CORRECTED,
+        and — the auditable signature of a skip vs an LLM identity pass —
+        it never reaches the producer, so its trace's ``model_input_text``
+        stays ``None``. It remains in each chunk's ``line_ids`` (context
+        for its neighbours) but leaves ``target_line_ids``; a chunk with
+        no targets left is dropped entirely (no producer call). A hyphen
+        unit is NEVER skipped (atomicity — a half-skipped pair could not
+        reconcile), so its members always route to the producer.
+
+        Returns the chunk list unchanged when routing is off.
+        """
+        if not self._routing_enabled():
+            return chunks
+        assert self.qe_scorer is not None  # _routing_enabled guarantees it
+
+        skip: set[str] = set()
+        for lm in page.lines:
+            if lm.hyphen_role is not HyphenRole.NONE:
+                continue  # atomicity — never skip a hyphen-unit member
+            score = self.qe_scorer.needs_correction(lm.ocr_text)
+            if route_line(score, self.routing_policy) is RoutingDecision.SKIP:
+                skip.add(lm.line_id)
+
+        if not skip:
+            return chunks
+
+        for line_id in skip:
+            lm = line_by_id[line_id]
+            lm.corrected_text = lm.ocr_text
+            lm.status = LineStatus.CORRECTED
+            _set_trace(
+                traces,
+                lm,
+                projected_text=lm.ocr_text,
+                validation_status=LineStatus.CORRECTED.value,
+            )
+        ctx.lines_skipped += len(skip)
+
+        filtered: list[ChunkRequest] = []
+        for chunk in chunks:
+            new_targets = [t for t in chunk.targets() if t not in skip]
+            if not new_targets:
+                continue  # every target skipped — no producer call at all
+            if new_targets == chunk.targets():
+                filtered.append(chunk)  # nothing skipped here
+            else:
+                filtered.append(
+                    chunk.model_copy(update={"target_line_ids": new_targets})
+                )
+        return filtered
+
     async def _process_page(
         self,
         *,
@@ -1317,10 +1539,18 @@ class CorrectionPipeline:
 
         plan = plan_page(page, document_id, self.config)
 
+        # Phase 3 — hybrid-selective routing: pre-decide SKIP lines
+        # (confirmed clean, no producer call) and drop them from chunk
+        # targets. A no-op when routing is off (default), so the chunk
+        # list is untouched and every existing run is byte-identical.
+        chunks = self._route_and_filter_chunks(
+            page=page, chunks=plan.chunks, line_by_id=line_by_id, ctx=ctx, traces=traces
+        )
+
         self._emit(
             ev.ChunkPlanned(
                 page_id=page.page_id,
-                chunk_count=len(plan.chunks),
+                chunk_count=len(chunks),
                 granularity=plan.granularity.value,
             )
         )
@@ -1328,7 +1558,7 @@ class CorrectionPipeline:
         page_reconciled = 0
         page_chunks = 0
 
-        for chunk in plan.chunks:
+        for chunk in chunks:
             # F10 — cooperative cancellation between chunks. Checked before
             # the per-chunk try/except so CorrectionAborted propagates out
             # instead of being swallowed as a chunk error.
@@ -1802,6 +2032,9 @@ class CorrectionPipeline:
                 # engine's whole RetryPolicy: the ramp (and the hyphen
                 # 0.0 pin) is decided HERE; the probe lets long I/O be
                 # abandoned mid-flight.
+                # Phase 3 — count every invocation (this attempt hits the
+                # producer whether or not it succeeds): the real cost.
+                ctx.producer_calls += 1
                 script, usage = await self.producer.produce(
                     payload,
                     options=ProducerOptions(
@@ -2209,43 +2442,107 @@ class CorrectionPipeline:
         document_manifest: DocumentManifest,
         all_lines: dict[LineRef, LineManifest],
         traces: dict[LineRef, LineTrace] | None,
-    ) -> None:
-        """STRICT loss policy (ADR-012): reject corrections that cannot
-        project without losing word granularity.
+    ) -> list[SidecarEntry]:
+        """Loss policy gates (ADR-012 strict; Phase 1 token_realign).
 
-        The PAGE rewriter drops a line's ``Word`` children when the
-        corrected word count diverges from the markup's (6.2 P4 slow
-        path) — the one predictable, decision-relevant format loss.
-        ``LineManifest.word_count`` carries the markup's count from parse
-        time, so the check runs in the pure core, BEFORE the decisions
-        materialize: a rejected line falls back to source (whole hyphen
-        unit, ADR-010) and its rewrite becomes untouched — the source
-        geometry survives. Under REPORT (default) this pass is a no-op:
-        the loss projects, is counted, and is attributed per line.
+        **STRICT**: reject corrections that cannot project without
+        losing word granularity. The PAGE rewriter drops a line's
+        ``Word`` children when the corrected word count diverges from
+        the markup's (6.2 P4 slow path) — the one predictable,
+        decision-relevant format loss. ``LineManifest.word_count``
+        carries the markup's count from parse time, so the check runs in
+        the pure core, BEFORE the decisions materialize: a rejected line
+        falls back to source (whole hyphen unit, ADR-010) and its
+        rewrite becomes untouched — the source geometry survives.
+
+        **TOKEN_REALIGN** (``min_alignment_score`` set, not strict): a
+        word-count-changing correction whose tokens cannot be aligned
+        onto the source tokens with at least the threshold score — or
+        ANY correction that raises the move flag — is not projected.
+        The line reverts like strict, but the correction is preserved as
+        a :class:`SidecarEntry` (returned; surfaced on
+        ``CorrectionReport.sidecar``) instead of lost.
+
+        Under REPORT (default) this pass is a no-op: the loss projects,
+        is counted, and is attributed per line.
         """
-        if not self.loss_policy.strict:
-            return
-        reverts: dict[LineRef, str] = {}
+        if self.loss_policy.strict:
+            reverts: dict[LineRef, str] = {}
+            for page in document_manifest.pages:
+                for lm in page.lines:
+                    if lm.word_count is None or lm.corrected_text is None:
+                        continue
+                    if lm.corrected_text == lm.ocr_text:
+                        continue  # identity projects untouched
+                    n_corrected = len(lm.corrected_text.split())
+                    if n_corrected != lm.word_count:
+                        reverts[line_ref(lm)] = (
+                            "format_loss: corrected word count "
+                            f"{n_corrected} != source Word markup {lm.word_count} "
+                            "— unprojectable without dropping word geometry "
+                            "(LossPolicy strict)"
+                        )
+            self._apply_unit_reverts(
+                reverts=reverts,
+                all_lines=all_lines,
+                traces=traces,
+                atomicity_reason="format_loss_pair_atomicity",
+            )
+            return []
+
+        threshold = self.loss_policy.min_alignment_score
+        if threshold is None:
+            return []
+
+        gate_reverts: dict[LineRef, str] = {}
+        evidence: dict[LineRef, tuple[float, bool]] = {}
+        snapshots: dict[LineRef, tuple[str, str]] = {}
         for page in document_manifest.pages:
             for lm in page.lines:
-                if lm.word_count is None or lm.corrected_text is None:
+                if lm.corrected_text is None or lm.corrected_text == lm.ocr_text:
                     continue
-                if lm.corrected_text == lm.ocr_text:
-                    continue  # identity projects untouched — nothing to lose
-                n_corrected = len(lm.corrected_text.split())
-                if n_corrected != lm.word_count:
-                    reverts[line_ref(lm)] = (
-                        "format_loss: corrected word count "
-                        f"{n_corrected} != source Word markup {lm.word_count} "
-                        "— unprojectable without dropping word geometry "
-                        "(LossPolicy strict)"
+                ref = line_ref(lm)
+                snapshots[ref] = (lm.ocr_text, lm.corrected_text)
+                source_tokens = lm.ocr_text.split()
+                target_tokens = lm.corrected_text.split()
+                al = align_tokens(source_tokens, target_tokens)
+                if al.move_suspected:
+                    evidence[ref] = (al.score, True)
+                    gate_reverts[ref] = (
+                        "token_realign: suspected word reorder — "
+                        "correction preserved in sidecar"
                     )
-        self._apply_unit_reverts(
-            reverts=reverts,
+                elif len(target_tokens) != len(source_tokens) and al.score < threshold:
+                    evidence[ref] = (al.score, False)
+                    gate_reverts[ref] = (
+                        f"token_realign: alignment score {al.score:.2f} < "
+                        f"{threshold:.2f} — correction preserved in sidecar"
+                    )
+        reverted = self._apply_unit_reverts(
+            reverts=gate_reverts,
             all_lines=all_lines,
             traces=traces,
-            atomicity_reason="format_loss_pair_atomicity",
+            atomicity_reason="token_realign_pair_atomicity",
         )
+        entries: list[SidecarEntry] = []
+        for ref, reason in reverted.items():
+            snapshot = snapshots.get(ref)
+            if snapshot is None:
+                continue  # unit member whose own text was never corrected
+            source_text, corrected_text = snapshot
+            score, moved = evidence.get(ref, (None, False))
+            entries.append(
+                SidecarEntry(
+                    page_id=ref.page_id,
+                    line_id=ref.line_id,
+                    source_text=source_text,
+                    corrected_text=corrected_text,
+                    reason=reason,
+                    alignment_score=score,
+                    move_suspected=moved,
+                )
+            )
+        return entries
 
     def _apply_unit_reverts(
         self,
@@ -2254,9 +2551,11 @@ class CorrectionPipeline:
         all_lines: dict[LineRef, LineManifest],
         traces: dict[LineRef, LineTrace] | None,
         atomicity_reason: str = "adjacent_duplicate_pair_atomicity",
-    ) -> None:
+    ) -> dict[LineRef, str]:
         """Revert flagged lines to OCR — atomically with their WHOLE
-        hyphen unit.
+        hyphen unit. Returns the FULL revert map (flagged + pulled
+        members, each with its reason) so a caller can attribute what
+        was reverted — the sidecar builder needs the pulled members too.
 
         A mixed OCR+corrected pair is the exact state
         ``reconcile_hyphen_pair`` guarantees can never survive, so a
@@ -2270,7 +2569,7 @@ class CorrectionPipeline:
         vocabulary) unless an earlier fallback path already pinned one.
         """
         if not reverts:
-            return
+            return {}
         by_line = hyphen_group_by_line(derive_hyphen_groups(all_lines.values()))
         to_revert: dict[LineRef, str] = dict(reverts)
         for ref in reverts:
@@ -2296,6 +2595,7 @@ class CorrectionPipeline:
                 trace = traces.get(ref)
                 if trace is not None and not trace.fallback_reason:
                     trace.fallback_reason = reason
+        return to_revert
 
     def _finalize_chunk_traces(
         self,

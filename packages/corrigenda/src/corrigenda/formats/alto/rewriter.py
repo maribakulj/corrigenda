@@ -9,6 +9,7 @@ from lxml import etree
 
 from corrigenda.core._norm import clean_content, nfc
 from corrigenda.core._parse import parse_int_tolerant
+from corrigenda.core.alignment import align_tokens
 from corrigenda.core.identity import ensure_unique_identities
 from corrigenda.core.pairing import HYPHEN_CHARS
 from corrigenda.errors import DuplicateIdError
@@ -474,7 +475,7 @@ def _emit_sp(
 def _emit_string(
     el: etree._Element,
     ns: str,
-    orig_string_attribs: list[dict[str, str]],
+    recycled: dict[str, str] | None,
     str_n: int,
     line_id: str,
     token: str,
@@ -482,12 +483,18 @@ def _emit_string(
     tok_width: int,
     vpos: int,
     height: int,
+    used_ids: set[str],
 ) -> None:
     """Append a fresh String child for the slow-path rebuild.
 
     Spec F2 / §6.1 — the slow path recycles ONLY identity and styling from
-    the original String (positionally): ``ID``, ``STYLEREFS``, and
-    ``STYLE``. ``HPOS``/``WIDTH`` are recomputed, ``VPOS``/``HEIGHT`` are
+    the original String: ``ID``, ``STYLEREFS``, and ``STYLE``.
+    ``recycled`` is the attribute dict of the source String the token
+    ALIGNMENT matched to this new token (Phase 1: identity follows the
+    word it corresponds to, never whatever sat at the same position), or
+    ``None`` for an inserted token — which gets a generated ID instead
+    (deduplicated against every ID already used on the line).
+    ``HPOS``/``WIDTH`` are recomputed, ``VPOS``/``HEIGHT`` are
     inherited from the line, and ``WC``/``CC``/``SUBS_*`` are **never**
     recycled: the confidences describe the old glyph string (and ``CC``'s
     length would no longer match the new ``CONTENT``), and SUBS attributes
@@ -505,13 +512,19 @@ def _emit_string(
     edge case).
     """
     s = etree.SubElement(el, _tag("String", ns))
-    if str_n < len(orig_string_attribs):
-        orig = orig_string_attribs[str_n]
+    if recycled is not None:
         for k in ("ID", "STYLEREFS", "STYLE"):
-            if k in orig:
-                s.set(k, orig[k])
-    else:
-        s.set("ID", f"{line_id}_STR_{str_n:04d}")
+            if k in recycled:
+                s.set(k, recycled[k])
+    if s.get("ID") is None:
+        base = f"{line_id}_STR_{str_n:04d}"
+        candidate = base
+        suffix = 2
+        while candidate in used_ids:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        s.set("ID", candidate)
+    used_ids.add(s.get("ID", ""))
     s.set("CONTENT", clean_content(token))
     s.set("HPOS", str(tok_hpos))
     s.set("VPOS", str(vpos))
@@ -610,6 +623,16 @@ def _rebuild_line(
     # they are cleared; the emitted Strings only carry the §6.1 whitelist.
     losses = _semantic_attr_losses(orig_string_attribs)
 
+    # Phase 1 (ROADMAP V3) — identity follows the token ALIGNMENT, not the
+    # position: an inserted word must not shift every following word onto
+    # the wrong source ID/STYLE (positional recycling attached text to the
+    # wrong word identity). Alignment over the ORIGINAL CONTENTs vs the
+    # corrected word tokens; a source String the alignment could not match
+    # loses its STYLE/STYLEREFS — counted, never silently (`*_dropped`),
+    # and a suspected word reorder is surfaced as `word_order_suspected`
+    # (flagged, never acted on — lines never merge, words never move).
+    orig_contents = [attribs.get("CONTENT", "") for attribs in orig_string_attribs]
+
     if is_part1_like:
         orig_hyps = _get_hyp_children(el, ns)
         orig_hyp_attribs: dict[str, str] = (
@@ -666,6 +689,30 @@ def _rebuild_line(
                 el.append(h)
         return losses
 
+    word_tokens = [t for t in tokens if t.strip()]
+    alignment = align_tokens(orig_contents, word_tokens)
+    matched_sources = {
+        p.source_index
+        for p in alignment.pairs
+        if p.source_index is not None and p.target_index is not None
+    }
+    for idx, attribs in enumerate(orig_string_attribs):
+        if idx in matched_sources:
+            continue
+        for key in ("STYLE", "STYLEREFS"):
+            if key in attribs:
+                loss_key = f"{key.lower()}_dropped"
+                losses[loss_key] = losses.get(loss_key, 0) + 1
+    if alignment.move_suspected:
+        losses["word_order_suspected"] = 1
+    # Pre-seed with every ID that WILL be recycled, so a generated ID for
+    # an early inserted token can never collide with a later recycled one.
+    used_ids: set[str] = {
+        orig_string_attribs[i]["ID"]
+        for i in matched_sources
+        if "ID" in orig_string_attribs[i]
+    }
+
     geo = _compute_geometry(hpos, text_width, tokens)
     str_n = sp_n = 0
     last_word_hpos = hpos
@@ -676,10 +723,11 @@ def _rebuild_line(
             _emit_sp(el, ns, orig_sp_attribs, sp_n, tok_hpos, tok_width, vpos)
             sp_n += 1
         else:
+            source_index = alignment.source_for_target(str_n)
             _emit_string(
                 el,
                 ns,
-                orig_string_attribs,
+                orig_string_attribs[source_index] if source_index is not None else None,
                 str_n,
                 manifest.line_id,
                 token,
@@ -687,6 +735,7 @@ def _rebuild_line(
                 tok_width,
                 vpos,
                 height,
+                used_ids,
             )
             last_word_hpos = tok_hpos
             last_word_width = tok_width

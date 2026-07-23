@@ -120,6 +120,19 @@ PUBLIC_API_1_0 = sorted(
         # Provenance (§11, P3.9)
         "ProducerProvenance",
         "RunProvenance",
+        # token_realign sidecar (ROADMAP V3 Phase 1) — additive
+        "SidecarEntry",
+        # Confidence block (ROADMAP V3 Phase 1) — additive
+        "ConfidencePolicy",
+        "ConfidenceScorer",
+        "HeuristicScorer",
+        "LineConfidence",
+        # QE + routing (ROADMAP V3 Phase 3) — additive
+        "HeuristicQEScorer",
+        "QEScorer",
+        "RoutingDecision",
+        "RoutingPolicy",
+        "route_line",
     ]
 )
 
@@ -189,6 +202,8 @@ def test_correction_report_json_keys_are_pinned():
         "lines",
         "format_losses",
         "provenance",  # P3.9 — optional, additive (no version bump)
+        "usage",  # ROADMAP V3 Phase 0 — optional, additive (no version bump)
+        "sidecar",  # ROADMAP V3 Phase 1 — optional, additive (no version bump)
     }, (
         "CorrectionReport JSON shape moved — a key removal/rename requires "
         "bumping CORRECTION_REPORT_VERSION (§9); an addition must stay "
