@@ -62,6 +62,36 @@ def test_rules_report_contract_and_improvement(tmp_path: Path):
     assert agg["cer_after"] < agg["cer_before"]
 
 
+def test_blocking_ceilings_on_the_real_corpus(tmp_path: Path):
+    """ROADMAP V3 Phase 2 — the CI gates the review demanded: a release
+    candidate producer may not FABRICATE corrections (false positives:
+    already-correct lines it changed) nor DEGRADE lines, on the real
+    corpus included. Ceilings are 0 for the deterministic producers; an
+    LLM cassette gets its own ceiling when one is recorded."""
+    for producer in ("rules", "oracle"):
+        agg = _run(tmp_path, producer)["aggregate"]
+        assert agg["false_positives"] == 0, f"{producer} fabricated corrections"
+        assert agg["lines_degraded"] == 0, f"{producer} degraded lines"
+
+
+def test_calibration_harness_reports_ece_and_brier(tmp_path: Path):
+    """Phase 2 — every run scores its decision confidences against
+    ground truth (ECE/Brier, [0,1], lower is better). These numbers are
+    what will unlock ConfidencePolicy(write_wc); until then they are
+    REPORTED, not gated."""
+    report = _run(tmp_path, "rules")
+    for scope in [*report["cases"], report["aggregate"]]:
+        cal = scope["calibration"]
+        assert cal["lines"] > 0
+        assert 0.0 <= cal["brier"] <= 1.0
+        assert 0.0 <= cal["ece"] <= 1.0
+    assert report["aggregate"]["calibration"]["lines"] == sum(
+        c["calibration"]["lines"] for c in report["cases"]
+    )
+    # The pooled pairs are an internal channel, never serialized.
+    assert "_calibration_pairs" not in json.dumps(report)
+
+
 def test_oracle_erases_the_error(tmp_path: Path):
     report = _run(tmp_path, "oracle")
     case = report["cases"][0]
