@@ -96,3 +96,64 @@ def test_producers_are_pure_and_formats_ignore_producers():
     for f in sorted((SRC / "formats").rglob("*.py")):
         bad = _violations(f, ("corrigenda.producers",))
         assert not bad, bad
+
+
+# ---------------------------------------------------------------------------
+# corrigenda[qe] — the D'AlemBERT scorer's heavy deps (onnxruntime/tokenizers/
+# numpy, and never torch/transformers at runtime) must be LAZY: importable
+# module, zero import cost for anyone who does not construct the scorer, and
+# never pulled in by the pixel-light core.
+# ---------------------------------------------------------------------------
+
+QE_HEAVY = ("onnxruntime", "tokenizers", "numpy", "torch", "transformers")
+
+
+def _module_level_imports(path: Path) -> set[str]:
+    """Only the imports at the top level of the module body (not nested in
+    functions/methods)."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            names.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module)
+    return names
+
+
+def test_qe_scorer_keeps_every_heavy_dep_function_local():
+    qe = SRC / "integrations" / "qe.py"
+    module_level = _module_level_imports(qe)
+    leaked = [
+        h
+        for h in QE_HEAVY
+        if any(m == h or m.startswith(h + ".") for m in module_level)
+    ]
+    assert not leaked, f"heavy deps must be lazy, not module-level in qe.py: {leaked}"
+
+
+def test_importing_qe_module_never_loads_the_heavy_runtime():
+    """Importing the module (introspection, protocol checks) must not load
+    onnxruntime/torch/transformers — those arrive only when a scorer is
+    constructed and first used."""
+    code = (
+        "import sys; import corrigenda.integrations.qe as _; "
+        "heavy = ('onnxruntime', 'torch', 'transformers', 'tokenizers'); "
+        "sys.exit(1 if any(m in sys.modules for m in heavy) else 0)"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, f"importing qe.py loaded a heavy dep\n{proc.stderr}"
+
+
+def test_importing_core_quality_stays_pure():
+    """The QE seam lives in the core (protocol + heuristic baseline) and
+    must stay dependency-free: importing it never loads the extra."""
+    code = (
+        "import sys; import corrigenda.core.quality as _; "
+        "heavy = ('onnxruntime', 'torch', 'transformers', 'tokenizers'); "
+        "sys.exit(1 if any(m in sys.modules for m in heavy) else 0)"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, (
+        f"importing core.quality loaded a heavy dep\n{proc.stderr}"
+    )
