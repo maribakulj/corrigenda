@@ -80,6 +80,7 @@ from corrigenda.core.schemas import (
     ProposalStage,
     RetryPolicy,
     RunProvenance,
+    SidecarEntry,
     Usage,
 )
 from corrigenda.errors import (
@@ -272,6 +273,7 @@ __all__ = [
     # Provenance (§11, P3.9)
     "ProducerProvenance",
     "RunProvenance",
+    "SidecarEntry",
     # Version
     "__version__",
 ]

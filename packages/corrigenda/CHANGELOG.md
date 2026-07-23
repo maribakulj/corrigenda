@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **token_realign loss policy + sidecar (ROADMAP V3 Phase 1).**
+  ``LossPolicy`` grew ``min_alignment_score`` (default ``None`` — the
+  gate is off and behaviour is identical). When set, a word-count-
+  changing correction whose token alignment onto the source scores
+  below the threshold — or ANY correction raising the aligner's move
+  flag — is not projected: the line reverts to source markup (whole
+  hyphen unit, ADR-010) and the correction is PRESERVED as a
+  ``SidecarEntry`` on ``CorrectionReport.sidecar`` (also written as
+  ``sidecar.json`` by ``CorrectionResult.write`` when non-empty) for
+  review instead of lost. New core module ``corrigenda.core.alignment``
+  (char-level Levenshtein similarity → monotonic token DP; a match
+  requires character evidence; moves are flagged, never applied) also
+  drives the ALTO slow path's identity recycling, which is now aligned
+  instead of positional. The §11 composite ``config_fingerprint``
+  moved (``55dc80679dd71f94`` → ``15dc07cba9122106``): the new FIELD
+  joins the fingerprinted policy surface (defaults unchanged).
+
 - **Versioned correction benchmark + ground-truth corpus seed (P4.2).**
   ``scripts/benchmark.py`` (repo tooling, not part of the package)
   measures a producer against ``tests/corpus_gt/`` — micro-averaged

@@ -85,6 +85,7 @@ from corrigenda.core.protocols import (
     ProviderTransientError,
     require_page_images,
 )
+from corrigenda.core.alignment import align_tokens
 from corrigenda.core.schemas import (
     DEFAULT_GUARD_CONFIG,
     DEFAULT_LOSS_POLICY,
@@ -109,6 +110,7 @@ from corrigenda.core.schemas import (
     PairingPolicy,
     RetryPolicy,
     RunProvenance,
+    SidecarEntry,
     Usage,
 )
 
@@ -641,6 +643,20 @@ class CorrectionResult:
         report_path = target / "report.json"
         report_path.write_text(self.report.model_dump_json(indent=2), encoding="utf-8")
         written.append(report_path)
+        # Phase 1 — refused-but-preserved corrections as their own small
+        # artefact for review tooling (they are ALSO inside report.json;
+        # this is the convenience view, written only when non-empty).
+        if self.report.sidecar:
+            sidecar_path = target / "sidecar.json"
+            sidecar_path.write_text(
+                json.dumps(
+                    [entry.model_dump(mode="json") for entry in self.report.sidecar],
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            written.append(sidecar_path)
         return written
 
 
@@ -1097,7 +1113,7 @@ class CorrectionPipeline:
         # decisions materialize and before any output exists — the unit
         # falls back to source text and the source markup keeps its
         # Word geometry (the rewrite sees an untouched line).
-        self._loss_policy_pass(
+        sidecar_entries = self._loss_policy_pass(
             document_manifest=document_manifest,
             all_lines=all_lines_global,
             traces=traces,
@@ -1143,6 +1159,9 @@ class CorrectionPipeline:
                 if ctx.usage.total_tokens or ctx.usage.response_ids
                 else None
             ),
+            # Phase 1 — corrections the token_realign gate refused to
+            # project, preserved for review instead of lost.
+            sidecar=sidecar_entries or None,
         )
 
         # Line-level fallback accounting, read from the DecisionSet
@@ -2223,43 +2242,110 @@ class CorrectionPipeline:
         document_manifest: DocumentManifest,
         all_lines: dict[LineRef, LineManifest],
         traces: dict[LineRef, LineTrace] | None,
-    ) -> None:
-        """STRICT loss policy (ADR-012): reject corrections that cannot
-        project without losing word granularity.
+    ) -> list[SidecarEntry]:
+        """Loss policy gates (ADR-012 strict; Phase 1 token_realign).
 
-        The PAGE rewriter drops a line's ``Word`` children when the
-        corrected word count diverges from the markup's (6.2 P4 slow
-        path) — the one predictable, decision-relevant format loss.
-        ``LineManifest.word_count`` carries the markup's count from parse
-        time, so the check runs in the pure core, BEFORE the decisions
-        materialize: a rejected line falls back to source (whole hyphen
-        unit, ADR-010) and its rewrite becomes untouched — the source
-        geometry survives. Under REPORT (default) this pass is a no-op:
-        the loss projects, is counted, and is attributed per line.
+        **STRICT**: reject corrections that cannot project without
+        losing word granularity. The PAGE rewriter drops a line's
+        ``Word`` children when the corrected word count diverges from
+        the markup's (6.2 P4 slow path) — the one predictable,
+        decision-relevant format loss. ``LineManifest.word_count``
+        carries the markup's count from parse time, so the check runs in
+        the pure core, BEFORE the decisions materialize: a rejected line
+        falls back to source (whole hyphen unit, ADR-010) and its
+        rewrite becomes untouched — the source geometry survives.
+
+        **TOKEN_REALIGN** (``min_alignment_score`` set, not strict): a
+        word-count-changing correction whose tokens cannot be aligned
+        onto the source tokens with at least the threshold score — or
+        ANY correction that raises the move flag — is not projected.
+        The line reverts like strict, but the correction is preserved as
+        a :class:`SidecarEntry` (returned; surfaced on
+        ``CorrectionReport.sidecar``) instead of lost.
+
+        Under REPORT (default) this pass is a no-op: the loss projects,
+        is counted, and is attributed per line.
         """
-        if not self.loss_policy.strict:
-            return
-        reverts: dict[LineRef, str] = {}
+        if self.loss_policy.strict:
+            reverts: dict[LineRef, str] = {}
+            for page in document_manifest.pages:
+                for lm in page.lines:
+                    if lm.word_count is None or lm.corrected_text is None:
+                        continue
+                    if lm.corrected_text == lm.ocr_text:
+                        continue  # identity projects untouched
+                    n_corrected = len(lm.corrected_text.split())
+                    if n_corrected != lm.word_count:
+                        reverts[line_ref(lm)] = (
+                            "format_loss: corrected word count "
+                            f"{n_corrected} != source Word markup {lm.word_count} "
+                            "— unprojectable without dropping word geometry "
+                            "(LossPolicy strict)"
+                        )
+            self._apply_unit_reverts(
+                reverts=reverts,
+                all_lines=all_lines,
+                traces=traces,
+                atomicity_reason="format_loss_pair_atomicity",
+            )
+            return []
+
+        threshold = self.loss_policy.min_alignment_score
+        if threshold is None:
+            return []
+
+        gate_reverts: dict[LineRef, str] = {}
+        evidence: dict[LineRef, tuple[float, bool]] = {}
+        snapshots: dict[LineRef, tuple[str, str]] = {}
         for page in document_manifest.pages:
             for lm in page.lines:
-                if lm.word_count is None or lm.corrected_text is None:
+                if lm.corrected_text is None or lm.corrected_text == lm.ocr_text:
                     continue
-                if lm.corrected_text == lm.ocr_text:
-                    continue  # identity projects untouched — nothing to lose
-                n_corrected = len(lm.corrected_text.split())
-                if n_corrected != lm.word_count:
-                    reverts[line_ref(lm)] = (
-                        "format_loss: corrected word count "
-                        f"{n_corrected} != source Word markup {lm.word_count} "
-                        "— unprojectable without dropping word geometry "
-                        "(LossPolicy strict)"
+                ref = line_ref(lm)
+                snapshots[ref] = (lm.ocr_text, lm.corrected_text)
+                source_tokens = lm.ocr_text.split()
+                target_tokens = lm.corrected_text.split()
+                al = align_tokens(source_tokens, target_tokens)
+                if al.move_suspected:
+                    evidence[ref] = (al.score, True)
+                    gate_reverts[ref] = (
+                        "token_realign: suspected word reorder — "
+                        "correction preserved in sidecar"
                     )
-        self._apply_unit_reverts(
-            reverts=reverts,
+                elif (
+                    len(target_tokens) != len(source_tokens)
+                    and al.score < threshold
+                ):
+                    evidence[ref] = (al.score, False)
+                    gate_reverts[ref] = (
+                        f"token_realign: alignment score {al.score:.2f} < "
+                        f"{threshold:.2f} — correction preserved in sidecar"
+                    )
+        reverted = self._apply_unit_reverts(
+            reverts=gate_reverts,
             all_lines=all_lines,
             traces=traces,
-            atomicity_reason="format_loss_pair_atomicity",
+            atomicity_reason="token_realign_pair_atomicity",
         )
+        entries: list[SidecarEntry] = []
+        for ref, reason in reverted.items():
+            snapshot = snapshots.get(ref)
+            if snapshot is None:
+                continue  # unit member whose own text was never corrected
+            source_text, corrected_text = snapshot
+            score, moved = evidence.get(ref, (None, False))
+            entries.append(
+                SidecarEntry(
+                    page_id=ref.page_id,
+                    line_id=ref.line_id,
+                    source_text=source_text,
+                    corrected_text=corrected_text,
+                    reason=reason,
+                    alignment_score=score,
+                    move_suspected=moved,
+                )
+            )
+        return entries
 
     def _apply_unit_reverts(
         self,
@@ -2268,9 +2354,11 @@ class CorrectionPipeline:
         all_lines: dict[LineRef, LineManifest],
         traces: dict[LineRef, LineTrace] | None,
         atomicity_reason: str = "adjacent_duplicate_pair_atomicity",
-    ) -> None:
+    ) -> dict[LineRef, str]:
         """Revert flagged lines to OCR — atomically with their WHOLE
-        hyphen unit.
+        hyphen unit. Returns the FULL revert map (flagged + pulled
+        members, each with its reason) so a caller can attribute what
+        was reverted — the sidecar builder needs the pulled members too.
 
         A mixed OCR+corrected pair is the exact state
         ``reconcile_hyphen_pair`` guarantees can never survive, so a
@@ -2284,7 +2372,7 @@ class CorrectionPipeline:
         vocabulary) unless an earlier fallback path already pinned one.
         """
         if not reverts:
-            return
+            return {}
         by_line = hyphen_group_by_line(derive_hyphen_groups(all_lines.values()))
         to_revert: dict[LineRef, str] = dict(reverts)
         for ref in reverts:
@@ -2310,6 +2398,7 @@ class CorrectionPipeline:
                 trace = traces.get(ref)
                 if trace is not None and not trace.fallback_reason:
                     trace.fallback_reason = reason
+        return to_revert
 
     def _finalize_chunk_traces(
         self,

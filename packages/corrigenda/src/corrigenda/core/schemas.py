@@ -527,11 +527,11 @@ DEFAULT_PAIRING_POLICY = PairingPolicy()
 
 class LossPolicy(FrozenPolicy):
     """What the run does when projecting a correction would LOSE format
-    granularity (ADR-012, P3.8).
+    granularity (ADR-012, P3.8; token_realign — ROADMAP V3 Phase 1).
 
     The PAGE rewriter cannot keep ``Word`` geometry when a correction
     changes a line's word count (6.2 P4 slow path: the ``Word`` children
-    are dropped and the text lives at line level). Two stances:
+    are dropped and the text lives at line level). Three stances:
 
     * **REPORT** (``strict=False``, the default — the library's
       historical behaviour, now explicit): the correction projects, the
@@ -542,15 +542,30 @@ class LossPolicy(FrozenPolicy):
       hyphen unit falls back to source text with a ``format_loss``
       reason, consistent with the conservative-on-ambiguity fallback
       philosophy. The source markup keeps its word geometry.
+    * **TOKEN_REALIGN** (``min_alignment_score`` set, ``strict=False``):
+      the middle ground. A word-count-changing correction projects only
+      when the token alignment onto the source words is CONFIDENT
+      (aggregate score ≥ the threshold, no suspected word move); a
+      same-count correction is additionally gated on the move flag. A
+      gated line reverts to source markup — but its correction is NOT
+      lost: it lands in the run's **sidecar**
+      (``CorrectionReport.sidecar``, ``sidecar.json`` on
+      :meth:`CorrectionResult.write`) for review. ``strict=True`` wins
+      over this gate.
 
-    Scope: word-granularity loss only (``LineManifest.word_count``).
-    Stale-annotation drops (``conf``, alternative ``TextEquiv``,
-    offset-anchored ``custom`` groups) describe the OLD reading — they
-    are inherent to ANY correction, so they stay report-only in both
-    modes. No third mode until a real need shows up.
+    Scope of strict: word-granularity loss only
+    (``LineManifest.word_count``). Stale-annotation drops (``conf``,
+    alternative ``TextEquiv``, offset-anchored ``custom`` groups)
+    describe the OLD reading — they are inherent to ANY correction, so
+    they stay report-only in every mode.
     """
 
     strict: bool = False
+    #: token_realign threshold in [0, 1] — ``None`` disables the gate
+    #: (historical behaviour). 0.6 is a reasonable starting point:
+    #: ordinary OCR corrections align far above it, wholesale rewrites
+    #: far below. Calibration against a real corpus is Phase 2's job.
+    min_alignment_score: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 #: Module-level default reused wherever a caller passes no LossPolicy.
@@ -990,6 +1005,26 @@ class RunProvenance(BaseModel):
     dependencies: dict[str, str] = Field(default_factory=dict)
 
 
+class SidecarEntry(BaseModel):
+    """A correction the run REFUSED to project into the XML — preserved
+    here instead of lost (token_realign gate, ROADMAP V3 Phase 1).
+
+    The line's XML keeps its source markup (decision status
+    ``fallback``); the corrected text plus the refusal evidence live
+    here so a reviewer can apply, adapt or discard it.
+    ``alignment_score`` is ``None`` for a line reverted only by hyphen-
+    unit atomicity (its own alignment was never the problem).
+    """
+
+    page_id: str
+    line_id: str
+    source_text: str
+    corrected_text: str
+    reason: str
+    alignment_score: float | None = None
+    move_suspected: bool = False
+
+
 class CorrectionReport(BaseModel):
     """Public, versioned correction report (§9).
 
@@ -1027,6 +1062,11 @@ class CorrectionReport(BaseModel):
     #: reported usage (rules producer, dry runs). Additive and optional —
     #: no ``report_version`` bump (same contract as ``format_losses``).
     usage: Usage | None = None
+    #: Phase 1 — corrections the token_realign gate refused to project,
+    #: preserved for review (see :class:`SidecarEntry`). ``None`` when
+    #: the gate is off or nothing was refused. Additive and optional —
+    #: no ``report_version`` bump.
+    sidecar: list[SidecarEntry] | None = None
 
     @property
     def fallback_lines(self) -> list[LineOutcome]:
@@ -1070,5 +1110,6 @@ __all__ = [
     "ProjectionStage",
     "ProducerProvenance",
     "RunProvenance",
+    "SidecarEntry",
     "CorrectionReport",
 ]

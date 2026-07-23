@@ -69,8 +69,12 @@ def test_config_fingerprint_is_pinned():
     ``geometric_checks`` / ``max_gap_line_heights`` / ``max_rise_line_heights``)
     → ``55dc80679dd71f94`` when LossPolicy joined the §8.2 surface
     (ADR-012, P3.8 — a fifth ``loss`` key in the composite payload;
-    behaviour change recorded in CHANGELOG under [Unreleased])."""
-    assert _default_pipeline().config_fingerprint() == "55dc80679dd71f94"
+    behaviour change recorded in CHANGELOG under [Unreleased])
+    → ``15dc07cba9122106`` when LossPolicy grew ``min_alignment_score``
+    (ROADMAP V3 Phase 1 token_realign gate — default ``None`` keeps
+    behaviour identical; the FIELD joins the fingerprinted surface,
+    recorded in CHANGELOG under [Unreleased])."""
+    assert _default_pipeline().config_fingerprint() == "15dc07cba9122106"
 
 
 def test_each_policy_fingerprint_is_pinned():
