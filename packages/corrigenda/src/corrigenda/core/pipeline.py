@@ -640,6 +640,10 @@ class CorrectionResult:
     #: (confirmed as-is, no producer call). 0 when routing is off. The
     #: economics signal: each skip is one LLM call not spent.
     lines_skipped: int = 0
+    #: Phase 3 — total ``producer.produce`` invocations (retries included):
+    #: the run's real call cost. Falls when routing drops whole chunks —
+    #: routing-on vs routing-off on one document is the cheaper-hybrid proof.
+    producer_calls: int = 0
 
     def write(self, directory: str | Path) -> list[Path]:
         """Persist the run's artefacts into ``directory`` (created if
@@ -700,6 +704,12 @@ class RunContext:
     #: Phase 3 — lines the QE router SKIPPED (confirmed clean, no producer
     #: call). 0 when routing is off.
     lines_skipped: int = 0
+    #: Phase 3 — number of ``producer.produce`` invocations across the run,
+    #: retries INCLUDED (the real per-call cost driver for an LLM API).
+    #: Routing lowers it by dropping whole all-skipped chunks; comparing
+    #: routing-on vs routing-off runs on one document is how the hybrid
+    #: PROVES it is cheaper.
+    producer_calls: int = 0
     #: Per-pair reconciliation outcomes (coherent / fallback / neutralised).
     reconcile_metrics: ReconcileMetrics = field(default_factory=ReconcileMetrics)
     #: Aggregate token consumption across every producer call of the run.
@@ -1288,8 +1298,10 @@ class CorrectionPipeline:
             ),
             decisions=decisions,
             corrected_files=corrected_files,
-            # Phase 3 — lines the QE router skipped (no producer call).
+            # Phase 3 — routing economics: lines skipped (no producer
+            # call) and the run's total producer-call count.
             lines_skipped=ctx.lines_skipped,
+            producer_calls=ctx.producer_calls,
         )
 
     def _build_provenance(
@@ -2020,6 +2032,9 @@ class CorrectionPipeline:
                 # engine's whole RetryPolicy: the ramp (and the hyphen
                 # 0.0 pin) is decided HERE; the probe lets long I/O be
                 # abandoned mid-flight.
+                # Phase 3 — count every invocation (this attempt hits the
+                # producer whether or not it succeeds): the real cost.
+                ctx.producer_calls += 1
                 script, usage = await self.producer.produce(
                     payload,
                     options=ProducerOptions(

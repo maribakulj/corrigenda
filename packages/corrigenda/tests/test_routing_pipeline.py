@@ -120,3 +120,23 @@ def test_routing_off_by_default_sends_every_line(tmp_path: Path):
     result = _run(provider, None, None, tmp_path)
     assert provider.seen_targets == {"L1", "L2"}
     assert result.lines_skipped == 0
+
+
+def test_producer_calls_counted_and_routing_proves_cheaper(tmp_path: Path):
+    """The cost signal (review: 'l'hybride doit prouver qu'il est moins
+    cher'). Both lines here sit in ONE page chunk, so a partial skip
+    can't drop the call — but skipping ALL of them does: routing-on
+    makes strictly FEWER producer calls than routing-off."""
+    off = _run(_CountingProvider({}), None, None, tmp_path)
+    assert off.producer_calls >= 1  # the run actually called the producer
+
+    # Route every line to SKIP → the only chunk is dropped → zero calls.
+    skip_all = _run(
+        _CountingProvider({}),
+        RoutingPolicy(skip_at_or_below=1.0),
+        HeuristicQEScorer(),
+        tmp_path,
+    )
+    assert skip_all.producer_calls == 0
+    assert skip_all.producer_calls < off.producer_calls
+    assert skip_all.lines_skipped == 2

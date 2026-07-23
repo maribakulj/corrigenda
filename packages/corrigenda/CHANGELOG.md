@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Routing cost accounting (ROADMAP V3 Phase 3).**
+  ``CorrectionResult.producer_calls`` counts every ``producer.produce``
+  invocation (retries included) — the real per-call cost driver for an
+  LLM API. Routing lowers it by dropping whole all-skipped chunks, so
+  comparing a routing-on run to a routing-off run on one document is how
+  the hybrid PROVES it is cheaper (the review's "l'hybride doit prouver
+  qu'il est moins cher"), no fabricated counterfactual. Additive,
+  ``0``-safe, unrelated to the fingerprint.
 - **Hybrid-selective routing wired into the pipeline (ROADMAP V3
   Phase 3).** ``CorrectionPipeline(qe_scorer=…, routing_policy=…)`` (and
   ``for_provider``): a line the QE scorer + policy route to SKIP is

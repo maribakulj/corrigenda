@@ -186,8 +186,12 @@ La phase qui rend l'ensemble économiquement positif.
       (reste en contexte, sortie ignorée) ; un chunk entièrement skippé est
       supprimé (aucun appel producteur) ; unité de césure jamais skippée ;
       `CorrectionResult.lines_skipped` mesure l'économie. Défaut off →
-      run byte-identique. *Reste* : tier `rules`, comptabilité de coût
-      complète (tokens économisés vs escalade).
+      run byte-identique.
+- [x] **Comptabilité de coût** : `CorrectionResult.producer_calls`
+      (invocations `produce`, retries inclus — le vrai coût par appel) ;
+      routing-on vs routing-off sur un même document prouve que l'hybride
+      est moins cher, sans contrefactuel fabriqué. *Reste* : tier `rules`,
+      exposition dans le benchmark avec comparaison on/off.
 - [ ] **Extra `corrigenda[qe]`** : `QEScorer` sur discriminateur type ELECTRA
       exporté ONNX (onnxruntime, pas torch), affiné sur les données Phase 2,
       derrière le protocole `QEScorer` ci-dessus. Pour le français ancien :
