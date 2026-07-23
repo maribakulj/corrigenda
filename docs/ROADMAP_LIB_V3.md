@@ -90,14 +90,22 @@ Le composant partagé d'abord.
       l'évidence caractère (jamais de match à similarité nulle) ;
       réordonnancement suspecté **signalé** (`move_suspected`), jamais
       appliqué. Pur, déterministe, zéro dépendance.
-- [ ] **Chemin lent ALTO aligné** :
+- [x] **Chemin lent ALTO aligné** :
   - [x] recyclage de `ID`/`STYLEREFS`/`STYLE` par alignement (plus jamais
         positionnel) ; source stylée non appariée = perte comptée
         (`style_dropped`) ; réordonnancement suspecté surfacé
         (`word_order_suspected` dans le rapport de pertes) ; IDs générés
         dédupliqués contre les IDs recyclés ;
-  - [ ] politique `token_realign` à côté du `report`/`strict` de
-        `LossPolicy` ; sortie **sidecar** quand la projection est refusée.
+  - [x] politique `token_realign` (`LossPolicy.min_alignment_score`,
+        défaut `None` = off) : projection refusée si alignement faible sur
+        changement de nombre de mots, ou drapeau de réordonnancement (y
+        compris à nombre de mots égal) ; unité de césure atomique ; la
+        correction refusée est **préservée** dans le sidecar
+        (`CorrectionReport.sidecar` + `sidecar.json` via `write()`).
+        Cible ce que les gardes ne voient pas (expansion plausible qui
+        passe la similarité source). Fingerprint composite §11 : 
+        `55dc80679dd71f94` → `15dc07cba9122106` (champ ajouté, défauts
+        inchangés).
 - [ ] **Canal d'incertitude LLM** : `status: certain|uncertain` par ligne
       dans le schéma de sortie ; en opt-in, codes de raison par token modifié
       (`confusion_connue`, `mot_du_lexique`, `inféré_du_contexte`,
