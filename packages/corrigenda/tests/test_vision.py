@@ -16,9 +16,22 @@ pytest.importorskip("PIL")
 
 from PIL import Image  # noqa: E402
 
-from corrigenda.core.schemas import Coords, ImageAsset, ImageTransform  # noqa: E402
+from corrigenda.core.protocols import EditProducer, ProducerOptions  # noqa: E402
+from corrigenda.core.schemas import (  # noqa: E402
+    ChunkGranularity,
+    Coords,
+    CorrectionRequest,
+    ImageAsset,
+    ImageTransform,
+    LineContext,
+    LineGeometry,
+    Usage,
+)
+from corrigenda.errors import ConfigurationError  # noqa: E402
 from corrigenda.integrations.vision import (  # noqa: E402
     Crop,
+    ImagePart,
+    VisionEditProducer,
     build_image_asset,
     crop_region,
 )
@@ -153,3 +166,179 @@ def test_crop_without_polygon_flag_stays_rgb(tmp_path: Path) -> None:
     crop = crop_region(asset, coords, mask_polygon=False)
     with Image.open(io.BytesIO(crop.data)) as im:
         assert im.mode == "RGB"
+
+
+# ---------------------------------------------------------------------------
+# VisionEditProducer — crops per line, calls the VLM, parses the reply
+# ---------------------------------------------------------------------------
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+class _FakeVLM:
+    """Records the multimodal call and returns a canned structured reply."""
+
+    def __init__(self, reply: dict) -> None:
+        self._reply = reply
+        self.seen: dict = {}
+
+    async def complete_structured_multimodal(
+        self,
+        *,
+        api_key,
+        model,
+        system_prompt,
+        user_payload,
+        images,
+        json_schema,
+        temperature=0.0,
+    ):
+        self.seen = {
+            "user_payload": user_payload,
+            "images": images,
+            "system_prompt": system_prompt,
+            "temperature": temperature,
+        }
+        return self._reply, Usage(input_tokens=3, output_tokens=4)
+
+
+class _EchoVLM:
+    """Returns each target line unchanged — a full-coverage identity reply."""
+
+    async def complete_structured_multimodal(
+        self,
+        *,
+        api_key,
+        model,
+        system_prompt,
+        user_payload,
+        images,
+        json_schema,
+        temperature=0.0,
+    ):
+        lines = [
+            {"line_id": ln["line_id"], "corrected_text": ln["ocr_text"]}
+            for ln in user_payload["lines"]
+        ]
+        return {"lines": lines}, None
+
+
+def _request_with_geometry(asset: ImageAsset) -> CorrectionRequest:
+    return CorrectionRequest(
+        granularity=ChunkGranularity.LINE,
+        document_id="d",
+        page_id="P1",
+        lines=[
+            LineContext(
+                line_id="l1",
+                ocr_text="Bonjovr",
+                geometry=LineGeometry(
+                    coords=Coords(hpos=10, vpos=10, width=200, height=40),
+                    page_width=1000,
+                    page_height=800,
+                ),
+            ),
+            LineContext(
+                line_id="l2",
+                ocr_text="mss",
+                geometry=LineGeometry(
+                    coords=Coords(hpos=10, vpos=60, width=180, height=40),
+                    page_width=1000,
+                    page_height=800,
+                ),
+            ),
+        ],
+        image_ref=asset,
+    )
+
+
+def test_vision_producer_crops_each_line_and_produces_ops(tmp_path: Path) -> None:
+    asset = build_image_asset(
+        "P1", _png(tmp_path / "pg.png", (1000, 800), (250, 250, 250))
+    )
+    req = _request_with_geometry(asset)
+    vlm = _FakeVLM(
+        {
+            "lines": [
+                {"line_id": "l1", "corrected_text": "Bonjour"},
+                {"line_id": "l2", "corrected_text": "mes"},
+            ]
+        }
+    )
+    prod = VisionEditProducer(vlm, "key", "vlm-1")
+    assert isinstance(prod, EditProducer)  # structural
+    assert prod.wants_image and prod.wants_geometry
+
+    import asyncio
+
+    script, usage = asyncio.run(prod.produce(req, options=ProducerOptions()))
+
+    assert {o.line_id: o.text for o in script.ops} == {"l1": "Bonjour", "l2": "mes"}
+    # One crop per line, labelled and hashed; every crop is a real PNG.
+    parts = vlm.seen["images"]
+    assert [p.line_id for p in parts] == ["l1", "l2"]
+    assert all(isinstance(p, ImagePart) and len(p.sha256) == 64 for p in parts)
+    assert all(p.data.startswith(_PNG_MAGIC) for p in parts)
+    # The crop hash is exactly what crop_region computes (margin default 0.05).
+    expected = crop_region(
+        asset, req.lines[0].geometry.coords, margin_ratio=0.05
+    ).sha256
+    assert parts[0].sha256 == expected
+    # The ImageAsset is sent as image parts, never inlined in the text JSON.
+    assert "image_ref" not in vlm.seen["user_payload"]
+    assert usage == Usage(input_tokens=3, output_tokens=4)
+
+
+def test_vision_producer_rejects_bare_image_ref() -> None:
+    req = CorrectionRequest(
+        granularity=ChunkGranularity.LINE,
+        document_id="d",
+        page_id="P1",
+        lines=[],
+        image_ref="opaque://p1",  # a bare ImageRef cannot be cropped
+    )
+    prod = VisionEditProducer(_FakeVLM({"lines": []}), "k", "m")
+
+    import asyncio
+
+    with pytest.raises(ConfigurationError, match="ImageAsset"):
+        asyncio.run(prod.produce(req, options=ProducerOptions()))
+
+
+def test_vision_producer_drives_the_full_pipeline(tmp_path: Path) -> None:
+    """End to end: the pipeline copies the ImageAsset + geometry into the
+    §4.1 envelope, the producer crops real ALTO geometry and the run
+    completes. An echo VLM keeps it deterministic (identity corrections)."""
+    from corrigenda import CorrectionPipeline
+    from corrigenda.formats.alto.parser import build_document_manifest
+
+    sample = Path(__file__).parent.parent.parent.parent / "examples" / "sample.xml"
+    doc = build_document_manifest([(sample, sample.name)])
+    assets = {}
+    for page in doc.pages:
+        img = _png(
+            tmp_path / f"{page.page_id}.png",
+            (page.page_width, page.page_height),
+            (255, 255, 255),
+        )
+        assets[page.page_id] = build_image_asset(page.page_id, img)
+
+    class _Null:
+        def on_event(self, *a, **k):
+            pass
+
+    prod = VisionEditProducer(_EchoVLM(), "key", "vlm-1")
+    pipeline = CorrectionPipeline(producer=prod, observer=_Null())
+
+    import asyncio
+
+    result = asyncio.run(
+        pipeline.run(
+            document_manifest=doc,
+            source_files={sample.name: sample},
+            page_images=assets,
+        )
+    )
+    # Identity reply → no line degraded, run succeeds through the vision seam.
+    assert result.fallback_chunks == 0
+    assert result.producer_calls >= 1

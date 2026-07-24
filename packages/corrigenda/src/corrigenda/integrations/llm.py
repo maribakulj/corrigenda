@@ -8,7 +8,13 @@ expects back, regardless of which model is on the other end of the wire.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Mapping
 from typing import Any
+
+from corrigenda.core.confidence import DEFAULT_CONFUSIONS, score_producer_claims
+from corrigenda.core.editing import EditOp, ReplaceLine
 
 OUTPUT_JSON_SCHEMA: dict[str, Any] = {
     "name": "ocr_correction",
@@ -148,11 +154,75 @@ def uncertainty_output_schema() -> dict[str, Any]:
     }
 
 
+def prompt_schema_fingerprint(system_prompt: str, output_schema: dict[str, Any]) -> str:
+    """Stable 16-hex sha256 over (system prompt + output schema) — the
+    producer CONFIGURATION digest shared by every LLM-shaped producer
+    (text and vision). The two knobs that change what the model is asked;
+    the model string itself is the ``implementation`` field, not this."""
+    payload = json.dumps(
+        {"system_prompt": system_prompt, "output_schema": output_schema},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def edit_ops_from_response(
+    raw: object,
+    *,
+    source_by_id: Mapping[str, str],
+    uncertainty_channel: bool = False,
+    confusions: tuple[tuple[str, str], ...] = DEFAULT_CONFUSIONS,
+    lexicon: set[str] | None = None,
+) -> list[EditOp]:
+    """Convert the ``{lines:[{line_id, corrected_text, …}]}`` structured
+    response into ``replace_line`` ops — the shared body of every
+    LLM-shaped producer (text ``LLMEditProducer`` and the vision producer).
+
+    Malformed entries (non-dict, missing ``line_id``, non-string text)
+    yield no op — the pipeline's validator then reports the line missing
+    and the retry machinery takes over, exactly as on the raw dict.
+    When ``uncertainty_channel`` is on, the model's per-line ``status`` and
+    per-token ``edits`` claims are VERIFIED app-side (confusion table /
+    lexicon) and the resulting score is stamped on each op.
+    """
+    ops: list[EditOp] = []
+    lines = raw.get("lines", []) if isinstance(raw, dict) else []
+    if not isinstance(lines, list):
+        return ops
+    for entry in lines:
+        if not isinstance(entry, dict):
+            continue
+        line_id = entry.get("line_id")
+        text = entry.get("corrected_text")
+        if not line_id or not isinstance(text, str):
+            continue
+        confidence: float | None = None
+        if uncertainty_channel:
+            status = entry.get("status")
+            claims = entry.get("edits")
+            confidence = score_producer_claims(
+                source_text=source_by_id.get(line_id, ""),
+                corrected_text=text,
+                status=status if isinstance(status, str) else None,
+                claims=claims if isinstance(claims, list) else [],
+                confusions=confusions,
+                lexicon=lexicon,
+            )
+        ops.append(
+            ReplaceLine(line_id=line_id, text=text, producer_confidence=confidence)
+        )
+    return ops
+
+
 __all__ = [
     "OUTPUT_JSON_SCHEMA",
     "SYSTEM_PROMPT",
     "UNCERTAINTY_PROMPT_SUFFIX",
     "UNCERTAINTY_REASONS",
+    "edit_ops_from_response",
+    "prompt_schema_fingerprint",
     "uncertainty_output_schema",
     "uncertainty_system_prompt",
 ]

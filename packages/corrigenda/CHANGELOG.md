@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`VisionEditProducer` — the `corrigenda[vision]` extra, part 2 (ROADMAP
+  V3 Phase 4).** ``integrations.vision.VisionEditProducer`` adapts a
+  multimodal provider to the ``EditProducer`` contract: for each target
+  line it crops the region from the page image (the pure
+  ``crop_region``), hands the crops + OCR text to a
+  ``MultimodalStructuredClient``, and shapes the reply into a
+  ``replace_line`` ``EditScript`` — through the SAME response parser the
+  text ``LLMEditProducer`` uses, so the guard matrix, validator and
+  uncertainty channel behave identically downstream; only payload assembly
+  differs. ``wants_image``/``wants_geometry`` are ``True``, so the pipeline
+  copies each line's geometry and the page image into the §4.1 envelope;
+  the image MUST be a structured ``ImageAsset`` (a bare ``ImageRef`` string
+  cannot be cropped and is refused with a clear error). Each crop travels
+  as an ``ImagePart`` carrying its own SHA-256 (the crop hash, tied to its
+  ``line_id``), and the ImageAsset carries the image hash — the provenance
+  a reproducible decision records. A new multimodal seam
+  (``MultimodalStructuredClient``) keeps the text producer's lean,
+  image-free ``complete_structured`` contract untouched. The core stays
+  pixel-blind: it forwards the opaque asset and never opens it; every pixel
+  goes through ``crop_region``. The shared LLM response parser and
+  configuration-fingerprint helper were extracted to ``integrations.llm``
+  (``edit_ops_from_response``, ``prompt_schema_fingerprint``) with the text
+  producer's behaviour byte-identical (fingerprint pin unchanged).
 - **Pixel-pure vision cropper — the `corrigenda[vision]` extra, part 1
   (ROADMAP V3 Phase 4).** ``integrations.vision`` is the deterministic
   half of the vision chain: ``build_image_asset(page_id, path)`` decodes a

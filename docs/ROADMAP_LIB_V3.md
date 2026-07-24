@@ -258,9 +258,19 @@ Le grand chantier de la revue, enfin outillé. Dépend de la Phase 2.
       Pillow paresseux ; I4 reformulé en contrat d'import (zone pixel-aveugle
       prouvée pixel-free au runtime, `vision.py` seule surface sanctionnée).
       *Reste* : préflight d'association page→image en lot.
-- [ ] **`VisionEditProducer` officiel** : encode le crop, appelle le
+- [x] **`VisionEditProducer` officiel** : encode le crop, appelle le
       fournisseur multimodal, trace hash de l'image et du crop. Le cœur reste
-      pixel-blind — l'enveloppe §4.1 existante est la couture.
+      pixel-blind — l'enveloppe §4.1 existante est la couture. *Livré* :
+      `integrations.vision.VisionEditProducer` (`wants_image/geometry`) croppe
+      chaque ligne via `crop_region`, envoie crops+texte à un
+      `MultimodalStructuredClient` (nouveau seam, le contrat texte
+      `complete_structured` reste inchangé), et repasse par le MÊME parseur de
+      réponse que le producteur texte (`edit_ops_from_response`, factorisé dans
+      `integrations.llm`) — gardes/validateur/canal d'incertitude identiques en
+      aval. Exige un `ImageAsset` (refus explicite d'un `ImageRef` nu). Chaque
+      crop voyage en `ImagePart` avec son sha256 (hash du crop lié au
+      `line_id`) ; l'image porte son sha256. *Reste* : estamper ces hashes dans
+      le `CorrectionReport` (nouveau champ de provenance additif).
 - [ ] **Gardes vision** (profil `GuardConfig.vision()` réservé dans le code) :
       anti-hallucination visuelle, repli vers OCR ou revue si image
       absente/ambiguë.

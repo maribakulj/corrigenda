@@ -32,10 +32,36 @@ import hashlib
 import io
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
 
-from corrigenda.core.schemas import Coords, ImageAsset, ImageTransform
+from corrigenda.core.confidence import DEFAULT_CONFUSIONS
+from corrigenda.core.editing import EditScript
+from corrigenda.core.protocols import ProducerMetadata, ProducerOptions
+from corrigenda.core.schemas import (
+    Coords,
+    CorrectionRequest,
+    ImageAsset,
+    ImageTransform,
+    Usage,
+)
+from corrigenda.errors import ConfigurationError
+from corrigenda.integrations.llm import (
+    OUTPUT_JSON_SCHEMA,
+    edit_ops_from_response,
+    prompt_schema_fingerprint,
+    uncertainty_output_schema,
+    uncertainty_system_prompt,
+)
 
-__all__ = ["Crop", "build_image_asset", "crop_region"]
+__all__ = [
+    "Crop",
+    "ImagePart",
+    "MultimodalStructuredClient",
+    "VISION_SYSTEM_PROMPT",
+    "VisionEditProducer",
+    "build_image_asset",
+    "crop_region",
+]
 
 #: EXIF Orientation tag id (0x0112).
 _EXIF_ORIENTATION_TAG = 274
@@ -238,3 +264,200 @@ def crop_region(
         sha256=_sha256(data),
         pixel_box=(left, top, right, bottom),
     )
+
+
+# ---------------------------------------------------------------------------
+# VisionEditProducer — the thin, non-deterministic half of the vision chain
+# ---------------------------------------------------------------------------
+
+
+VISION_SYSTEM_PROMPT = """\
+Tu es un moteur de correction post-OCR spécialisé dans les documents patrimoniaux.
+Pour chaque ligne tu reçois le texte OCR ET l'image de la ligne (le crop). L'image
+fait foi : lis les caractères réellement présents à l'image.
+
+Règles absolues :
+1. Corrige uniquement les erreurs manifestes d'OCR, d'après l'image.
+2. Conserve la langue source.
+3. Conserve l'orthographe historique quand elle est réellement présente à l'image \
+(ſ long, u pour v, ligatures) : ce n'est pas une erreur.
+4. Ne traduis rien.
+5. Ne modernise pas volontairement le texte.
+6. Ne fusionne jamais deux lignes.
+7. Ne scinde jamais une ligne.
+8. Ne déplace jamais du texte d'une ligne à l'autre.
+9. Chaque entrée line_id doit produire exactement une sortie avec le même line_id.
+10. corrected_text doit contenir une seule ligne, sans caractère de saut de ligne.
+11. Retourne uniquement un JSON valide conforme au schéma fourni.
+12. En cas de doute ou d'image illisible, conserve le texte OCR (correction minimale).
+13. N'invente jamais un caractère absent de l'image (pas d'hallucination visuelle).\
+"""
+
+
+@dataclass(frozen=True)
+class ImagePart:
+    """One crop handed to a multimodal provider, tied to the line it depicts.
+
+    ``sha256`` is the crop hash — the provenance the run records so a
+    decision is reproducible from (source, image, crop) hashes (acceptance
+    criterion 5). ``line_id`` lets the provider (and the audit trail) map
+    the image back to the exact line it belongs to.
+    """
+
+    line_id: str
+    media_type: str
+    data: bytes
+    sha256: str
+
+
+@runtime_checkable
+class MultimodalStructuredClient(Protocol):
+    """The multimodal counterpart of ``StructuredCompletionClient`` (§5.2 bis).
+
+    A VLM call needs image parts the text seam cannot carry, so it is a
+    separate protocol rather than a widened ``complete_structured`` — text
+    producers keep their lean, image-free contract untouched. The concrete
+    client (an out-of-lib provider adapter) encodes the crops into its
+    vendor's multimodal message format and returns the same
+    ``{lines:[{line_id, corrected_text}]}`` structured shape a text call
+    would, plus token :class:`Usage`.
+    """
+
+    async def complete_structured_multimodal(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        images: list[ImagePart],
+        json_schema: dict[str, Any],
+        temperature: float = 0.0,
+    ) -> tuple[dict[str, Any], Usage | None]: ...
+
+
+class VisionEditProducer:
+    """Adapt a :class:`MultimodalStructuredClient` (VLM) to ``EditProducer``.
+
+    The thin, non-deterministic half of the vision chain: for each target
+    line it crops the region from the page image (the pure, deterministic
+    :func:`crop_region`), hands the crops + OCR text to the multimodal
+    provider, and shapes the reply into a ``replace_line``
+    :class:`EditScript` — the SAME response parser
+    (:func:`~corrigenda.integrations.llm.edit_ops_from_response`) the text
+    producer uses, so the guard matrix, validator and uncertainty channel
+    all behave identically downstream. Only the payload assembly differs.
+
+    ``wants_geometry`` / ``wants_image`` are ``True``: the pipeline copies
+    each line's geometry and the page image into the §4.1 envelope, and
+    :func:`require_page_images` guarantees every page has one. The image
+    MUST be a structured :class:`ImageAsset` (the cropper needs its uri,
+    frame and transform) — a bare :class:`~corrigenda.core.schemas.ImageRef`
+    string is refused with a clear error, since it cannot be cropped.
+
+    The core stays pixel-blind: it forwards an opaque asset and never opens
+    it; every pixel touched here goes through :func:`crop_region`.
+    """
+
+    wants_geometry: bool = True
+    wants_image: bool = True
+    #: A VLM asked to correct N target lines must return all N (a dropped
+    #: line is a degraded response → validator error → retry), same as the
+    #: text LLM producer.
+    requires_full_coverage: bool = True
+
+    def __init__(
+        self,
+        provider: MultimodalStructuredClient,
+        api_key: str,
+        model: str,
+        *,
+        system_prompt: str | None = None,
+        output_schema: dict[str, Any] | None = None,
+        uncertainty_channel: bool = False,
+        lexicon: set[str] | None = None,
+        confusions: tuple[tuple[str, str], ...] = DEFAULT_CONFUSIONS,
+        margin_ratio: float = 0.05,
+        mask_polygon: bool = False,
+    ) -> None:
+        self._provider = provider
+        self._api_key = api_key
+        self._model = model
+        self._uncertainty_channel = uncertainty_channel
+        self._lexicon = lexicon
+        self._confusions = confusions
+        self._margin_ratio = margin_ratio
+        self._mask_polygon = mask_polygon
+        default_prompt = (
+            uncertainty_system_prompt() if uncertainty_channel else VISION_SYSTEM_PROMPT
+        )
+        default_schema = (
+            uncertainty_output_schema() if uncertainty_channel else OUTPUT_JSON_SCHEMA
+        )
+        self._system_prompt = default_prompt if system_prompt is None else system_prompt
+        self._output_schema = default_schema if output_schema is None else output_schema
+        #: Provenance (P3.7-4): the generic "vision" producer name, the
+        #: model as implementation, and a configuration fingerprint that —
+        #: unlike the text producer's — also folds in the crop geometry
+        #: knobs (margin, polygon mask), because they change the pixels the
+        #: model sees, hence what it is asked.
+        self.metadata = ProducerMetadata(
+            name="vision",
+            implementation=model,
+            configuration_fingerprint=prompt_schema_fingerprint(
+                self._system_prompt,
+                {
+                    "output_schema": self._output_schema,
+                    "margin_ratio": self._margin_ratio,
+                    "mask_polygon": self._mask_polygon,
+                },
+            ),
+        )
+
+    async def produce(
+        self, payload: CorrectionRequest, *, options: ProducerOptions
+    ) -> tuple[EditScript, Usage | None]:
+        asset = payload.image_ref
+        if not isinstance(asset, ImageAsset):
+            raise ConfigurationError(
+                "VisionEditProducer requires a structured ImageAsset page "
+                "image (build it with build_image_asset), not a bare "
+                f"ImageRef; got {type(asset).__name__}"
+            )
+        images: list[ImagePart] = []
+        for line in payload.lines:
+            if line.geometry is None:
+                continue
+            crop = crop_region(
+                asset,
+                line.geometry.coords,
+                margin_ratio=self._margin_ratio,
+                mask_polygon=self._mask_polygon,
+            )
+            images.append(
+                ImagePart(
+                    line_id=line.line_id,
+                    media_type=crop.media_type,
+                    data=crop.data,
+                    sha256=crop.sha256,
+                )
+            )
+        raw, usage = await self._provider.complete_structured_multimodal(
+            api_key=self._api_key,
+            model=self._model,
+            system_prompt=self._system_prompt,
+            # The text half of the payload — the image asset is sent as
+            # image parts, never inlined into the JSON prompt.
+            user_payload=payload.model_dump(exclude_none=True, exclude={"image_ref"}),
+            images=images,
+            json_schema=self._output_schema,
+            temperature=options.temperature,
+        )
+        ops = edit_ops_from_response(
+            raw,
+            source_by_id={ln.line_id: ln.ocr_text for ln in payload.lines},
+            uncertainty_channel=self._uncertainty_channel,
+            confusions=self._confusions,
+            lexicon=self._lexicon,
+        )
+        return EditScript(ops=ops), usage
