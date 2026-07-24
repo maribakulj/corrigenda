@@ -40,6 +40,18 @@ qe = [
     "numpy>=1.24,<3.0",
 ]
 
+# Vision chain (ROADMAP V3 Phase 4): the corrigenda[vision] producer decodes,
+# validates and crops page images and calls a multimodal provider. Pillow is
+# the ONLY image dependency and it is imported LAZILY, inside
+# integrations/vision.py — never at module import and never on the base
+# install path (enforced by the I4 static scan + the runtime import contract
+# in tests/test_import_contract.py). The pixel-blind correction engine never
+# pulls it. Keep this the single image dep: heavier stacks (cv2, torch) stay
+# out by construction (I4 blocklist).
+vision = [
+    "pillow>=10.0,<12.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/maribakulj/corrigenda"
 Issues = "https://github.com/maribakulj/corrigenda/issues"
@@ -100,7 +112,9 @@ branch = true
 # CI test job cannot provide (heavy deps + a 545 MB model). It has its own
 # suite (tests/test_qe_dalembert.py) that self-skips when the extra/bundle
 # is absent, so gating the core coverage on it would falsely read 0%.
-omit = ["*/__init__.py", "*/integrations/qe.py"]
+# integrations/vision.py is the corrigenda[vision] extra (Pillow), same deal:
+# its suite self-skips without the extra, so it is omitted from the core gate.
+omit = ["*/__init__.py", "*/integrations/qe.py", "*/integrations/vision.py"]
 
 [tool.coverage.report]
 fail_under = 85

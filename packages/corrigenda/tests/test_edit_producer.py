@@ -278,28 +278,78 @@ def test_llm_adapter_produces_replace_line_script_and_usage():
 
 
 # ---------------------------------------------------------------------------
-# I4 — the library touches no pixel (no image libs anywhere in corrigenda)
+# I4 — pixel-blindness (restated, ROADMAP V3 Phase 4)
+#
+# "No image lib anywhere in corrigenda" was a too-broad PROXY for the thing
+# that actually matters: the correction engine on the base install path
+# (core + formats + text producers) is pixel-free and provably so. The
+# opt-in corrigenda[vision] producer's whole job IS pixels — banning image
+# libs from it too was the proxy over-reaching past its own rationale.
+#
+# So I4 is now two claims, mirroring the corrigenda[qe] contract:
+#   * STATIC (here): the pixel-blind zone — everything BUT the sanctioned
+#     vision surface — imports no image lib, at module level or nested; and
+#     the vision surface itself imports them only LAZILY (never at module
+#     import, so introspection stays cheap and the base install never pays).
+#   * RUNTIME (test_import_contract.py): importing corrigenda pulls no image
+#     lib into sys.modules — the honest, transitive proof of pixel-blindness.
 # ---------------------------------------------------------------------------
 
 
 _IMAGE_MODULES = ("PIL", "cv2", "imageio", "skimage", "wand", "pillow", "torchvision")
 
+#: The ONE sanctioned place a heavy image lib may be imported (lazily): the
+#: opt-in corrigenda[vision] producer, under src/corrigenda/integrations/.
+#: Everything else is the pixel-blind zone.
+_VISION_SURFACE = {"vision.py"}
 
-def test_i4_no_image_libraries_in_corrigenda():
-    """Invariant I4 — core AND formats AND bundled producers must never
-    import an image-processing library: the lib forwards an opaque image
-    ref and leaves every pixel to the (out-of-lib) vision producer."""
+
+def _is_vision_surface(py: Path) -> bool:
+    return py.parent.name == "integrations" and py.name in _VISION_SURFACE
+
+
+def _image_imports(py: Path, *, nested: bool) -> list[str]:
+    """Image-lib imports in ``py`` — the whole tree when ``nested``, only the
+    module-body top level otherwise."""
+    tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+    nodes = ast.walk(tree) if nested else iter(tree.body)
+    hits: list[str] = []
+    for node in nodes:
+        names: list[str] = []
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names = [node.module]
+        for name in names:
+            if name.split(".")[0] in _IMAGE_MODULES:
+                hits.append(f"{py.name}:{node.lineno} imports {name}")
+    return hits
+
+
+def test_i4_pixel_blind_zone_imports_no_image_library():
+    """The pixel-blind zone (core, formats, text producers, and every
+    integration BUT the opt-in vision one) imports no image library at all —
+    module level OR nested. This is what keeps the correction engine pure."""
     offenders: list[str] = []
     for py in _SRC.rglob("*.py"):
-        tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
-        for node in ast.walk(tree):
-            names: list[str] = []
-            if isinstance(node, ast.Import):
-                names = [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                names = [node.module]
-            for name in names:
-                top = name.split(".")[0]
-                if top in _IMAGE_MODULES:
-                    offenders.append(f"{py.name}:{node.lineno} imports {name}")
-    assert not offenders, f"I4 violation — image lib in corrigenda: {offenders}"
+        if _is_vision_surface(py):
+            continue
+        offenders += _image_imports(py, nested=True)
+    assert not offenders, (
+        f"I4 violation — image lib in the pixel-blind zone: {offenders}"
+    )
+
+
+def test_i4_vision_surface_keeps_image_libs_function_local():
+    """The sanctioned vision producer MAY import Pillow — but lazily, never at
+    module level: importing the module (introspection, protocol/isinstance
+    checks) must not pay the heavy image runtime (mirrors the qe scorer's
+    contract). Vacuously green until the corrigenda[vision] producer lands."""
+    for py in _SRC.rglob("*.py"):
+        if not _is_vision_surface(py):
+            continue
+        module_level = _image_imports(py, nested=False)
+        assert not module_level, (
+            "vision surface must import image libs lazily, not at module "
+            f"level: {module_level}"
+        )

@@ -157,3 +157,42 @@ def test_importing_core_quality_stays_pure():
     assert proc.returncode == 0, (
         f"importing core.quality loaded a heavy dep\n{proc.stderr}"
     )
+
+
+# ---------------------------------------------------------------------------
+# I4 (ROADMAP V3 Phase 4) — pixel-blindness is a property of the IMPORT
+# GRAPH, not the file tree. The static AST scan (test_edit_producer.py) is a
+# cheap first line; THIS is the honest proof: importing corrigenda (the base
+# install surface — core + eagerly-loaded producers + schemas) must pull no
+# image library into sys.modules, even with the opt-in corrigenda[vision]
+# producer sitting in the same package. Pillow arrives ONLY when a caller
+# constructs the vision producer, never before.
+# ---------------------------------------------------------------------------
+
+IMAGE_LIBS = ("PIL", "cv2", "imageio", "skimage", "wand", "torchvision")
+
+
+def test_importing_corrigenda_never_loads_an_image_lib():
+    code = (
+        "import sys; import corrigenda as _; "
+        f"libs = {IMAGE_LIBS!r}; "
+        "sys.exit(1 if any(m.split('.')[0] in libs for m in sys.modules) else 0)"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, (
+        f"importing corrigenda loaded an image lib\n{proc.stderr}"
+    )
+
+
+def test_importing_pipeline_never_loads_an_image_lib():
+    """The engine entry point specifically — the correction path a run takes
+    is pixel-free even though a vision producer plugs into its §4.1 seam."""
+    code = (
+        "import sys; import corrigenda.core.pipeline as _; "
+        f"libs = {IMAGE_LIBS!r}; "
+        "sys.exit(1 if any(m.split('.')[0] in libs for m in sys.modules) else 0)"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, (
+        f"importing core.pipeline loaded an image lib\n{proc.stderr}"
+    )
