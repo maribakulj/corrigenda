@@ -148,3 +148,11 @@ ignore_missing_imports = true
 # package + lxml-stubs). Treat them as untyped so --strict still runs.
 module = ["onnxruntime.*", "tokenizers.*", "numpy.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# corrigenda[vision]: Pillow is lazy-imported inside integrations/vision.py
+# and absent from the mypy CI env. Same treatment as the qe deps — untyped
+# so --strict still runs; the module coerces every value it returns to a
+# concrete type so no Any leaks past the seam.
+module = ["PIL.*"]
+ignore_missing_imports = true

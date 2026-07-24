@@ -246,10 +246,18 @@ Le grand chantier de la revue, enfin outillé. Dépend de la Phase 2.
       refuse un `ImageAsset` déposé sous une clé ≠ son `page_id`. Additif,
       opt-in, byte-identique sans vision. *Reste* : le builder qui **peuple**
       un `ImageAsset` depuis un fichier = extra `[vision]` (item suivant).
-- [ ] **Extra `corrigenda[vision]`** : décodage/validation d'images (Pillow),
+- [~] **Extra `corrigenda[vision]`** : décodage/validation d'images (Pillow),
       TIFF multipage, crops ligne/bloc/page avec marge configurable, polygones
       PAGE et rotation, association page→image robuste avec préflight
       (« 100 % des pages ont une image ou une erreur claire »).
+      *Livré (part 1, couture déterministe)* : `integrations.vision` pixel-pur
+      — `build_image_asset` (peuple l'`ImageAsset` : sha256, MIME réel,
+      dimensions visuelles, frame TIFF, orientation EXIF) et `crop_region`
+      (bbox XML→pixels via `ImageTransform`, EXIF normalisé, marge, masque
+      polygone PAGE RGBA, clamp, hash du crop). Testé sans réseau ni clé.
+      Pillow paresseux ; I4 reformulé en contrat d'import (zone pixel-aveugle
+      prouvée pixel-free au runtime, `vision.py` seule surface sanctionnée).
+      *Reste* : préflight d'association page→image en lot.
 - [ ] **`VisionEditProducer` officiel** : encode le crop, appelle le
       fournisseur multimodal, trace hash de l'image et du crop. Le cœur reste
       pixel-blind — l'enveloppe §4.1 existante est la couture.

@@ -196,3 +196,19 @@ def test_importing_pipeline_never_loads_an_image_lib():
     assert proc.returncode == 0, (
         f"importing core.pipeline loaded an image lib\n{proc.stderr}"
     )
+
+
+def test_importing_vision_module_never_loads_pillow_at_import():
+    """Even the vision surface itself imports Pillow LAZILY: importing the
+    module (the VLM producer picking up the cropper, introspection) must not
+    pay the image runtime — it arrives only when a crop is actually taken
+    (mirrors the qe scorer's contract)."""
+    code = (
+        "import sys; import corrigenda.integrations.vision as _; "
+        f"libs = {IMAGE_LIBS!r}; "
+        "sys.exit(1 if any(m.split('.')[0] in libs for m in sys.modules) else 0)"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, (
+        f"importing integrations.vision loaded an image lib\n{proc.stderr}"
+    )

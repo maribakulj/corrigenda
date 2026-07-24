@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pixel-pure vision cropper — the `corrigenda[vision]` extra, part 1
+  (ROADMAP V3 Phase 4).** ``integrations.vision`` is the deterministic
+  half of the vision chain: ``build_image_asset(page_id, path)`` decodes a
+  file into the populated ``ImageAsset`` the core carries (SHA-256 of the
+  exact bytes, real decoded MIME, **visual** pixel dimensions, multipage
+  TIFF ``frame_index``, EXIF orientation), and ``crop_region(asset,
+  coords)`` maps an XML bbox to pixels via the asset's ``ImageTransform``,
+  normalizes EXIF orientation, grows the box by an optional
+  ``margin_ratio``, optionally masks to a PAGE polygon (RGBA), clamps to
+  the image, and returns an encoded ``Crop`` with its own SHA-256 — the
+  crop-hash the audit trail records (acceptance criterion 5). Pure and
+  deterministic: identical inputs yield an identical crop hash, so every
+  geometry decision is tested with a Pillow-drawn fixture and **no
+  network, no API key** (the non-deterministic VLM call is a separate,
+  forthcoming seam). **Pillow is the only image dependency and is imported
+  lazily inside each function** — importing the module never pays the
+  image runtime, and the pixel-blind core never pulls it. I4 is restated
+  accordingly: the pixel-blind zone (core, formats, text producers) is
+  image-lib-free by static scan AND by a runtime import contract
+  (``import corrigenda`` loads no image lib into ``sys.modules``), while
+  the sanctioned ``integrations/vision.py`` may import Pillow function-
+  locally — the same pattern as the qe extra. New extra
+  ``corrigenda[vision] = ["pillow"]``.
 - **Structured `ImageAsset` — the recommended page-image contract
   (ROADMAP V3 Phase 4).** ``run(page_images=…)`` now accepts, per page,
   either the historical opaque ``ImageRef`` (str) or the richer
