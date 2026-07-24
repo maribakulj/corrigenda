@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Structured `ImageAsset` — the recommended page-image contract
+  (ROADMAP V3 Phase 4).** ``run(page_images=…)`` now accepts, per page,
+  either the historical opaque ``ImageRef`` (str) or the richer
+  ``ImageAsset`` (the new ``PageImage = ImageRef | ImageAsset`` union):
+  ``page_id``, opaque ``uri``, ``sha256`` of the exact bytes, decoded
+  ``media_type`` and pixel dimensions, multipage ``frame_index``,
+  ``exif_orientation``, and an ``ImageTransform`` (XML-coordinate →
+  pixel scale/offset) a crop needs. The asset rides the existing §4.1
+  vision envelope unchanged — the compiler copies it into
+  ``CorrectionRequest.image_ref`` only when the producer asks
+  (``wants_image``) and forwards it **verbatim**; the pixel-blind core
+  still opens **no** pixel (invariant I4). ``require_page_images`` now
+  also rejects an ``ImageAsset`` filed under a mapping key that
+  disagrees with its own ``page_id`` — the silent wrong-image bug the
+  per-page contract exists to catch. Fully additive and opt-in: a bare
+  ``ImageRef`` behaves exactly as before, and the decoding builder that
+  *populates* an ``ImageAsset`` from a file is the forthcoming
+  ``corrigenda[vision]`` extra (Phase 4), never the core.
 - **Zero-shot D'AlemBERT QE scorer — the `corrigenda[qe]` extra
   (ROADMAP V3 Phase 3).** ``integrations.qe.MaskedLMQEScorer`` implements
   the pure-core ``QEScorer`` protocol with the masked pseudo-perplexity

@@ -133,6 +133,11 @@ PUBLIC_API_1_0 = sorted(
         "RoutingDecision",
         "RoutingPolicy",
         "route_line",
+        # Structured page image (ROADMAP V3 Phase 4) — additive
+        "ImageAsset",
+        "ImageRef",
+        "ImageTransform",
+        "PageImage",
     ]
 )
 

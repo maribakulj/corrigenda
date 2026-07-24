@@ -237,10 +237,15 @@ que le tout-LLM pour un coût par page inférieur, mesuré et publié.
 
 Le grand chantier de la revue, enfin outillé. Dépend de la Phase 2.
 
-- [ ] **`ImageAsset` structuré** (page_id, uri, sha256, MIME réel, dimensions
-      pixels, index de frame, orientation EXIF, transformation XML→pixels).
-      `ImageRef = str` reste accepté ; `ImageAsset` devient le contrat
-      recommandé.
+- [x] **`ImageAsset` structuré** (page_id, uri, sha256, MIME réel, dimensions
+      pixels, index de frame, orientation EXIF, transformation XML→pixels via
+      `ImageTransform`). `ImageRef = str` reste accepté ; `ImageAsset` devient
+      le contrat recommandé — `run(page_images=…)` accepte l'union
+      `PageImage = ImageRef | ImageAsset`, l'asset voyage sur l'enveloppe §4.1
+      **verbatim** (le cœur n'ouvre aucun pixel, I4), et `require_page_images`
+      refuse un `ImageAsset` déposé sous une clé ≠ son `page_id`. Additif,
+      opt-in, byte-identique sans vision. *Reste* : le builder qui **peuple**
+      un `ImageAsset` depuis un fichier = extra `[vision]` (item suivant).
 - [ ] **Extra `corrigenda[vision]`** : décodage/validation d'images (Pillow),
       TIFF multipage, crops ligne/bloc/page avec marge configurable, polygones
       PAGE et rotation, association page→image robuste avec préflight

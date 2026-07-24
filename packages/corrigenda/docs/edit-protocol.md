@@ -110,8 +110,8 @@ apply_edit_script(script, {"l1": "ſoleil"}).text_by_id     # {"l1": "soleil"}
 ```
 
 - **Vision / VLM** (envelope only in v1, §5.2 bis) — the compiler copies
-  per-line `geometry` (coords + page dimensions) and an **opaque** page
-  `image_ref` into the payload *only* when the producer asks. The library
+  per-line `geometry` (coords + page dimensions) and a page `image_ref`
+  into the payload *only* when the producer asks. The library
   **never opens a pixel** (invariant **I4**, enforced by
   `test_edit_producer.py::test_i4_no_image_libraries_in_corrigenda`);
   loading/cropping/encoding belongs to the out-of-lib producer.
@@ -119,6 +119,18 @@ apply_edit_script(script, {"l1": "ſoleil"}).text_by_id     # {"l1": "soleil"}
   **page_id** (document-unique, one image per physical page, never per
   source file); a `wants_image` producer with a page left uncovered is a
   start-up `ConfigurationError` (`require_page_images`).
+
+  Each `page_images` value is a `PageImage`: the historical **opaque**
+  `ImageRef` (str — path/URL/handle) *or*, recommended since ROADMAP V3
+  Phase 4, a structured **`ImageAsset`** carrying the provenance the
+  audit trail wants (`sha256` of the bytes, decoded `media_type` and
+  pixel dimensions, multipage `frame_index`, `exif_orientation`, and an
+  `ImageTransform` mapping XML coordinates onto image pixels). Either
+  rides the envelope identically and is forwarded verbatim; the core
+  still opens neither. The core only *carries* an `ImageAsset` — the
+  builder that decodes a file to populate it is the `corrigenda[vision]`
+  extra, never the core (I4). An `ImageAsset` whose `page_id` disagrees
+  with its mapping key is rejected at start-up.
 
 ## Dry run
 

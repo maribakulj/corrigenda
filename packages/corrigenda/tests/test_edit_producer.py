@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError as PydValidationError
 
 from corrigenda.core.protocols import ProducerOptions
 from corrigenda.core.editing import EditScript, ReplaceLine
@@ -16,6 +17,8 @@ from corrigenda.core.schemas import (
     PageManifest,
     ChunkGranularity,
     Coords,
+    ImageAsset,
+    ImageTransform,
     LineManifest,
     CorrectionRequest,
     RetryPolicy,
@@ -135,6 +138,93 @@ def test_vision_producer_with_all_pages_ok():
     require_page_images(
         _VisionProducer(), pages, {"P1": "img-p1", "P2": "img-p2"}
     )  # no raise
+
+
+# ---------------------------------------------------------------------------
+# ImageAsset (ROADMAP V3 Phase 4) — the structured, recommended page image
+# ---------------------------------------------------------------------------
+
+
+def test_correction_request_accepts_image_asset_verbatim():
+    """The §4.1 envelope carries the richer ImageAsset, not only a bare str:
+    before Phase 4 ``image_ref`` was typed ``str | None`` and pydantic
+    rejected a model here."""
+    asset = ImageAsset(
+        page_id="P1",
+        uri="scan.tif",
+        sha256="ab" * 32,
+        media_type="image/tiff",
+        pixel_width=2000,
+        pixel_height=3000,
+        frame_index=2,
+        exif_orientation=6,
+        transform=ImageTransform(scale_x=2.0, scale_y=2.0),
+    )
+    req = CorrectionRequest(
+        granularity=ChunkGranularity.LINE,
+        document_id="d",
+        page_id="P1",
+        lines=[],
+        image_ref=asset,
+    )
+    assert req.image_ref is asset
+    # A bare ImageRef still rides the same field.
+    assert (
+        CorrectionRequest(
+            granularity=ChunkGranularity.LINE,
+            document_id="d",
+            page_id="P1",
+            lines=[],
+            image_ref="scan.tif",
+        ).image_ref
+        == "scan.tif"
+    )
+
+
+def test_require_page_images_accepts_image_asset_values():
+    pages = [_page("P1", "a.xml"), _page("P2", "a.xml")]
+    require_page_images(
+        _VisionProducer(),
+        pages,
+        {
+            "P1": ImageAsset(page_id="P1", uri="p1.tif"),
+            "P2": "p2.tif",  # mixed str + ImageAsset is fine
+        },
+    )  # no raise
+
+
+def test_require_page_images_rejects_asset_page_id_mismatch():
+    """A scan that names a different page than its mapping key is the silent
+    wrong-image bug the per-page contract exists to catch — before Phase 4
+    the value type was opaque and this slipped through."""
+    pages = [_page("P1", "a.xml")]
+    with pytest.raises(ConfigurationError, match="page_id"):
+        require_page_images(
+            _VisionProducer(),
+            pages,
+            {"P1": ImageAsset(page_id="P2", uri="p2.tif")},
+        )
+
+
+def test_image_asset_field_constraints():
+    """Decoded fields are bounded so a malformed asset fails loudly, not at
+    crop time; every decoded field defaults to None (metadata-poor asset)."""
+    bare = ImageAsset(page_id="P1", uri="x")
+    assert bare.sha256 is None and bare.media_type is None
+    assert bare.pixel_width is None and bare.frame_index == 0
+    assert bare.exif_orientation is None and bare.transform is None
+    for bad in (
+        {"pixel_width": 0},
+        {"pixel_height": -1},
+        {"frame_index": -1},
+        {"exif_orientation": 0},
+        {"exif_orientation": 9},
+    ):
+        with pytest.raises(PydValidationError):
+            ImageAsset(page_id="P1", uri="x", **bad)
+    for bad_t in ({"scale_x": 0.0}, {"scale_y": -1.0}):
+        with pytest.raises(PydValidationError):
+            ImageTransform(**bad_t)
 
 
 # ---------------------------------------------------------------------------

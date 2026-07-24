@@ -28,7 +28,7 @@ from typing import Any
 
 from corrigenda.core.pipeline import CorrectionPipeline, CorrectionResult
 from corrigenda.core.protocols import EditProducer
-from corrigenda.core.schemas import DocumentManifest, ImageRef
+from corrigenda.core.schemas import DocumentManifest, PageImage
 from corrigenda.errors import ParseError
 from corrigenda.formats.loader import build_document_manifest
 
@@ -84,7 +84,7 @@ async def correct(
     producer: EditProducer,
     run_id: str | None = None,
     should_abort: Callable[[], bool] | None = None,
-    page_images: dict[str, ImageRef] | None = None,
+    page_images: dict[str, PageImage] | None = None,
 ) -> CorrectionResult:
     """Run the correction pipeline over a loaded document (§2).
 
@@ -110,7 +110,7 @@ def correct_sync(
     producer: EditProducer,
     run_id: str | None = None,
     should_abort: Callable[[], bool] | None = None,
-    page_images: dict[str, ImageRef] | None = None,
+    page_images: dict[str, PageImage] | None = None,
 ) -> CorrectionResult:
     """Synchronous twin of :func:`correct` (scripts, notebooks, CLIs).
 

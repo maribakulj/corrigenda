@@ -761,6 +761,95 @@ class ChunkPlan(BaseModel):
 ImageRef = str
 
 
+class ImageTransform(BaseModel):
+    """XML-coordinate-space → image-pixel mapping (ROADMAP V3 Phase 4).
+
+    ALTO/PAGE geometry is expressed in the coordinate system the OCR
+    engine used, which is not always the scan's native pixel grid: an
+    ALTO ``MeasurementUnit`` may be ``mm10``/``inch1200`` rather than
+    ``pixel``, or the page may have been downscaled before OCR. To crop a
+    line/block from the image a vision producer must map ``(hpos, vpos,
+    width, height)`` from XML space into pixels; this value object carries
+    the axis-aligned part of that map — scale then offset, applied as
+    ``px = scale * xml + offset`` on each axis.
+
+    The core only *carries* the transform (invariant I4 — it never opens a
+    pixel); the ``corrigenda[vision]`` producer applies it. Rotation
+    beyond EXIF orientation (see :attr:`ImageAsset.exif_orientation`) is
+    out of scope for v1: the common mismatch is a pure resolution scale.
+    Identity (all defaults) means the OCR ran at the image's native
+    resolution — the overwhelmingly common case.
+    """
+
+    scale_x: float = Field(default=1.0, gt=0.0)
+    scale_y: float = Field(default=1.0, gt=0.0)
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+
+
+class ImageAsset(BaseModel):
+    """Structured page-image descriptor (§4.1 / ROADMAP V3 Phase 4).
+
+    The RECOMMENDED value for ``run(page_images=…)``: a bare
+    :data:`ImageRef` (str) is still accepted, but an ``ImageAsset`` carries
+    the provenance the audit trail wants — the SHA-256 of the exact bytes,
+    the real decoded MIME type and pixel dimensions, the frame index inside
+    a multipage container, the EXIF orientation — plus the XML→pixel
+    :class:`ImageTransform` a crop needs. It rides the §4.1 envelope exactly
+    where the bare ref did: the compiler copies it into
+    :attr:`CorrectionRequest.image_ref` only when the producer asks
+    (``wants_image``), and forwards it verbatim.
+
+    The core stays pixel-blind (invariant I4): it NEVER opens
+    :attr:`uri` to populate these fields — it only carries them. The opt-in
+    ``corrigenda[vision]`` builder decodes the image and fills them in; a
+    caller may also construct one by hand from metadata it already holds.
+    Only :attr:`page_id` and :attr:`uri` are required; every decoded field
+    is ``None`` until something that actually read the bytes sets it, so a
+    metadata-poor asset degrades to "a ref that also knows its page".
+    """
+
+    #: The page this scan belongs to — matches a ``PageManifest.page_id``.
+    #: When an asset is used as a ``page_images`` value, this MUST equal
+    #: its mapping key (``require_page_images`` enforces it): a scan filed
+    #: under the wrong page is exactly the silent wrong-image bug the
+    #: per-page contract exists to prevent.
+    page_id: str
+    #: Opaque locator the vision producer resolves (path, URL, handle),
+    #: forwarded verbatim; the core never opens it (I4) — same contract as
+    #: a bare :data:`ImageRef`.
+    uri: str
+    #: SHA-256 of the exact image bytes, lowercase hex — the provenance
+    #: anchor stamped alongside the crop hash (acceptance criterion 5).
+    #: ``None`` when the caller has not hashed the bytes.
+    sha256: str | None = None
+    #: Decoded MIME type (``image/tiff``, ``image/jpeg``, …), determined
+    #: from the bytes rather than guessed from the extension. ``None`` when
+    #: unknown.
+    media_type: str | None = None
+    #: Decoded pixel dimensions of the frame this asset points at. These
+    #: are the IMAGE's pixels — the XML page dimensions may differ (see
+    #: :attr:`transform`). ``None`` when unknown.
+    pixel_width: int | None = Field(default=None, gt=0)
+    pixel_height: int | None = Field(default=None, gt=0)
+    #: 0-based frame index inside a multi-frame container (multipage TIFF);
+    #: ``0`` for a single-image file.
+    frame_index: int = Field(default=0, ge=0)
+    #: EXIF orientation tag (1–8) as stored in the file; the vision builder
+    #: applies it when cropping. ``None`` when the file carries none.
+    exif_orientation: int | None = Field(default=None, ge=1, le=8)
+    #: How to map XML coordinates onto image pixels. ``None`` is read as
+    #: identity (native-resolution OCR).
+    transform: ImageTransform | None = None
+
+
+#: What ``run(page_images=…)`` accepts per page: the historical opaque
+#: :data:`ImageRef` (str) OR the richer, recommended :class:`ImageAsset`.
+#: Both ride the §4.1 envelope identically; the core forwards either
+#: verbatim and opens neither (I4).
+PageImage = ImageRef | ImageAsset
+
+
 class LineGeometry(BaseModel):
     """Physical anchor for a line, copied verbatim by the compiler for
     vision producers (§4.1): the line ``coords`` (ALTO bbox or PAGE polygon)
@@ -798,9 +887,11 @@ class CorrectionRequest(BaseModel):
     page_id: str
     block_id: str | None = None
     lines: list[LineContext]
-    # Vision envelope (§4.1) — opaque page image reference, populated by the
-    # compiler only when the producer asks (``wants_image``); never opened.
-    image_ref: ImageRef | None = None
+    # Vision envelope (§4.1) — page image, populated by the compiler only
+    # when the producer asks (``wants_image``); never opened. Either the
+    # historical opaque :data:`ImageRef` (str) or the richer, recommended
+    # :class:`ImageAsset` (:data:`PageImage`), forwarded verbatim.
+    image_ref: PageImage | None = None
 
 
 class LineProposal(BaseModel):

@@ -20,7 +20,8 @@ from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from corrigenda.core.editing import EditScript
 from corrigenda.core.schemas import (
-    ImageRef,
+    ImageAsset,
+    PageImage,
     CorrectionRequest,
     ModelInfo,
     PageManifest,
@@ -231,17 +232,24 @@ class EditProducer(Protocol):
 def require_page_images(
     producer: EditProducer,
     pages: Iterable[PageManifest],
-    page_images: dict[str, ImageRef] | None,
+    page_images: dict[str, PageImage] | None,
 ) -> None:
     """Raise :class:`ConfigurationError` if a vision producer lacks images (§5.1).
 
     A producer that does not want images is always fine. A vision producer
-    needs a ``page_images`` mapping (page_id → opaque ref) covering EVERY
-    page — one image per physical page, never one per source file: a
-    multipage XML has as many scans as pages, and flattening them to a
-    single per-file ref sent the producer the wrong image for every page
-    but the first. Otherwise the run would issue an image-less VLM call,
-    which the spec forbids.
+    needs a ``page_images`` mapping (page_id → opaque ref or
+    :class:`~corrigenda.core.schemas.ImageAsset`) covering EVERY page — one
+    image per physical page, never one per source file: a multipage XML has
+    as many scans as pages, and flattening them to a single per-file ref
+    sent the producer the wrong image for every page but the first.
+    Otherwise the run would issue an image-less VLM call, which the spec
+    forbids.
+
+    When a value is a structured :class:`ImageAsset`, its ``page_id`` MUST
+    equal its mapping key: a scan filed under the wrong page is the same
+    silent wrong-image bug the per-page contract exists to prevent, and an
+    asset that names its own page lets us catch it at start-up instead of
+    cropping the wrong scan.
     """
     if not getattr(producer, "wants_image", False):
         return
@@ -249,6 +257,16 @@ def require_page_images(
         raise ConfigurationError(
             "producer requires page images (wants_image=True) but run() "
             "received no page_images mapping"
+        )
+    mismatched = [
+        f"asset.page_id={value.page_id!r} filed under key {key!r}"
+        for key, value in page_images.items()
+        if isinstance(value, ImageAsset) and value.page_id != key
+    ]
+    if mismatched:
+        raise ConfigurationError(
+            "page_images ImageAsset values must be filed under their own "
+            f"page_id; disagreements: {mismatched}"
         )
     missing = [
         f"{page.page_id!r} ({page.source_file})"

@@ -112,7 +112,7 @@ from corrigenda.core.schemas import (
     DocumentManifest,
     GuardConfig,
     HyphenRole,
-    ImageRef,
+    PageImage,
     LineManifest,
     LineStatus,
     LineTrace,
@@ -727,7 +727,7 @@ class RunContext:
     #: via :class:`ProducerOptions` (P3.7) so long I/O can be abandoned.
     should_abort: Callable[[], bool] | None = None
     #: §4.1 vision envelope — resolved once per run from run(page_images=…).
-    image_ref_by_page_id: dict[str, ImageRef] = field(default_factory=dict)
+    image_ref_by_page_id: dict[str, PageImage] = field(default_factory=dict)
     page_dims: dict[str, tuple[int, int]] = field(default_factory=dict)
 
 
@@ -962,7 +962,7 @@ class CorrectionPipeline:
         source_files: dict[str, Path],
         run_id: str | None = None,
         should_abort: Callable[[], bool] | None = None,
-        page_images: dict[str, ImageRef] | None = None,
+        page_images: dict[str, PageImage] | None = None,
     ) -> CorrectionResult:
         """Run the full pipeline. The input manifest is never modified.
 
@@ -985,7 +985,9 @@ class CorrectionPipeline:
         provenance labels are constructor state.
 
         ``page_images`` (§5.1) — optional mapping of **page_id** (document-
-        unique, ADR-007) to an opaque :data:`ImageRef` — one image per
+        unique, ADR-007) to a :data:`PageImage`: the historical opaque
+        :data:`ImageRef` (str) or the richer, recommended
+        :class:`~corrigenda.core.schemas.ImageAsset` — one image per
         physical page, so a multipage XML carries one ref per scan. The
         library forwards each page's ref verbatim into the producer payload
         when the producer asks (``wants_image``) and NEVER opens it (I4).
@@ -1031,7 +1033,7 @@ class CorrectionPipeline:
         source_files: dict[str, Path],
         run_id: str | None,
         should_abort: Callable[[], bool] | None,
-        page_images: dict[str, ImageRef] | None,
+        page_images: dict[str, PageImage] | None,
     ) -> CorrectionResult:
         """Body of :meth:`run`, working on the run's private manifest copy."""
         run_id = run_id or str(uuid.uuid4())
@@ -1416,7 +1418,7 @@ class CorrectionPipeline:
         source_files: dict[str, Path],
         run_id: str | None = None,
         should_abort: Callable[[], bool] | None = None,
-        page_images: dict[str, ImageRef] | None = None,
+        page_images: dict[str, PageImage] | None = None,
     ) -> CorrectionResult:
         """Synchronous façade over :meth:`run` (§8.1).
 
